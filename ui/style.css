@@ -275,6 +275,7 @@ mark.current { background: var(--mark-current); color: #1c1203; }
 
 .player { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 20px; display: flex; align-items: center; gap: 12px; }
 .player audio { flex: 1; height: 36px; }
+#player-note:empty { display: none; }
 
 /* ------------------------------------------------------------ overlays */
 .drop-overlay {

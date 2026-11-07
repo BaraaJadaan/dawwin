@@ -519,12 +519,9 @@ async function setupAudio(live) {
   }
   a.hidden = false;
   a.src = fileSrc(p);
-  note.textContent = HINT;
 }
 
 // ------------------------------------------------------------------ hear a word
-
-const HINT = "Ctrl+click a word, or select text and right-click it, to play from about where it is said.";
 
 /** About when a word is said. The model times whole lines (up to 30 s), so the word is placed by
  *  how far into the line it is, over the stretches with speech (`voice`); playback starts 1.5 s

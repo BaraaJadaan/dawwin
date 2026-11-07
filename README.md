@@ -48,6 +48,8 @@ npm install
 npm run build
 ```
 
+The installer and a portable exe of the current version land in `dist/`, with their checksums.
+
 How the app is put together, and how to release it: [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Contributing

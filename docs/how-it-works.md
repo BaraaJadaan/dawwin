@@ -58,7 +58,7 @@ SDK, and Node.js.
 
 ```bash
 npm install
-npm run build        # installer in src-tauri/target/release/bundle/nsis/
+npm run build        # the installer and a portable exe land in dist/
 ```
 
 `cargo test` in `src-tauri` runs the unit tests. If linking fails with

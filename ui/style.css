@@ -282,12 +282,7 @@ mark.current { background: var(--mark-current); color: #1c1203; }
   background: color-mix(in srgb, var(--accent) 18%, transparent); backdrop-filter: blur(2px);
 }
 .drop-card { padding: 28px 40px; border-radius: 16px; background: var(--panel); border: 2px dashed var(--accent); font-size: 18px; font-weight: 600; box-shadow: var(--shadow); }
-.listen-pop {
-  position: fixed; z-index: 40; transform: translateX(-50%); height: 30px; padding: 0 12px; border-radius: 99px;
-  border: 0; background: var(--accent); color: var(--accent-text); font-weight: 600; font-size: 13px; cursor: pointer;
-  box-shadow: var(--shadow); white-space: nowrap;
-}
-.listen-pop:hover { background: var(--accent-hover); }
+.ctx-menu { position: fixed; right: auto; top: 0; left: 0; z-index: 70; min-width: 170px; }
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 60; max-width: min(640px, 90vw);
   display: flex; gap: 12px; align-items: center; padding: 10px 16px; border-radius: 10px;

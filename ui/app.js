@@ -392,7 +392,6 @@ function segRow(s, i, live) {
   text.spellcheck = false;
   if (!live) {
     text.contentEditable = "plaintext-only";
-    text.title = "Click to edit · select a word, or Ctrl+click it, to hear it";
     // editing works on plain text: drop the search highlights (only then, so a selection survives)
     text.addEventListener("focus", () => { if (text.querySelector("mark")) text.textContent = S.current.segments[i].text; });
     text.addEventListener("keydown", (ev) => {
@@ -525,7 +524,7 @@ async function setupAudio(live) {
 
 // ------------------------------------------------------------------ hear a word
 
-const HINT = "Select a word, or Ctrl+click it, to play from about where it is said.";
+const HINT = "Ctrl+click a word, or select text and right-click it, to play from about where it is said.";
 
 /** About when a word is said. The model times whole lines (up to 30 s), so the word is placed by
  *  how far into the line it is, over the stretches with speech (`voice`); playback starts 1.5 s
@@ -551,34 +550,42 @@ function charOffset(textEl, node, offset) {
   return r.toString().length;
 }
 
-let listenAt = null;
-function updateListenPop() {
-  const pop = $("listen-pop");
+/** The time for the start of the selected text, when the selection is inside a transcript line. */
+function selectionTime() {
   const sel = document.getSelection();
-  pop.hidden = true;
-  listenAt = null;
-  if (S.view !== "transcript" || !sel || sel.isCollapsed || !sel.rangeCount) return;
+  if (S.view !== "transcript" || !sel || sel.isCollapsed || !sel.rangeCount) return null;
   const range = sel.getRangeAt(0);
   const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
   const textEl = startEl?.closest(".seg .text");
-  if (!textEl || !$("segments").contains(textEl)) return;
-  const i = Number(textEl.closest(".seg").dataset.i);
-  listenAt = wordTime(i, charOffset(textEl, range.startContainer, range.startOffset));
-  const rects = range.getClientRects();
-  const r = rects.length ? rects[0] : range.getBoundingClientRect();
-  const top = r.top - 38 < 70 ? r.bottom + 8 : r.top - 38;
-  pop.style.left = `${r.left + r.width / 2}px`;
-  pop.style.top = `${top}px`;
-  pop.hidden = false;
+  if (!textEl || !$("segments").contains(textEl)) return null;
+  return wordTime(Number(textEl.closest(".seg").dataset.i), charOffset(textEl, range.startContainer, range.startOffset));
 }
 
+let ctxAt = null;
+function hideCtx() { $("ctx-menu").hidden = true; }
+
 function wireListen() {
-  let timer;
-  document.addEventListener("selectionchange", () => { clearTimeout(timer); timer = setTimeout(updateListenPop, 120); });
-  const pop = $("listen-pop");
-  pop.addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the selection
-  pop.addEventListener("click", () => { if (listenAt != null) playFrom(listenAt); });
-  $("segments").addEventListener("scroll", () => { $("listen-pop").hidden = true; });
+  // right-click on selected text: "Play from here" next to "Copy"
+  $("segments").addEventListener("contextmenu", (ev) => {
+    const t = selectionTime();
+    if (t == null) return; // nothing selected: the usual menu
+    ev.preventDefault();
+    ctxAt = t;
+    const m = $("ctx-menu");
+    m.hidden = false;
+    const w = m.offsetWidth, h = m.offsetHeight;
+    m.style.left = `${Math.min(ev.clientX, innerWidth - w - 8)}px`;
+    m.style.top = `${Math.min(ev.clientY, innerHeight - h - 8)}px`;
+  });
+  $("ctx-play").onclick = () => { hideCtx(); if (ctxAt != null) playFrom(ctxAt); };
+  $("ctx-copy").onclick = async () => {
+    hideCtx();
+    try { await navigator.clipboard.writeText(document.getSelection().toString()); } catch (err) { toast("Could not copy: " + err); }
+  };
+  $("ctx-menu").addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the selection
+  document.addEventListener("mousedown", (ev) => { if (!ev.target.closest("#ctx-menu")) hideCtx(); });
+  document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") hideCtx(); });
+  $("segments").addEventListener("scroll", hideCtx);
   // Ctrl+click a word: play from it without starting to edit
   $("segments").addEventListener("mousedown", (ev) => {
     if (!(ev.ctrlKey || ev.metaKey)) return;

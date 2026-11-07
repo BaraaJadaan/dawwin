@@ -225,7 +225,10 @@
     <div class="drop-card">Drop to transcribe</div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-  <button id="listen-pop" class="listen-pop" hidden title="Play the recording from this word">▶ Listen</button>
+  <div id="ctx-menu" class="menu ctx-menu" role="menu" hidden>
+    <button role="menuitem" id="ctx-play">▶ Play from here</button>
+    <button role="menuitem" id="ctx-copy">Copy</button>
+  </div>
 
   <script src="app.js"></script>
 </body>

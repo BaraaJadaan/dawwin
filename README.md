@@ -11,8 +11,8 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
   timestamp for every chunk (up to 30 s).
 - **Check and fix**: click a timestamp to play the recording from there; click a line to correct it.
   Lines where the model got stuck repeating a word are cut and marked for checking.
-- **Hear a word**: select a word (or Ctrl+click it) and press **▶ Listen** to play from about where it
-  is said. The model times whole lines, so the word's place is estimated from where the speech is in
+- **Hear a word**: Ctrl+click a word, or select text, right-click it and choose **▶ Play from here**,
+  to play from about where it is said. The model times whole lines, so the word's place is estimated from where the speech is in
   the line; playback starts 1.5 s early so you hear it within the next few seconds.
 - **Search** with Ctrl+F. أ/إ/آ/ا, ة/ه and ى/ي count as the same letter, and diacritics are ignored.
 - **Export** to Word (.docx, right to left), .txt, .md, .srt and .vtt subtitles, or copy everything.

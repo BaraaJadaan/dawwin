@@ -59,16 +59,28 @@ before starting on something bigger, so we can agree on the approach: open an
 
 ## Code signing policy
 
-Releases are built from this repository by GitHub Actions. The project is applying for free code
-signing from the [SignPath Foundation](https://signpath.org/); until it is granted, installers are
-unsigned and Windows SmartScreen shows a warning.
+Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/). *(Pending: until SignPath Foundation accepts the project,
+releases are unsigned and Windows SmartScreen shows a warning.)*
+
+Releases are built from this repository by GitHub Actions, and every signed release is approved by
+hand.
 
 - Committers and reviewers: [@BaraaJadaan](https://github.com/BaraaJadaan)
 - Approvers: [@BaraaJadaan](https://github.com/BaraaJadaan)
 
 **Privacy policy:** this program will not transfer any information to other networked systems
-unless specifically requested by the user or the person installing or operating it. It only goes
-online when you ask it to set up its engine or download the model.
+unless specifically requested by the user or the person installing or operating it. It goes online
+only when you press **Set up engine** (downloads [uv](https://github.com/astral-sh/uv), Python
+packages from [PyPI](https://pypi.org) and [PyTorch](https://download.pytorch.org)) or
+**Download model** (downloads the model from [Hugging Face](https://huggingface.co) with your token).
+Those services' own privacy policies apply to those downloads.
+
+## Uninstall
+
+Uninstall Tafreegh from Windows Settings → Apps. The engine, the model and your transcripts are kept
+in case you reinstall; to remove them too, delete the folders `%LOCALAPPDATA%\Tafreegh` and
+`%APPDATA%\Tafreegh` (and the model folder, if you chose another place for it).
 
 ## License
 

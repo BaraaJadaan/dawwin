@@ -20,10 +20,6 @@
       <button class="chip" id="chip-model" data-goto="setup">
         <span class="dot"></span><span class="label"></span>
       </button>
-      <span class="chip chip-private">
-        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm-3 8V7a3 3 0 1 1 6 0v3H9Z"/></svg>
-        <span data-i18n="app.private"></span>
-      </span>
       <label class="chip ui-lang">
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm6.93 6h-2.95a15.6 15.6 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8ZM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96ZM4.26 14a8.2 8.2 0 0 1 0-4h3.38a16.5 16.5 0 0 0 0 4H4.26Zm.81 2h2.95c.32 1.25.78 2.45 1.38 3.56A8 8 0 0 1 5.07 16Zm2.95-8H5.07a8 8 0 0 1 4.33-3.56A15.6 15.6 0 0 0 8.02 8ZM12 19.96A14.2 14.2 0 0 1 10.09 16h3.82A14.2 14.2 0 0 1 12 19.96ZM14.34 14H9.66a14.7 14.7 0 0 1 0-4h4.68a14.7 14.7 0 0 1 0 4Zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56ZM16.36 14a16.5 16.5 0 0 0 0-4h3.38a8.2 8.2 0 0 1 0 4h-3.38Z"/></svg>
         <select id="ui-lang" data-i18n-aria="app.uiLang"></select>
@@ -49,6 +45,11 @@
         <ul id="history" class="history"></ul>
         <p id="history-empty" class="muted small" data-i18n="side.empty" hidden></p>
       </section>
+
+      <button class="btn btn-ghost side-settings" id="btn-settings">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7 7 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54a7 7 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.8a.5.5 0 0 0 .49-.42l.36-2.54a7 7 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
+        <span data-i18n="set.title"></span>
+      </button>
     </aside>
 
     <main id="main" class="main">
@@ -77,77 +78,137 @@
         <div id="home-note" class="home-note"></div>
       </section>
 
-      <!-- setup -->
+      <!-- setup: two one-time steps, then ready -->
       <section id="view-setup" class="view" hidden>
         <div class="setup">
-          <h1 data-i18n="setup.title"></h1>
-          <p class="muted" data-i18n="setup.intro"></p>
-
-          <div class="card step" id="step-engine">
-            <div class="step-head">
-              <span class="step-n">1</span>
-              <div class="step-title">
-                <h2 data-i18n="setup.engine"></h2>
-                <p class="muted small" id="engine-detail"></p>
-              </div>
-              <button class="btn" id="btn-setup"></button>
-            </div>
-            <pre id="setup-log" class="log" dir="ltr" hidden></pre>
-            <p id="setup-error" class="error" dir="auto" hidden></p>
+          <div class="setup-head">
+            <h1 data-i18n="setup.title"></h1>
+            <p class="muted" data-i18n="setup.intro"></p>
           </div>
 
-          <div class="card step" id="step-model">
-            <div class="step-head">
-              <span class="step-n">2</span>
-              <div class="step-title">
-                <h2 data-i18n="setup.model"></h2>
-                <p class="muted small" id="model-detail"></p>
-              </div>
-              <button class="btn btn-ghost" id="btn-import-other" data-i18n="setup.useOther" hidden></button>
-            </div>
-            <p id="import-other-error" class="error" dir="auto" hidden></p>
+          <ol class="stepper">
+            <li data-step="engine"><button type="button"><span class="bullet">1</span><span class="s-text"><span class="s-label" data-i18n="step.engine"></span><span class="s-state"></span></span></button></li>
+            <li data-step="model"><button type="button"><span class="bullet">2</span><span class="s-text"><span class="s-label" data-i18n="step.model"></span><span class="s-state"></span></span></button></li>
+            <li data-step="ready"><button type="button"><span class="bullet">3</span><span class="s-text"><span class="s-label" data-i18n="step.ready"></span><span class="s-state"></span></span></button></li>
+          </ol>
 
-            <div id="model-get" class="model-get" hidden>
-              <div class="option">
-                <h3><span data-i18n="setup.download"></span> <span class="muted" data-i18n="setup.size"></span></h3>
-                <ol class="howto small">
-                  <li id="how1"></li>
-                  <li id="how2"></li>
+          <!-- 1. engine -->
+          <section class="card panel" id="panel-engine" hidden>
+            <h2 data-i18n="eng.title"></h2>
+            <p class="muted" id="engine-detail"></p>
+            <div id="engine-busy" class="busy" hidden>
+              <div class="progress indeterminate"><div class="bar"></div></div>
+              <p class="muted small" id="engine-status" dir="auto"></p>
+            </div>
+            <div class="row">
+              <button class="btn btn-primary" id="btn-setup"></button>
+              <button class="btn" id="btn-engine-next" data-i18n="step.next" hidden></button>
+            </div>
+            <details id="setup-log-box" class="log-box" hidden>
+              <summary data-i18n="eng.details"></summary>
+              <pre id="setup-log" class="log" dir="ltr"></pre>
+            </details>
+            <p id="setup-error" class="error" dir="auto" hidden></p>
+          </section>
+
+          <!-- 2. model -->
+          <section class="card panel" id="panel-model" hidden>
+            <h2 data-i18n="model.title"></h2>
+
+            <div id="model-done" hidden>
+              <p class="muted" id="model-detail"></p>
+              <div class="row">
+                <button class="btn btn-primary" id="btn-model-next" data-i18n="step.next"></button>
+                <button class="btn btn-ghost" id="btn-import-other" data-i18n="setup.useOther"></button>
+              </div>
+              <p id="import-other-error" class="error" dir="auto" hidden></p>
+            </div>
+
+            <div id="model-get" hidden>
+              <p class="muted" data-i18n="model.intro"></p>
+              <div class="segmented tabs" role="tablist">
+                <button type="button" role="tab" data-tab="download" data-i18n="model.tabDownload"></button>
+                <button type="button" role="tab" data-tab="files" data-i18n="model.tabFiles"></button>
+              </div>
+
+              <div id="tab-download" class="tab-body">
+                <ol class="howto">
+                  <li><span id="how1"></span></li>
+                  <li>
+                    <span id="how2"></span>
+                    <div class="row">
+                      <input id="hf-token" class="input" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" dir="ltr" data-i18n-aria="setup.tokenAria">
+                      <button class="btn" id="btn-token" data-i18n="setup.saveToken"></button>
+                    </div>
+                    <p class="small token-state"><span id="token-state" class="muted"></span> <button class="linkbtn" id="btn-forget-token" data-i18n="setup.forget" hidden></button></p>
+                  </li>
+                  <li>
+                    <span data-i18n="model.step3"></span>
+                    <div class="row small dest">
+                      <code id="download-dir" dir="ltr"></code>
+                      <button class="btn btn-sm btn-ghost" id="btn-download-dir" data-i18n="setup.change"></button>
+                    </div>
+                  </li>
                 </ol>
-                <div class="row">
-                  <input id="hf-token" class="input" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" dir="ltr" data-i18n-aria="setup.tokenAria">
-                  <button class="btn" id="btn-token" data-i18n="setup.saveToken"></button>
-                </div>
-                <p class="small token-state"><span id="token-state" class="muted"></span> <button class="linkbtn" id="btn-forget-token" data-i18n="setup.forget" hidden></button></p>
-                <div class="row small dest">
-                  <span class="muted" data-i18n="setup.savesTo"></span>
-                  <code id="download-dir" dir="ltr"></code>
-                  <button class="btn btn-sm btn-ghost" id="btn-download-dir" data-i18n="setup.change"></button>
-                </div>
                 <div class="row">
                   <button class="btn btn-primary" id="btn-download"></button>
                   <span id="download-hint" class="muted small"></span>
                 </div>
                 <div id="download-box" hidden>
                   <div class="progress"><div class="bar" id="download-bar"></div></div>
-                  <p class="muted small" id="download-text"></p>
+                  <p class="small" id="download-text"></p>
                 </div>
+                <p class="muted small" data-i18n="model.resumeNote"></p>
                 <p id="download-error" class="error" dir="auto" hidden></p>
               </div>
-              <div class="option">
-                <h3 data-i18n="setup.have"></h3>
-                <p class="muted small" id="have-text"></p>
-                <div class="row"><button class="btn" id="btn-import" data-i18n="setup.import"></button></div>
+
+              <div id="tab-files" class="tab-body" hidden>
+                <p class="muted" id="manual-text"></p>
+                <ul class="file-list" dir="ltr">
+                  <li><code>model.safetensors</code> <span class="muted">(4.1 GB)</span></li>
+                  <li><code>config.json</code>, <code>generation_config.json</code></li>
+                  <li><code>preprocessor_config.json</code>, <code>processor_config.json</code></li>
+                  <li><code>tokenizer.json</code>, <code>tokenizer.model</code>, <code>tokenizer_config.json</code>, <code>special_tokens_map.json</code></li>
+                </ul>
+                <div class="row"><button class="btn btn-primary" id="btn-import" data-i18n="setup.import"></button></div>
+                <p class="muted small" data-i18n="model.dropHint"></p>
                 <p id="import-error" class="error" dir="auto" hidden></p>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="card step">
-            <div class="step-head">
-              <span class="step-n">·</span>
-              <div class="step-title">
-                <h2 data-i18n="setup.runOn"></h2>
+          <!-- 3. ready -->
+          <section class="card panel" id="panel-ready" hidden>
+            <h2 data-i18n="ready.title"></h2>
+            <p class="muted" id="ready-text"></p>
+            <div class="row"><button class="btn btn-primary" id="btn-start" data-i18n="ready.start"></button></div>
+          </section>
+
+        </div>
+      </section>
+
+      <!-- settings -->
+      <section id="view-settings" class="view" hidden>
+        <div class="setup">
+          <div class="setup-head"><h1 data-i18n="set.title"></h1></div>
+
+          <section class="card group">
+            <h2 data-i18n="set.general"></h2>
+            <div class="setting">
+              <div class="setting-text"><h3 data-i18n="app.uiLang"></h3></div>
+              <select id="set-lang" class="input select" data-i18n-aria="app.uiLang"></select>
+            </div>
+          </section>
+
+          <section class="card group">
+            <h2 data-i18n="step.engine"></h2>
+            <div class="setting">
+              <div class="setting-text"><p class="muted small" id="set-engine"></p></div>
+              <button class="btn btn-sm" id="set-reinstall"></button>
+            </div>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="setup.runOn"></h3>
                 <p class="muted small" id="runon-detail"></p>
               </div>
               <select id="run-on" class="input select" data-i18n-aria="setup.runOn">
@@ -156,23 +217,56 @@
                 <option value="cpu-exact" data-i18n="runon.cpu-exact"></option>
               </select>
             </div>
-          </div>
-
-          <div class="card step">
-            <div class="step-head">
-              <span class="step-n">·</span>
-              <div class="step-title">
-                <h2 data-i18n="setup.decoder"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="setup.decoder"></h3>
                 <p class="muted small" id="ffmpeg-detail"></p>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="setup-foot">
-            <button class="btn btn-ghost" id="btn-recheck" data-i18n="setup.recheck"></button>
-            <button class="btn btn-ghost" id="btn-log" data-i18n="setup.log"></button>
-            <button class="btn btn-ghost" id="btn-data" data-i18n="setup.data"></button>
-          </div>
+          <section class="card group">
+            <h2 data-i18n="step.model"></h2>
+            <div class="setting"><div class="setting-text"><p class="muted small" id="set-model"></p></div></div>
+            <div class="setting actions">
+              <button class="btn btn-sm" id="set-import" data-i18n="set.importModel"></button>
+              <button class="btn btn-sm" id="set-download" data-i18n="set.downloadModel"></button>
+              <button class="btn btn-sm btn-ghost" id="set-model-folder" data-i18n="set.showFolder"></button>
+            </div>
+            <p id="set-import-error" class="error setting-error" dir="auto" hidden></p>
+          </section>
+
+          <section class="card group">
+            <h2 data-i18n="set.updates"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 id="set-version"></h3>
+                <p class="small" id="set-update-status"></p>
+              </div>
+              <button class="btn btn-sm btn-primary" id="set-check" data-i18n="set.check"></button>
+            </div>
+            <div class="setting">
+              <label class="toggle"><input type="checkbox" id="set-auto-check"> <span data-i18n="set.autoCheck"></span></label>
+            </div>
+          </section>
+
+          <section class="card group">
+            <h2 data-i18n="set.folders"></h2>
+            <div class="setting actions">
+              <button class="btn btn-sm" id="btn-data" data-i18n="setup.data"></button>
+              <button class="btn btn-sm" id="btn-log" data-i18n="setup.log"></button>
+              <button class="btn btn-sm btn-ghost" id="btn-recheck" data-i18n="setup.recheck"></button>
+            </div>
+          </section>
+
+          <section class="card group">
+            <h2 data-i18n="set.about"></h2>
+            <div class="setting"><div class="setting-text"><p class="muted small" id="set-about"></p></div></div>
+            <div class="setting actions">
+              <button class="btn btn-sm btn-ghost" id="set-github" data-i18n="set.github"></button>
+              <button class="btn btn-sm btn-ghost" id="set-issue" data-i18n="set.report"></button>
+            </div>
+          </section>
         </div>
       </section>
 

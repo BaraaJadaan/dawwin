@@ -1,7 +1,7 @@
 {
   "name": "tafreegh",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Local Arabic speech-to-text (Cohere Transcribe Arabic), a Tauri desktop app",
   "scripts": {
     "tauri": "tauri",

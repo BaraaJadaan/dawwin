@@ -392,8 +392,11 @@ class Engine:
                             with open(part, "r+b" if start else "wb") as f:
                                 f.seek(start)
                                 f.truncate()
-                                for chunk in r.iter_bytes(256 * 1024):
+                                # small pieces, flushed: on a very slow line the progress still moves,
+                                # and a kill (Pause, closing the app) loses almost nothing
+                                for chunk in r.iter_bytes(64 * 1024):
                                     f.write(chunk)
+                                    f.flush()
                         attempts = 0
                     except Exception as e:  # network drop: wait, then continue where it stopped
                         retry(e)
@@ -452,7 +455,28 @@ except Exception:  # pragma: no cover
     _dtw_table = _dtw_table_py
 
 
+def watch_parent():
+    """Exit when the app is gone (closed or killed), even in the middle of a long download:
+    otherwise an orphaned worker would keep downloading into the same .part file."""
+    ppid = int(os.environ.get("TAFREEGH_PARENT_PID", "0") or 0)
+    if not ppid:
+        return
+    try:
+        import psutil
+    except ImportError:
+        return
+
+    def loop():
+        while True:
+            time.sleep(2)
+            if not psutil.pid_exists(ppid):
+                os._exit(0)
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 def main():
+    watch_parent()
     eng = Engine()
     handlers = {"probe": eng.probe, "load": eng.load, "transcribe": eng.transcribe, "align": eng.align, "download": eng.download}
     send({"event": "ready", "pid": os.getpid()})

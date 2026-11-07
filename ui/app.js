@@ -23,6 +23,9 @@ const S = {
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
+  setupStep: null,     // the setup step the user opened; null = the first one not done
+  modelTab: "download", // how to get the model: "download" | "files"
+  update: null,        // the last update check: {checking} | {info} | {error}
   hits: [],
   hit: -1,
   audioFor: null,
@@ -93,7 +96,9 @@ function toast(msg, action) {
 
 function showView(v) {
   S.view = v;
-  for (const id of ["home", "setup", "transcript"]) $("view-" + id).hidden = id !== v;
+  for (const id of ["home", "setup", "settings", "transcript"]) $("view-" + id).hidden = id !== v;
+  $("btn-settings").classList.toggle("active", v === "settings");
+  if (v === "settings") renderSettings();
   renderHistory();
   renderQueue();
   if (v !== "transcript") stopAudio();
@@ -203,11 +208,43 @@ function renderHistory() {
 
 // ------------------------------------------------------------------ setup view
 
+const STEPS = ["engine", "model", "ready"];
+function firstOpenStep(st) {
+  return !st.env_ready ? "engine" : !st.model.found ? "model" : "ready";
+}
+
+/** Download speed over the last half minute, in bytes per second (null until it is known). */
+const dlHist = [];
+function downloadRate(d) {
+  if (!d.active) { dlHist.length = 0; return null; }
+  const now = Date.now();
+  const last = dlHist[dlHist.length - 1];
+  if (!last || last[1] !== d.done) dlHist.push([now, d.done]);
+  while (dlHist.length > 2 && now - dlHist[0][0] > 30000) dlHist.shift();
+  if (dlHist.length < 2) return null;
+  const [t0, b0] = dlHist[0], [t1, b1] = dlHist[dlHist.length - 1];
+  return t1 > t0 ? (b1 - b0) / ((t1 - t0) / 1000) : null;
+}
+function rateText(r) {
+  const s = r >= 1048576 ? `${(r / 1048576).toFixed(1)} MB/s` : `${Math.max(1, Math.round(r / 1024))} KB/s`;
+  return `\u2066${s}\u2069`; // a left-to-right island, so "324 KB/s" keeps its order in Arabic
+}
+
 function renderSetup() {
   const { setup: st, engine: e } = S.snap;
-  const m = st.model;
-  $("step-engine").classList.toggle("done", st.env_ready);
-  $("step-model").classList.toggle("done", m.found);
+  const m = st.model, d = st.download;
+  const done = { engine: st.env_ready, model: m.found, ready: st.env_ready && m.found };
+  const busy = { engine: st.env_busy, model: d.active, ready: false };
+  const step = S.setupStep || firstOpenStep(st);
+
+  for (const li of document.querySelectorAll(".stepper li")) {
+    const k = li.dataset.step;
+    li.classList.toggle("done", done[k]);
+    li.classList.toggle("active", k === step);
+    li.querySelector(".bullet").textContent = done[k] ? "✓" : String(STEPS.indexOf(k) + 1);
+    li.querySelector(".s-state").textContent = t(done[k] ? "step.done" : busy[k] ? "step.busy" : "step.todo");
+  }
+  for (const k of STEPS) $("panel-" + k).hidden = k !== step;
 
   // 1. engine
   const torch = e.torch ? ` (torch ${e.torch})` : "";
@@ -218,9 +255,13 @@ function renderSetup() {
   bs.textContent = t(st.env_busy ? "setup.settingUp" : st.env_ready ? "setup.reinstall" : "setup.setUp");
   bs.className = "btn " + (st.env_ready ? "btn-ghost" : "btn-primary");
   bs.disabled = st.env_busy;
+  $("engine-busy").hidden = !st.env_busy;
+  $("engine-status").textContent = st.log[st.log.length - 1] || "";
+  $("btn-engine-next").hidden = !st.env_ready;
+  $("btn-engine-next").className = "btn " + (st.env_ready ? "btn-primary" : "");
+  $("setup-log-box").hidden = !st.log.length;
   const log = $("setup-log");
-  log.hidden = !(st.env_busy || st.log.length);
-  if (!log.hidden && log.dataset.n !== String(st.log.length)) {
+  if (log.dataset.n !== String(st.log.length)) {
     log.textContent = st.log.join("\n");
     log.dataset.n = String(st.log.length);
     log.scrollTop = log.scrollHeight;
@@ -229,16 +270,17 @@ function renderSetup() {
   $("setup-error").textContent = st.env_error || "";
 
   // 2. model
-  $("model-detail").innerHTML = m.found
-    ? tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) })
-    : tHtml("setup.modelMissing", { id: ltr(st.model_id) });
-  $("btn-import-other").hidden = !m.found;
+  $("model-done").hidden = !m.found;
   $("model-get").hidden = m.found;
+  if (m.found) {
+    $("model-detail").innerHTML = tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) });
+  }
+  for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-checked", String(b.dataset.tab === S.modelTab));
+  $("tab-download").hidden = S.modelTab !== "download";
+  $("tab-files").hidden = S.modelTab !== "files";
   $("token-state").textContent = t(m.token ? `token.${m.token}` : "token.none");
   $("btn-forget-token").hidden = m.token !== "app";
   $("download-dir").textContent = m.download_dir;
-
-  const d = st.download;
   const bd = $("btn-download");
   bd.textContent = t(d.active ? "dl.pause" : d.done > 0 ? "dl.resume" : "dl.download");
   bd.className = "btn " + (d.active ? "" : "btn-primary");
@@ -251,19 +293,83 @@ function renderSetup() {
   let dl = "";
   if (d.total) {
     dl = t("dl.progress", { done: (d.done / 1e9).toFixed(2), total: (d.total / 1e9).toFixed(2), pct: pct.toFixed(0) });
+    const rate = downloadRate(d);
     if (d.retry_wait != null) dl += " · " + t("dl.retry", { wait: d.retry_wait, n: d.retry_attempt });
     else if (!d.active) dl += " · " + t("dl.paused");
+    else if (rate > 0) dl += ` · ${rateText(rate)} · ` + t("dl.left", { dur: dur((d.total - d.done) / rate) });
   } else if (d.active) dl = t("dl.connecting");
   $("download-text").textContent = dl;
   $("download-error").hidden = !d.error || d.error === "stopped";
   $("download-error").textContent = d.error || "";
 
+  // 3. ready
+  const device = e.device === "cpu" || st.run_on !== "auto" || (st.env_backend === "cpu")
+    ? t("ready.cpu")
+    : t("ready.gpu", { gpu: shortGpu(e.gpu) || "CUDA" });
+  $("ready-text").textContent = t("ready.text", { device });
+}
+
+// ------------------------------------------------------------------ settings view
+
+function renderSettings() {
+  if (!S.snap) return;
+  const { setup: st, engine: e } = S.snap;
+  const m = st.model;
+  $("set-lang").innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
+  $("set-lang").value = UI_LANG;
+
+  // engine
+  const torch = e.torch ? ` (torch ${e.torch})` : "";
+  $("set-engine").innerHTML = st.env_ready
+    ? tHtml(st.env_backend === "cpu" ? "setup.ready.cpu" : "setup.ready.cuda", { torch, dir: ltr(st.env_dir) })
+    : esc(t("set.engineMissing"));
+  $("set-reinstall").textContent = t(st.env_busy ? "setup.settingUp" : st.env_ready ? "setup.reinstall" : "setup.setUp");
+  $("set-reinstall").disabled = st.env_busy;
   const runOn = st.run_on || "auto";
   $("run-on").value = runOn;
   const key = runOn === "auto" ? (st.nvidia_driver ? "runon.d.auto.gpu" : "runon.d.auto.cpu") : `runon.d.${runOn}`;
   $("runon-detail").textContent = t(key) + (e.note ? " " + e.note : "");
-
   $("ffmpeg-detail").innerHTML = st.ffmpeg ? tHtml("ffmpeg.yes", { path: ltr(st.ffmpeg) }) : tHtml("ffmpeg.no");
+
+  // model
+  $("set-model").innerHTML = m.found
+    ? tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) })
+    : esc(t("set.noModel"));
+  $("set-download").hidden = m.found;
+  $("set-model-folder").hidden = !m.found;
+
+  // updates
+  $("set-version").textContent = t("set.version", { v: st.app_version });
+  $("set-auto-check").checked = !!st.check_updates;
+  const u = S.update, status = $("set-update-status");
+  $("set-check").disabled = !!u?.checking;
+  if (!u) status.innerHTML = "";
+  else if (u.checking) status.textContent = t("set.checking");
+  else if (u.error) status.innerHTML = `<span class="error-text">${esc(u.error)}</span>`;
+  else if (u.info.newer) {
+    status.innerHTML = `${esc(t("set.newer", { v: u.info.latest }))} `
+      + `<button class="linkbtn" id="set-get">${esc(t("set.getIt"))}</button> · `
+      + `<button class="linkbtn" id="set-notes">${esc(t("set.notes"))}</button>`;
+    $("set-get").onclick = () => invoke("open_url", { url: u.info.installer || u.info.page });
+    $("set-notes").onclick = () => invoke("open_url", { url: u.info.page });
+  } else status.textContent = t("set.latest");
+
+  $("set-about").textContent = t("set.aboutText", { v: st.app_version });
+}
+
+async function checkUpdates(quiet) {
+  S.update = { checking: true };
+  if (S.view === "settings") renderSettings();
+  try {
+    const info = await invoke("check_updates");
+    S.update = { info };
+    if (quiet && info.newer) {
+      toast(t("toast.update", { v: info.latest }), { label: t("set.getIt"), run: () => invoke("open_url", { url: info.installer || info.page }) });
+    }
+  } catch (err) {
+    S.update = quiet ? null : { error: String(err) };
+  }
+  if (S.view === "settings") renderSettings();
 }
 
 async function importModel(errorEl) {
@@ -271,6 +377,7 @@ async function importModel(errorEl) {
   try {
     onState(await invoke("import_model"));
     if (S.snap.setup.model.found) toast(t("toast.modelReady"));
+    if (S.view === "settings") renderSettings();
   } catch (err) {
     errorEl.textContent = String(err);
     errorEl.hidden = false;
@@ -338,6 +445,7 @@ function renderTranscript() {
   $("btn-delete").hidden = live;
   const box = $("segments");
   box.dir = cur.language === "en" ? "ltr" : "rtl";
+  box.classList.toggle("no-stamps", !S.stamps);
   box.lang = cur.language === "en" ? "en" : "ar";
   box.innerHTML = "";
   if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; clearWordHighlight(); }
@@ -830,6 +938,7 @@ function onState(snap) {
   renderQueue();
   renderHomeNote();
   if (S.view === "setup") renderSetup();
+  if (S.view === "settings") renderSettings();
   if (S.view === "transcript" && S.current) {
     const j = jobById(S.current.id);
     const before = prev?.queue.find((x) => x.id === S.current.id);
@@ -868,11 +977,35 @@ function wire() {
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => { if (!ev.target.closest(".segmented")) chooseFiles(); });
   $("dropzone").addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); chooseFiles(); } });
-  for (const b of document.querySelectorAll(".segmented button")) {
+  for (const b of document.querySelectorAll("#dropzone .segmented button")) {
     b.onclick = (ev) => { ev.stopPropagation(); S.spoken = b.dataset.lang; store.set("lang", S.spoken); paintLang(); };
   }
   paintLang();
-  for (const c of document.querySelectorAll("[data-goto=setup]")) c.onclick = () => { showView("setup"); renderSetup(); };
+  for (const c of document.querySelectorAll("[data-goto=setup]")) {
+    c.onclick = () => {
+      if (setupComplete(S.snap)) { showView("settings"); return; }
+      S.setupStep = null; showView("setup"); renderSetup();
+    };
+  }
+  for (const li of document.querySelectorAll(".stepper li")) {
+    li.querySelector("button").onclick = () => { S.setupStep = li.dataset.step; renderSetup(); };
+  }
+  $("btn-engine-next").onclick = () => { S.setupStep = "model"; renderSetup(); };
+  $("btn-model-next").onclick = () => { S.setupStep = "ready"; renderSetup(); };
+  $("btn-start").onclick = () => showView("home");
+  $("btn-settings").onclick = () => showView("settings");
+  $("set-lang").onchange = () => setUiLang($("set-lang").value);
+  $("set-reinstall").onclick = () => { invoke("setup_engine"); S.setupStep = "engine"; showView("setup"); renderSetup(); };
+  $("set-import").onclick = () => importModel($("set-import-error"));
+  $("set-download").onclick = () => { S.setupStep = "model"; S.modelTab = "download"; showView("setup"); renderSetup(); };
+  $("set-model-folder").onclick = () => invoke("reveal", { path: S.snap.setup.model.dir });
+  $("set-check").onclick = () => checkUpdates(false);
+  $("set-auto-check").onchange = async () => onState(await invoke("set_check_updates", { on: $("set-auto-check").checked }));
+  $("set-github").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url });
+  $("set-issue").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url + "/issues/new" });
+  for (const b of document.querySelectorAll(".tabs button")) {
+    b.onclick = () => { S.modelTab = b.dataset.tab; renderSetup(); };
+  }
 
   $("btn-setup").onclick = () => invoke("setup_engine");
   $("btn-import").onclick = () => importModel($("import-error"));
@@ -920,7 +1053,11 @@ function wire() {
     $("segments").addEventListener(ev, () => { lastUserScroll = Date.now(); }, { passive: true });
   }
   $("stamps").checked = S.stamps;
-  $("stamps").onchange = () => { S.stamps = $("stamps").checked; store.set("stamps", S.stamps ? "1" : "0"); };
+  $("stamps").onchange = () => {
+    S.stamps = $("stamps").checked;
+    store.set("stamps", S.stamps ? "1" : "0");
+    $("segments").classList.toggle("no-stamps", !S.stamps);
+  };
   $("btn-copy").onclick = copyAll;
   $("btn-export").onclick = (ev) => { ev.stopPropagation(); $("export-menu").hidden = !$("export-menu").hidden; };
   for (const b of $("export-menu").querySelectorAll("button")) b.onclick = () => exportAs(b.dataset.fmt);
@@ -969,10 +1106,10 @@ function wire() {
 function renderStatic() {
   $("how1").innerHTML = tHtml("setup.how1", { link: raw(`<a href="#" data-link="model_url">${esc(t("setup.how1.link"))}</a>`) });
   $("how2").innerHTML = tHtml("setup.how2", { link: raw(`<a href="#" data-link="tokens_url">${esc(t("setup.how2.link"))}</a>`) });
+  $("manual-text").innerHTML = tHtml("model.manual", { link: raw(`<a href="#" data-link="files_url">${esc(t("model.manual.link"))}</a>`) });
   for (const a of document.querySelectorAll("a[data-link]")) {
     a.onclick = (ev) => { ev.preventDefault(); invoke("open_url", { url: S.snap.setup[a.dataset.link] }); };
   }
-  $("have-text").innerHTML = tHtml("setup.haveText", { c1: raw('<code dir="ltr">config.json</code>'), c2: raw('<code dir="ltr">model.safetensors</code>') });
   const sel = $("ui-lang");
   sel.innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
   sel.value = UI_LANG;
@@ -990,6 +1127,7 @@ async function setUiLang(lang, tellApp = true) {
     renderHistory();
     renderHomeNote();
     if (S.view === "setup") renderSetup();
+    if (S.view === "settings") renderSettings();
     if (S.view === "transcript" && S.current) renderTranscript();
   }
   if (tellApp) {
@@ -998,7 +1136,7 @@ async function setUiLang(lang, tellApp = true) {
 }
 
 function paintLang() {
-  for (const b of document.querySelectorAll(".segmented button")) b.setAttribute("aria-checked", String(b.dataset.lang === S.spoken));
+  for (const b of document.querySelectorAll("#dropzone .segmented button")) b.setAttribute("aria-checked", String(b.dataset.lang === S.spoken));
 }
 
 async function init() {
@@ -1013,7 +1151,8 @@ async function init() {
   if (saved && saved !== UI_LANG) await setUiLang(saved, false);
   else if (!saved) await setUiLang(UI_LANG);
   await loadHistory();
-  if (!setupComplete(S.snap)) { showView("setup"); renderSetup(); } else showView("home");
+  if (!setupComplete(S.snap)) { S.setupStep = null; showView("setup"); renderSetup(); } else showView("home");
+  if (S.snap.setup.check_updates) checkUpdates(true);
 }
 
 init().catch((err) => toast(t("toast.startup", { err })));

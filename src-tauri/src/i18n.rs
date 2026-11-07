@@ -95,6 +95,10 @@ static AR: &[(&str, &str)] = &[
     ("the engine exited ({}). Last output:\n{}", "خرج المحرّك ({}). آخر ما كتبه:\n{}"),
     ("the engine exited. Last output:\n{}", "خرج المحرّك. آخر ما كتبه:\n{}"),
     ("cannot start {}", "تعذّر تشغيل {}"),
+    // updates
+    ("Could not reach GitHub. Check the connection and try again.", "تعذّر الوصول إلى GitHub. تحقّق من الاتصال وحاول مجددًا."),
+    ("No version has been published yet.", "لم يُنشر أي إصدار بعد."),
+    ("GitHub answered {}. Try again later.", "ردّ GitHub بالرمز {}. حاول لاحقًا."),
     // exports
     ("Duration", "المدة"),
     ("Language", "اللغة"),

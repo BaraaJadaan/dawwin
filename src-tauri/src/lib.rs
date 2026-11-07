@@ -7,6 +7,7 @@ pub mod i18n;
 mod queue;
 mod setup;
 mod transcript;
+mod updates;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -114,6 +115,18 @@ fn set_ui_language(app: AppHandle, lang: String) -> R<Snapshot> {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.set_title(&crate::tr!("Tafreegh · Arabic transcription"));
     }
+    Ok(core.snapshot())
+}
+
+/// Ask GitHub whether a newer version is out.
+#[tauri::command]
+async fn check_updates() -> R<updates::UpdateInfo> {
+    tauri::async_runtime::spawn_blocking(updates::check).await.map_err(|x| x.to_string())?.map_err(e)
+}
+
+#[tauri::command]
+fn set_check_updates(core: C, on: bool) -> R<Snapshot> {
+    core.change_settings(|s| s.check_updates = on).map_err(e)?;
     Ok(core.snapshot())
 }
 
@@ -351,6 +364,8 @@ pub fn run() {
             set_run_on,
             set_ui_language,
             align_transcript,
+            check_updates,
+            set_check_updates,
             export_to_path,
             open_url,
             pick_files,

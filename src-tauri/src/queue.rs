@@ -82,6 +82,7 @@ pub struct SetupView {
     pub model_id: String,
     pub model_url: String,
     pub tokens_url: String,
+    pub files_url: String,
     pub nvidia_driver: Option<String>,
     /// The PyTorch build the env has: "cu128", "cpu", …
     pub env_backend: Option<String>,
@@ -89,6 +90,10 @@ pub struct SetupView {
     pub run_on: String,
     /// The interface language, when one was picked
     pub ui_lang: Option<String>,
+    pub app_version: String,
+    pub repo_url: String,
+    /// Check for a newer version at startup
+    pub check_updates: bool,
     pub download: DownloadView,
     pub hf_home: String,
     pub data_dir: String,
@@ -149,8 +154,13 @@ impl Core {
         core.refresh_setup();
         let c = core.clone();
         std::thread::Builder::new().name("engine".into()).spawn(move || engine_loop(c, rx))?;
-        if core.snapshot().setup.env_ready {
+        let snap = core.snapshot();
+        if snap.setup.env_ready {
             core.send(Msg::Probe);
+            // a model download that was running when the app closed carries on
+            if core.settings.lock().unwrap().download_wanted && !snap.setup.model.found {
+                core.download_model();
+            }
         }
         Ok(core)
     }
@@ -187,10 +197,11 @@ impl Core {
         let env_ready = setup::env_ready(&self.paths);
         let env_backend = setup::env_backend(&self.paths);
         let model = self.model_status();
-        let (run_on, ui_lang) = {
+        let (run_on, ui_lang, dl_total, check_updates) = {
             let st = self.settings.lock().unwrap();
-            (st.run_on().to_string(), st.ui_lang.clone())
+            (st.run_on().to_string(), st.ui_lang.clone(), st.download_total, st.check_updates)
         };
+        let on_disk = if model.found { 0 } else { setup::downloaded_bytes(std::path::Path::new(&model.download_dir)) };
         self.update(|s| {
             let st = &mut s.setup;
             st.env_ready = env_ready;
@@ -200,10 +211,19 @@ impl Core {
             st.model_id = setup::MODEL_ID.into();
             st.model_url = setup::MODEL_URL.into();
             st.tokens_url = setup::TOKENS_URL.into();
+            st.files_url = setup::FILES_URL.into();
             st.nvidia_driver = tools.nvidia_driver;
             st.env_backend = env_backend;
             st.run_on = run_on;
             st.ui_lang = ui_lang;
+            st.check_updates = check_updates;
+            st.app_version = crate::updates::VERSION.into();
+            st.repo_url = format!("https://github.com/{}", crate::updates::REPO);
+            // a paused or interrupted download: show how far it got, from the files on disk
+            if !st.download.active && !st.model.found {
+                st.download.done = on_disk;
+                st.download.total = dl_total.max(on_disk);
+            }
             st.hf_home = setup::hf_home().display().to_string();
             st.data_dir = self.paths.roaming.display().to_string();
             st.env_dir = self.paths.env_dir().display().to_string();
@@ -297,14 +317,18 @@ impl Core {
     }
 
     pub fn download_model(&self) {
+        let _ = self.change_settings(|s| s.download_wanted = true);
         self.download_abort.store(false, Ordering::SeqCst);
+        // start from what is already on disk, so a resumed download shows its progress at once
+        let (done, total) = (self.snapshot().setup.download.done, self.settings.lock().unwrap().download_total);
         self.update(|s| {
-            s.setup.download = DownloadView { active: true, ..Default::default() };
+            s.setup.download = DownloadView { active: true, done, total: total.max(done), ..Default::default() };
         });
         self.send(Msg::Download);
     }
 
     pub fn stop_download(&self) {
+        let _ = self.change_settings(|s| s.download_wanted = false);
         self.download_abort.store(true, Ordering::SeqCst);
     }
 
@@ -373,6 +397,9 @@ fn sink(core: &Arc<Core>) -> EventSink {
         Some("download") => {
             let done = v.get("done").and_then(|x| x.as_u64()).unwrap_or(0);
             let total = v.get("total").and_then(|x| x.as_u64()).unwrap_or(0);
+            if total > 0 && c.settings.lock().unwrap().download_total != total {
+                let _ = c.change_settings(|s| s.download_total = total);
+            }
             c.update(|s| {
                 s.setup.download.done = done;
                 s.setup.download.total = total;
@@ -474,7 +501,10 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     w.shutdown();
                     r?;
                     setup::validate_model_dir(&dest).map_err(|e| anyhow!(crate::tr!("The download finished but the folder is not complete: {}", e)))?;
-                    core.change_settings(|s| s.model_dir = Some(dest.display().to_string()))?;
+                    core.change_settings(|s| {
+                        s.model_dir = Some(dest.display().to_string());
+                        s.download_wanted = false;
+                    })?;
                     Ok(())
                 })();
                 core.update(|s| {

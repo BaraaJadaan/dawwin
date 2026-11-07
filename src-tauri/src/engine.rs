@@ -119,6 +119,8 @@ impl PythonWorker {
             cmd.env("HF_TOKEN", t);
         }
         cmd.env("TAFREEGH_LANG", crate::i18n::lang());
+        // the worker exits by itself if the app goes away
+        cmd.env("TAFREEGH_PARENT_PID", std::process::id().to_string());
         match opts.run_on.as_str() {
             "cpu-fast" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "int8"),
             "cpu-exact" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "bf16"),

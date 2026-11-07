@@ -73,8 +73,9 @@ hand.
 unless specifically requested by the user or the person installing or operating it. It goes online
 only when you press **Set up engine** (downloads [uv](https://github.com/astral-sh/uv), Python
 packages from [PyPI](https://pypi.org) and [PyTorch](https://download.pytorch.org)) or
-**Download model** (downloads the model from [Hugging Face](https://huggingface.co) with your token).
-Those services' own privacy policies apply to those downloads.
+**Download model** (downloads the model from [Hugging Face](https://huggingface.co) with your token),
+or **Check for updates** (asks GitHub for the latest version; also at startup if you turn that on in
+Settings). Those services' own privacy policies apply.
 
 ## Uninstall
 

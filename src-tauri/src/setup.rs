@@ -12,6 +12,7 @@ use sha2::{Digest, Sha256};
 pub const MODEL_ID: &str = "CohereLabs/cohere-transcribe-arabic-07-2026";
 pub const MODEL_URL: &str = "https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026";
 pub const TOKENS_URL: &str = "https://huggingface.co/settings/tokens";
+pub const FILES_URL: &str = "https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026/tree/main";
 pub const WORKER_PY: &str = include_str!("../../worker/worker.py");
 pub const REQUIREMENTS: &str = include_str!("../../worker/requirements.txt");
 const PYTHON_VERSION: &str = "3.12";
@@ -117,6 +118,15 @@ pub struct Settings {
     /// The interface language ("en", "ar"); unset until the UI picks one
     #[serde(default)]
     pub ui_lang: Option<String>,
+    /// A model download was started and neither finished nor paused: continue it on the next start
+    #[serde(default)]
+    pub download_wanted: bool,
+    /// The model download's size, once known
+    #[serde(default)]
+    pub download_total: u64,
+    /// Ask GitHub for a newer version when the app starts (off unless the user turns it on)
+    #[serde(default)]
+    pub check_updates: bool,
 }
 
 impl Settings {
@@ -412,6 +422,18 @@ pub fn hub_cache() -> PathBuf {
         return PathBuf::from(h);
     }
     hf_home().join("hub")
+}
+
+/// How much of the model is already in the download folder (whole files and `.part` files).
+pub fn downloaded_bytes(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.metadata().ok())
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .sum()
 }
 
 #[derive(Clone, Debug, Serialize, Default)]

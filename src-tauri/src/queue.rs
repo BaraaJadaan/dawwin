@@ -108,6 +108,8 @@ enum Msg {
     Download,
     /// Stop the worker so the next one starts with new settings (another model folder)
     Restart,
+    /// Find word times for a saved transcript: all its lines, or the ones listed
+    Align { id: String, lines: Option<Vec<usize>> },
 }
 
 pub struct Core {
@@ -243,6 +245,11 @@ impl Core {
         crate::i18n::set(lang);
         self.change_settings(|s| s.ui_lang = Some(lang.to_string()))?;
         Ok(())
+    }
+
+    /// Ask for word times of a saved transcript (all lines, or some after an edit).
+    pub fn request_align(&self, id: &str, lines: Option<Vec<usize>>) {
+        self.send(Msg::Align { id: id.to_string(), lines });
     }
 
     /// GPU or CPU: takes effect with a fresh worker.
@@ -497,6 +504,11 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     core.send(Msg::Probe);
                 }
             }
+            Msg::Align { id, lines } => {
+                if let Err(e) = align_saved(&core, &mut worker, &id, lines) {
+                    eprintln!("word times for {id}: {e:#}");
+                }
+            }
             Msg::Job(id) => {
                 let res = run_job(&core, &mut worker, &id);
                 if let Err(e) = res {
@@ -550,16 +562,7 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     });
 
     let info = w.ensure_loaded()?;
-    core.update(|s| {
-        s.engine.state = "loaded".into();
-        s.engine.device = Some(if info.device.starts_with("cuda") { "cuda".into() } else { "cpu".into() });
-        if info.gpu.is_some() {
-            s.engine.gpu = info.gpu.clone();
-        }
-        s.engine.vram_used_gb = info.vram_used_gb;
-        s.engine.dtype = info.dtype.clone();
-        s.engine.note = info.fallback.clone();
-    });
+    show_loaded(core, &info);
     let device = match &info.gpu {
         Some(g) if info.device.starts_with("cuda") => format!("GPU · {g}"),
         _ if info.dtype.as_deref() == Some("int8") => "CPU (int8)".into(),
@@ -596,18 +599,19 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
         let texts = if ranges.is_empty() { Ok(vec![]) } else { w.transcribe(&audio, &ranges, &job.language) };
         match texts {
             Ok(texts) => {
+                let mut lines: Vec<Segment> = Vec::new();
                 for (r, text) in ranges.iter().zip(texts) {
-                    let segs = match fix_loops(w, &audio, *r, text, &job.language, 0) {
-                        Ok(s) => s,
+                    match fix_loops(w, &audio, *r, text, &job.language, 0) {
+                        Ok(s) => lines.extend(s.into_iter().filter(|s| !s.text.trim().is_empty())),
                         Err(e) => {
                             failure = Some(e);
                             break;
                         }
                     };
-                    for s in segs {
-                        if s.text.trim().is_empty() {
-                            continue;
-                        }
+                }
+                attach_words(w, &audio, &mut lines, &job.language);
+                {
+                    for s in lines {
                         let _ = core.app.emit("segment", serde_json::json!({ "id": id, "segment": &s }));
                         t.segments.push(s.clone());
                         if let Some(lt) = core.live.lock().unwrap().get_mut(id) {
@@ -665,6 +669,79 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     Ok(())
 }
 
+/// Tell the UI the model is in memory, and where.
+fn show_loaded(core: &Arc<Core>, info: &crate::engine::EngineInfo) {
+    core.update(|s| {
+        s.engine.state = "loaded".into();
+        s.engine.device = Some(if info.device.starts_with("cuda") { "cuda".into() } else { "cpu".into() });
+        if info.gpu.is_some() {
+            s.engine.gpu = info.gpu.clone();
+        }
+        s.engine.vram_used_gb = info.vram_used_gb;
+        s.engine.dtype = info.dtype.clone();
+        s.engine.note = info.fallback.clone();
+    });
+}
+
+/// Word start times for `lines`, from the engine. A failure only costs the word times.
+fn attach_words(w: &mut dyn Engine, audio: &Audio, lines: &mut [Segment], lang: &str) {
+    if lines.is_empty() {
+        return;
+    }
+    let n = audio.samples.len();
+    let ranges: Vec<(usize, usize)> = lines
+        .iter()
+        .map(|s| (((s.start * SR as f64) as usize).min(n), ((s.end * SR as f64).round() as usize).min(n)))
+        .collect();
+    let texts: Vec<String> = lines.iter().map(|s| s.text.clone()).collect();
+    match w.align(audio, &ranges, &texts, lang) {
+        Ok(words) => {
+            for (s, ws) in lines.iter_mut().zip(words) {
+                s.words = ws;
+            }
+        }
+        Err(e) => eprintln!("word times: {e:#}"),
+    }
+}
+
+/// Word times for a transcript saved without them (from before word timing) or after an edit.
+fn align_saved(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str, lines: Option<Vec<usize>>) -> Result<()> {
+    let dir = core.paths.history_dir();
+    let t = history::load(&dir, id)?;
+    if !core.model_status().found || !setup::env_ready(&core.paths) || !PathBuf::from(&t.source_path).is_file() {
+        return Ok(());
+    }
+    let wanted: Vec<usize> = lines.unwrap_or_else(|| (0..t.segments.len()).collect());
+    let ffmpeg = setup::find_exe("ffmpeg");
+    let stop = AtomicBool::new(false);
+    let samples = audio::decode(PathBuf::from(&t.source_path).as_path(), ffmpeg.as_ref(), &stop)?;
+    let audio = Audio { id: format!("align-{id}"), samples };
+    let w = ensure_worker(core, worker)?;
+    let info = w.ensure_loaded()?;
+    show_loaded(core, &info);
+    let mut found: Vec<(usize, String, Vec<(u32, f32)>)> = Vec::new();
+    for part in wanted.chunks(8) {
+        let mut segs: Vec<Segment> = part.iter().filter_map(|&i| t.segments.get(i).cloned()).collect();
+        attach_words(w, &audio, &mut segs, &t.language);
+        for (&i, s) in part.iter().zip(segs) {
+            found.push((i, s.text, s.words));
+        }
+    }
+    w.forget(&audio.id);
+    // reload: keep edits made meanwhile, and only use times for text that did not change
+    let mut cur = history::load(&dir, id)?;
+    for (i, text, words) in found {
+        if let Some(s) = cur.segments.get_mut(i) {
+            if s.text == text {
+                s.words = words;
+            }
+        }
+    }
+    history::save(&dir, &cur)?;
+    let _ = core.app.emit("words-ready", id);
+    Ok(())
+}
+
 /// The model sometimes repeats one word dozens of times. Transcribe such a chunk again in
 /// two halves; a half that still loops gets the repetition cut and a "repeat" flag.
 fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: String, lang: &str, depth: u32) -> Result<Vec<Segment>> {
@@ -675,6 +752,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: St
         flag: flag.map(String::from),
         edited: false,
         voice: audio::voice_profile(&audio.samples, a, b, 20),
+        words: Vec::new(),
     };
     if find_loop(&text).is_none() {
         return Ok(vec![seg(a, b, text, None)]);

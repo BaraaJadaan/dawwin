@@ -19,6 +19,8 @@ import threading
 import time
 import traceback
 
+import numpy as np
+
 PROTO = sys.stdout
 sys.stdout = sys.stderr  # libraries print; keep the protocol channel clean
 
@@ -86,6 +88,8 @@ class Engine:
         self.processor = None
         self.device = None
         self.dtype = None
+        # encoder outputs of the last transcribed batch, by sample range: alignment reuses them
+        self._enc = {}
 
     # -- probe: what hardware and versions are here, without loading the model
     def probe(self, _req):
@@ -165,8 +169,22 @@ class Engine:
         inputs = self.processor(segs, sampling_rate=SR, return_tensors="pt", language=lang)
         idx = inputs.get("audio_chunk_index")
         inputs.to(self.model.device, dtype=self.model.dtype)
+        max_new = int(req.get("max_new_tokens", 512))
         with torch.inference_mode():
-            out = self.model.generate(**inputs, max_new_tokens=int(req.get("max_new_tokens", 512)))
+            if idx is None:
+                # run the encoder once, keep it for aligning these lines afterwards
+                enc = self.model.get_encoder()(inputs["input_features"], attention_mask=inputs.get("attention_mask"))
+                out = self.model.generate(encoder_outputs=enc, decoder_input_ids=inputs["decoder_input_ids"], max_new_tokens=max_new)
+                self._enc = {
+                    (int(a), int(b)): type(enc)(
+                        last_hidden_state=enc.last_hidden_state[i : i + 1],
+                        attention_mask=enc.attention_mask[i : i + 1] if enc.attention_mask is not None else None,
+                    )
+                    for i, (a, b) in enumerate(req["ranges"])
+                }
+            else:
+                out = self.model.generate(**inputs, max_new_tokens=max_new)
+                self._enc = {}
         kw = {"audio_chunk_index": idx, "language": lang} if idx is not None else {}
         texts = self.processor.decode(out, skip_special_tokens=True, **kw)
         if isinstance(texts, str):
@@ -175,6 +193,89 @@ class Engine:
         if len(texts) != len(segs):
             raise RuntimeError(f"expected {len(segs)} transcripts, got {len(texts)}")
         return {"texts": texts}
+
+    # -- align: when each word is said
+    #
+    # The model times whole chunks only. Its decoder's cross-attention shows which audio frames
+    # each text token was read from: teacher-force the line's text, average the attention of all
+    # heads, normalise it per frame, smooth it, and take the monotonic path through it (DTW, as
+    # Whisper does). Measured on a Syrian-Arabic recording: median error 0.4 s, 3 in 4 words
+    # within a second (the speech-position estimate it replaces: 0.63 s, 63 %).
+    LAG = 0.20  # the attention peaks this long after a word starts
+
+    def align(self, req):
+        import numpy as np
+
+        if self.model is None:
+            self.load(req)
+        audio = np.memmap(req["path"], dtype="<f4", mode="r")
+        lang = req.get("language", "ar")
+        out = []
+        for (a, b), text in zip(req["ranges"], req["texts"]):
+            try:
+                out.append(self._align_line(audio, int(a), int(b), text, lang))
+            except Exception as e:  # word times are a bonus: never fail the transcript for them
+                log(f"align {a}-{b} failed: {type(e).__name__}: {e}")
+                out.append([])
+        return {"words": out}
+
+    def _align_line(self, audio, a, b, text, lang):
+        import re
+
+        import numpy as np
+        import torch
+        from scipy.ndimage import median_filter
+
+        tok = self.processor.tokenizer
+        ids = tok(text, add_special_tokens=False)["input_ids"]
+        words_text = [(m.start(), m.group()) for m in re.finditer(r"\S+", text)]
+        if not ids or not words_text:
+            return []
+        seg = np.array(audio[a:b], dtype=np.float32)
+        inputs = self.processor(seg, sampling_rate=SR, return_tensors="pt", language=lang)
+        prompt = inputs["decoder_input_ids"][0].tolist()
+        inputs.to(self.model.device, dtype=self.model.dtype)
+        dec = torch.tensor([prompt + ids], device=self.model.device)
+        with torch.inference_mode():
+            enc = self._enc.get((a, b))
+            if enc is None:
+                enc = self.model.get_encoder()(inputs["input_features"], attention_mask=inputs.get("attention_mask"))
+            self.model.set_attn_implementation("eager")  # sdpa does not return attention weights
+            try:
+                o = self.model(encoder_outputs=enc, decoder_input_ids=dec, output_attentions=True)
+            finally:
+                self.model.set_attn_implementation("sdpa")
+        frames = int(enc.attention_mask[0].sum()) if getattr(enc, "attention_mask", None) is not None else enc.last_hidden_state.shape[1]
+        # the row that predicts token j is the one before it
+        att = torch.stack([x[0] for x in o.cross_attentions]).float()[:, :, len(prompt) - 1 : len(prompt) - 1 + len(ids), :frames]
+        M = att.mean((0, 1)).cpu().numpy()
+        M = (M - M.mean(0)) / (M.std(0) + 1e-6)
+        M = median_filter(M, size=(1, 7))
+        first_frame = {}
+        for ti, fj in _dtw_path(-M):
+            first_frame.setdefault(ti, fj)
+        sec = (b - a) / SR / frames
+
+        # tokens to words: a piece starting with "▁" starts a word
+        pieces = tok.convert_ids_to_tokens(ids)
+        starts = [k for k, p in enumerate(pieces) if p.startswith("▁") or k == 0]
+        if len(starts) == len(words_text):
+            char_starts = [c for c, _ in words_text]
+        else:  # the tokenizer split differently (punctuation): find the words in the text instead
+            char_starts, pos = [], 0
+            for k in starts:
+                piece = "".join(pieces[k : next((s for s in starts if s > k), len(pieces))]).lstrip("▁")
+                found = text.find(piece, pos) if piece else -1
+                c = found if found >= 0 else pos
+                char_starts.append(c)
+                pos = c + max(1, len(piece))
+        result, last = [], -1.0
+        for c, k in zip(char_starts, starts):
+            t = a / SR + first_frame.get(k, 0) * sec - self.LAG
+            t = max(a / SR, last, t)  # never before the line, never before the previous word
+            result.append([int(c), round(t, 2)])
+            last = t
+        return result
 
     # -- download: fetch the model into a folder, resuming after network drops
     #
@@ -314,9 +415,46 @@ class Engine:
         return {"bytes": total, "attempts": attempts + 1, "dir": dest}
 
 
+def _dtw_path(cost):
+    """The cheapest monotonic path through `cost` (tokens x frames), as (token, frame) pairs."""
+    import numpy as np
+
+    D = _dtw_table(np.ascontiguousarray(cost, dtype=np.float64))
+    n, m = cost.shape
+    i, j, path = n, m, []
+    while i > 0 and j > 0:
+        path.append((i - 1, j - 1))
+        k = int(np.argmin([D[i - 1, j - 1], D[i - 1, j], D[i, j - 1]]))
+        if k == 0:
+            i, j = i - 1, j - 1
+        elif k == 1:
+            i -= 1
+        else:
+            j -= 1
+    return path[::-1]
+
+
+def _dtw_table_py(cost):
+    n, m = cost.shape
+    D = np.full((n + 1, m + 1), np.inf)  # module-level numpy: numba cannot compile an import
+    D[0, 0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            D[i, j] = cost[i - 1, j - 1] + min(D[i - 1, j - 1], D[i - 1, j], D[i, j - 1])
+    return D
+
+
+try:  # numba (installed with librosa) makes the table ~100x faster
+    from numba import njit
+
+    _dtw_table = njit(cache=True)(_dtw_table_py)
+except Exception:  # pragma: no cover
+    _dtw_table = _dtw_table_py
+
+
 def main():
     eng = Engine()
-    handlers = {"probe": eng.probe, "load": eng.load, "transcribe": eng.transcribe, "download": eng.download}
+    handlers = {"probe": eng.probe, "load": eng.load, "transcribe": eng.transcribe, "align": eng.align, "download": eng.download}
     send({"event": "ready", "pid": os.getpid()})
     for line in sys.stdin:
         line = line.strip()

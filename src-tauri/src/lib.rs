@@ -194,10 +194,18 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
             if s.text != text {
                 s.text = text;
                 s.edited = true;
+                s.words.clear(); // timed again below
             }
         }
-    })
-    .map(|_| ())
+    })?;
+    core.request_align(&id, Some(vec![index]));
+    Ok(())
+}
+
+/// Word times for a transcript saved without them; they arrive with a "words-ready" event.
+#[tauri::command]
+fn align_transcript(core: C, id: String) {
+    core.request_align(&id, None);
 }
 
 #[tauri::command]
@@ -342,6 +350,7 @@ pub fn run() {
             import_model_path,
             set_run_on,
             set_ui_language,
+            align_transcript,
             export_to_path,
             open_url,
             pick_files,

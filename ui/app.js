@@ -22,6 +22,7 @@ const S = {
   current: null,      // the transcript on screen
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
+  follow: store.get("follow", "0") === "1",
   hits: [],
   hit: -1,
   audioFor: null,
@@ -339,11 +340,13 @@ function renderTranscript() {
   box.dir = cur.language === "en" ? "ltr" : "rtl";
   box.lang = cur.language === "en" ? "en" : "ar";
   box.innerHTML = "";
-  if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; }
+  if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; clearWordHighlight(); }
+  wordCache.clear();
   cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
   if (!cur.segments.length) box.append(emptyLive());
   runSearch(false);
   setupAudio(live);
+  maybeAlign(cur);
 }
 
 function renderMeta() {
@@ -411,6 +414,8 @@ async function saveSegment(i, el) {
     await invoke("update_segment", { id: cur.id, index: i, text });
     seg.text = text;
     seg.edited = true;
+    seg.words = []; // timed again by the app
+    wordCache.delete(i);
     const row = el.closest(".seg");
     row.replaceWith(segRow(seg, i, false));
     runSearch(false);
@@ -515,21 +520,111 @@ async function setupAudio(live) {
 
 // ------------------------------------------------------------------ hear a word
 
-/** About when a word is said. The model times whole lines (up to 30 s), so the word is placed by
- *  how far into the line it is, over the stretches with speech (`voice`); playback starts 1.5 s
- *  early so the word is heard within the next few seconds. */
-function wordTime(i, charIdx) {
-  const s = S.current.segments[i];
+/** An estimate for lines without word times: place the character by how far into the line it
+ *  is, over the stretches with speech (`voice`). */
+function estimateTime(s, charIdx) {
   const frac = Math.min(1, Math.max(0, charIdx / Math.max(1, s.text.length)));
   const v = s.voice;
-  let t;
   if (v && v.length >= 2) {
     const x = frac * (v.length - 1), k = Math.floor(x);
-    t = k >= v.length - 1 ? v[v.length - 1] : v[k] + (v[k + 1] - v[k]) * (x - k);
-  } else {
-    t = s.start + frac * (s.end - s.start);
+    return k >= v.length - 1 ? v[v.length - 1] : v[k] + (v[k + 1] - v[k]) * (x - k);
   }
-  return Math.max(s.start, t - 1.5);
+  return s.start + frac * (s.end - s.start);
+}
+
+/** Where to start playing for the word at `charIdx` of line `i`: its own start time (from the
+ *  model's alignment), a moment early; for lines without word times, 1.5 s before the estimate. */
+function wordTime(i, charIdx) {
+  const s = S.current.segments[i];
+  if (s.words && s.words.length) {
+    let t = s.words[0][1];
+    for (const [a, wt] of s.words) { if (a <= charIdx) t = wt; else break; }
+    return Math.max(s.start, t - 0.25);
+  }
+  return Math.max(s.start, estimateTime(s, charIdx) - 1.5);
+}
+
+// ------------------------------------------------------------------ follow words while playing
+
+const wordCache = new Map();
+/** The words of line `i`: character range [a, b) and start time t. */
+function lineWords(i) {
+  if (wordCache.has(i)) return wordCache.get(i);
+  const s = S.current.segments[i];
+  const text = s.text;
+  let starts;
+  if (s.words && s.words.length) starts = s.words.map(([a, t]) => ({ a, t }));
+  else {
+    starts = [];
+    const re = /\S+/g;
+    let m;
+    while ((m = re.exec(text))) starts.push({ a: m.index, t: estimateTime(s, m.index) });
+  }
+  const words = starts.map((w, k) => {
+    let b = k + 1 < starts.length ? starts[k + 1].a : text.length;
+    while (b > w.a && /\s/.test(text[b - 1])) b--;
+    return { a: w.a, b, t: w.t };
+  });
+  wordCache.set(i, words);
+  return words;
+}
+
+/** A DOM range over characters [a, b) of an element's text (search marks may split it). */
+function textRange(el, a, b) {
+  const r = document.createRange();
+  const walk = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  let pos = 0, started = false;
+  for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+    const len = n.textContent.length;
+    if (!started && a <= pos + len) { r.setStart(n, a - pos); started = true; }
+    if (started && b <= pos + len) { r.setEnd(n, b - pos); return r; }
+    pos += len;
+  }
+  return null;
+}
+
+let followRaf = 0, shownWord = "", lastUserScroll = 0;
+function clearWordHighlight() {
+  shownWord = "";
+  if (window.CSS && CSS.highlights) CSS.highlights.delete("now-word");
+}
+
+function followTick() {
+  followRaf = 0;
+  const a = $("audio");
+  if (!S.follow || a.paused || S.view !== "transcript" || !S.current) return;
+  const now = a.currentTime;
+  const i = S.current.segments.findIndex((s) => now >= s.start && now < s.end);
+  if (i >= 0) {
+    const words = lineWords(i);
+    let k = -1;
+    for (let j = 0; j < words.length; j++) { if (words[j].t <= now + 0.05) k = j; else break; }
+    const key = `${S.current.id}:${i}:${k}`;
+    const row = $("segments").querySelector(`.seg[data-i="${i}"]`);
+    const el = row?.querySelector(".text");
+    if (k >= 0 && el && key !== shownWord && document.activeElement !== el && CSS.highlights) {
+      const r = textRange(el, words[k].a, words[k].b);
+      if (r) { CSS.highlights.set("now-word", new Highlight(r)); shownWord = key; }
+    }
+    if (row && Date.now() - lastUserScroll > 4000) {
+      const box = $("segments").getBoundingClientRect(), rb = row.getBoundingClientRect();
+      if (rb.top < box.top + 8 || rb.bottom > box.bottom - 8) row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+  followRaf = requestAnimationFrame(followTick);
+}
+
+function startFollow() {
+  if (S.follow && !followRaf) followRaf = requestAnimationFrame(followTick);
+}
+
+/** Saved transcripts from before word timing get their word times once, in the background. */
+const aligning = new Set();
+function maybeAlign(cur) {
+  if (!cur || isLive(cur.id) || aligning.has(cur.id) || !setupComplete(S.snap)) return;
+  if (!cur.segments.some((s) => !(s.words && s.words.length) && s.text.trim())) return;
+  aligning.add(cur.id);
+  invoke("align_transcript", { id: cur.id }).catch(() => {});
 }
 
 function charOffset(textEl, node, offset) {
@@ -814,6 +909,16 @@ function wire() {
   $("search-next").onclick = () => stepHit(1);
   $("search-prev").onclick = () => stepHit(-1);
 
+  $("follow").checked = S.follow;
+  $("follow").onchange = () => {
+    S.follow = $("follow").checked;
+    store.set("follow", S.follow ? "1" : "0");
+    if (S.follow) startFollow(); else clearWordHighlight();
+  };
+  $("audio").addEventListener("play", startFollow);
+  for (const ev of ["wheel", "touchmove", "keydown", "pointerdown"]) {
+    $("segments").addEventListener(ev, () => { lastUserScroll = Date.now(); }, { passive: true });
+  }
   $("stamps").checked = S.stamps;
   $("stamps").onchange = () => { S.stamps = $("stamps").checked; store.set("stamps", S.stamps ? "1" : "0"); };
   $("btn-copy").onclick = copyAll;
@@ -845,6 +950,14 @@ function wire() {
   listen("state", (e) => onState(e.payload));
   listen("segment", (e) => onSegment(e.payload));
   listen("history-changed", () => loadHistory());
+  listen("words-ready", async (e) => {
+    if (S.current?.id !== e.payload) return;
+    try {
+      const fresh = await invoke("get_transcript", { id: e.payload });
+      fresh.segments.forEach((s, i) => { if (S.current.segments[i]?.text === s.text) S.current.segments[i].words = s.words; });
+      wordCache.clear();
+    } catch { /* deleted meanwhile */ }
+  });
   listen("setup-log", (e) => {
     if (!S.snap) return;
     S.snap.setup.log.push(e.payload);

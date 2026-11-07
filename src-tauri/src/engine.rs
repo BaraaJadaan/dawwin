@@ -44,6 +44,11 @@ pub trait Engine: Send {
     fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<String>>;
     /// Let the audio's cached data go.
     fn forget(&mut self, audio_id: &str);
+    /// When each word of `texts` (spoken in `ranges`) starts: per text, (character offset, seconds
+    /// from the start of `audio`). An engine that cannot align returns empty lists.
+    fn align(&mut self, _audio: &Audio, ranges: &[(usize, usize)], _texts: &[String], _language: &str) -> Result<Vec<Vec<(u32, f32)>>> {
+        Ok(vec![Vec::new(); ranges.len()])
+    }
 }
 
 /// Errors that mean "try again with a smaller batch".
@@ -323,6 +328,31 @@ impl Engine for PythonWorker {
             bail!("engine returned {} texts for {} chunks", texts.len(), ranges.len());
         }
         Ok(texts)
+    }
+
+    fn align(&mut self, audio: &Audio, ranges: &[(usize, usize)], texts: &[String], language: &str) -> Result<Vec<Vec<(u32, f32)>>> {
+        self.ensure_loaded()?;
+        let path = self.raw_file(audio)?;
+        let v = self.call(json!({
+            "cmd": "align",
+            "path": path,
+            "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
+            "texts": texts,
+            "language": language,
+        }))?;
+        let lists = v.get("words").and_then(|w| w.as_array()).ok_or_else(|| anyhow!("engine reply has no words"))?;
+        Ok(lists
+            .iter()
+            .map(|l| {
+                l.as_array()
+                    .map(|ws| {
+                        ws.iter()
+                            .filter_map(|w| Some((w.get(0)?.as_u64()? as u32, w.get(1)?.as_f64()? as f32)))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect())
     }
 
     fn forget(&mut self, audio_id: &str) {

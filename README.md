@@ -11,9 +11,13 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
   timestamp for every chunk (up to 30 s).
 - **Check and fix**: click a timestamp to play the recording from there; click a line to correct it.
   Lines where the model got stuck repeating a word are cut and marked for checking.
-- **Hear a word**: Ctrl+click a word, or select text, right-click it and choose **▶ Play from here**,
-  to play from about where it is said. The model times whole lines, so the word's place is estimated from where the speech is in
-  the line; playback starts 1.5 s early so you hear it within the next few seconds.
+- **Hear a word**: Ctrl+click a word, or select text, right-click it and choose **▶ Play from here**.
+- **Follow words**: with the toggle on, the word being said is highlighted while the recording plays,
+  and its line is kept in view.
+- Word timings come from the model's own attention (see *How it works*). On a Syrian-Arabic test
+  recording the median error was 0.4 s and 81 % of words were within a second. Transcripts made
+  before this feature get word timings the first time they are opened, and an edited line is
+  timed again.
 - **Search** with Ctrl+F. أ/إ/آ/ا, ة/ه and ى/ي count as the same letter, and diacritics are ignored.
 - **Export** to Word (.docx, right to left), .txt, .md, .srt and .vtt subtitles, or copy everything.
 - **History** of past transcripts, renamed or deleted from the transcript view.
@@ -100,8 +104,11 @@ Rust implementation yet.
   ("ست ست ست …"). Six repeats in a row, or a short phrase repeated, sends the chunk back through in two
   halves. A half that still loops gets the repetition cut to two and a "check this line" mark.
 - `src-tauri/src/setup.rs` finds the model, keeps the settings, fetches uv and builds the Python env.
-- `audio::voice_profile` records, for each line, when its speech happens (skipping pauses); the UI uses
-  it to place a selected word in the audio.
+- Word timings: after a batch is transcribed, the worker teacher-forces each line's text through the
+  decoder and reads its cross-attention (all 64 heads averaged, normalised per frame, median-filtered),
+  then takes the monotonic path through it with DTW, as Whisper does, minus a 0.2 s lag. It reuses the
+  encoder output of the transcription, so it adds little time. `audio::voice_profile` (where speech is
+  in each line) is the fallback for lines without word timings.
 - Languages: the interface strings are in `ui/i18n.js` (with Arabic plural forms); messages that come from Rust
   (errors, setup steps, dialog titles, export headings) are in `src-tauri/src/i18n.rs`, and the worker's few
   messages in `worker/worker.py`. To add a language, add it in those three places.

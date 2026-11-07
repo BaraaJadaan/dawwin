@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -10,20 +10,24 @@
   <header class="topbar">
     <div class="brand">
       <img src="icon.png" alt="" width="26" height="26">
-      <span class="name">Tafreegh</span>
-      <span class="tag">Arabic speech to text</span>
+      <span class="name" data-i18n="app.name"></span>
+      <span class="tag" data-i18n="app.tag"></span>
     </div>
     <div class="chips">
-      <button class="chip" id="chip-engine" data-goto="setup" title="Engine details">
-        <span class="dot"></span><span class="label">Engine</span>
+      <button class="chip" id="chip-engine" data-goto="setup">
+        <span class="dot"></span><span class="label"></span>
       </button>
-      <button class="chip" id="chip-model" data-goto="setup" title="Model details">
-        <span class="dot"></span><span class="label">Model</span>
+      <button class="chip" id="chip-model" data-goto="setup">
+        <span class="dot"></span><span class="label"></span>
       </button>
-      <span class="chip chip-private" title="Audio, transcripts and the model stay on this computer. Nothing is uploaded.">
+      <span class="chip chip-private">
         <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a5 5 0 0 0-5 5v3H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8a2 2 0 0 0-2-2h-1V7a5 5 0 0 0-5-5Zm-3 8V7a3 3 0 1 1 6 0v3H9Z"/></svg>
-        <span>Runs offline · nothing leaves this PC</span>
+        <span data-i18n="app.private"></span>
       </span>
+      <label class="chip ui-lang">
+        <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm6.93 6h-2.95a15.6 15.6 0 0 0-1.38-3.56A8.03 8.03 0 0 1 18.93 8ZM12 4.04c.83 1.2 1.48 2.53 1.91 3.96h-3.82c.43-1.43 1.08-2.76 1.91-3.96ZM4.26 14a8.2 8.2 0 0 1 0-4h3.38a16.5 16.5 0 0 0 0 4H4.26Zm.81 2h2.95c.32 1.25.78 2.45 1.38 3.56A8 8 0 0 1 5.07 16Zm2.95-8H5.07a8 8 0 0 1 4.33-3.56A15.6 15.6 0 0 0 8.02 8ZM12 19.96A14.2 14.2 0 0 1 10.09 16h3.82A14.2 14.2 0 0 1 12 19.96ZM14.34 14H9.66a14.7 14.7 0 0 1 0-4h4.68a14.7 14.7 0 0 1 0 4Zm.25 5.56c.6-1.11 1.06-2.31 1.38-3.56h2.95a8.03 8.03 0 0 1-4.33 3.56ZM16.36 14a16.5 16.5 0 0 0 0-4h3.38a8.2 8.2 0 0 1 0 4h-3.38Z"/></svg>
+        <select id="ui-lang" data-i18n-aria="app.uiLang"></select>
+      </label>
     </div>
   </header>
 
@@ -31,26 +35,26 @@
     <aside class="sidebar">
       <button class="btn btn-primary btn-block" id="btn-new">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
-        New transcription
+        <span data-i18n="side.new"></span>
       </button>
 
       <section id="queue-section" hidden>
-        <h3>In progress</h3>
+        <h3 data-i18n="side.queue"></h3>
         <ul id="queue" class="queue"></ul>
       </section>
 
       <section class="history-section">
-        <h3>History</h3>
-        <input id="history-filter" class="input input-sm" type="search" placeholder="Filter by name" dir="auto">
+        <h3 data-i18n="side.history"></h3>
+        <input id="history-filter" class="input input-sm" type="search" data-i18n-ph="side.filter" dir="auto">
         <ul id="history" class="history"></ul>
-        <p id="history-empty" class="muted small" hidden>Finished transcripts appear here.</p>
+        <p id="history-empty" class="muted small" data-i18n="side.empty" hidden></p>
       </section>
     </aside>
 
     <main id="main" class="main">
       <!-- home: drop zone -->
       <section id="view-home" class="view">
-        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Choose recordings to transcribe">
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" data-i18n-aria="home.chooseAria">
           <div class="dz-icon">
             <svg viewBox="0 0 48 48" width="48" height="48" aria-hidden="true">
               <rect x="6" y="18" width="4" height="12" rx="2" fill="currentColor" opacity=".5"/>
@@ -60,13 +64,13 @@
               <rect x="34" y="19" width="4" height="10" rx="2" fill="currentColor" opacity=".5"/>
             </svg>
           </div>
-          <h1>Drop recordings here</h1>
-          <p>or <span class="link">choose files</span>: m4a, mp3, wav, ogg/opus voice notes, mp4 video</p>
-          <div class="lang" role="radiogroup" aria-label="Spoken language">
-            <span class="muted small">Spoken language</span>
+          <h1 data-i18n="home.drop"></h1>
+          <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span><span data-i18n="home.formats"></span></p>
+          <div class="lang" role="radiogroup" data-i18n-aria="home.spoken">
+            <span class="muted small" data-i18n="home.spoken"></span>
             <div class="segmented">
-              <button type="button" role="radio" data-lang="ar">Arabic (with English terms)</button>
-              <button type="button" role="radio" data-lang="en">English</button>
+              <button type="button" role="radio" data-lang="ar" data-i18n="home.ar"></button>
+              <button type="button" role="radio" data-lang="en" data-i18n="home.en"></button>
             </div>
           </div>
         </div>
@@ -76,65 +80,65 @@
       <!-- setup -->
       <section id="view-setup" class="view" hidden>
         <div class="setup">
-          <h1>Engine and model</h1>
-          <p class="muted">Tafreegh runs Cohere Transcribe Arabic on this computer. It needs a Python engine (PyTorch with CUDA) and the model files, set up once.</p>
+          <h1 data-i18n="setup.title"></h1>
+          <p class="muted" data-i18n="setup.intro"></p>
 
           <div class="card step" id="step-engine">
             <div class="step-head">
               <span class="step-n">1</span>
               <div class="step-title">
-                <h2>Speech engine</h2>
+                <h2 data-i18n="setup.engine"></h2>
                 <p class="muted small" id="engine-detail"></p>
               </div>
-              <button class="btn" id="btn-setup">Set up engine</button>
+              <button class="btn" id="btn-setup"></button>
             </div>
-            <pre id="setup-log" class="log" hidden></pre>
-            <p id="setup-error" class="error" hidden></p>
+            <pre id="setup-log" class="log" dir="ltr" hidden></pre>
+            <p id="setup-error" class="error" dir="auto" hidden></p>
           </div>
 
           <div class="card step" id="step-model">
             <div class="step-head">
               <span class="step-n">2</span>
               <div class="step-title">
-                <h2>Model</h2>
+                <h2 data-i18n="setup.model"></h2>
                 <p class="muted small" id="model-detail"></p>
               </div>
-              <button class="btn btn-ghost" id="btn-import-other" hidden>Use another folder…</button>
+              <button class="btn btn-ghost" id="btn-import-other" data-i18n="setup.useOther" hidden></button>
             </div>
-            <p id="import-other-error" class="error" hidden></p>
+            <p id="import-other-error" class="error" dir="auto" hidden></p>
 
             <div id="model-get" class="model-get" hidden>
               <div class="option">
-                <h3>Download it <span class="muted">(about 4 GB)</span></h3>
+                <h3><span data-i18n="setup.download"></span> <span class="muted" data-i18n="setup.size"></span></h3>
                 <ol class="howto small">
-                  <li>The model is free but gated: open the <a href="#" data-link="model_url">model page</a>, sign in to Hugging Face and accept its terms.</li>
-                  <li>Create a <a href="#" data-link="tokens_url">read token</a> and paste it here.</li>
+                  <li id="how1"></li>
+                  <li id="how2"></li>
                 </ol>
                 <div class="row">
-                  <input id="hf-token" class="input" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" aria-label="Hugging Face token">
-                  <button class="btn" id="btn-token">Save token</button>
+                  <input id="hf-token" class="input" type="password" placeholder="hf_…" autocomplete="off" spellcheck="false" dir="ltr" data-i18n-aria="setup.tokenAria">
+                  <button class="btn" id="btn-token" data-i18n="setup.saveToken"></button>
                 </div>
-                <p class="small token-state"><span id="token-state" class="muted"></span> <button class="linkbtn" id="btn-forget-token" hidden>Forget it</button></p>
+                <p class="small token-state"><span id="token-state" class="muted"></span> <button class="linkbtn" id="btn-forget-token" data-i18n="setup.forget" hidden></button></p>
                 <div class="row small dest">
-                  <span class="muted">Saves to</span>
-                  <code id="download-dir"></code>
-                  <button class="btn btn-sm btn-ghost" id="btn-download-dir">Change…</button>
+                  <span class="muted" data-i18n="setup.savesTo"></span>
+                  <code id="download-dir" dir="ltr"></code>
+                  <button class="btn btn-sm btn-ghost" id="btn-download-dir" data-i18n="setup.change"></button>
                 </div>
                 <div class="row">
-                  <button class="btn btn-primary" id="btn-download">Download model</button>
+                  <button class="btn btn-primary" id="btn-download"></button>
                   <span id="download-hint" class="muted small"></span>
                 </div>
                 <div id="download-box" hidden>
                   <div class="progress"><div class="bar" id="download-bar"></div></div>
                   <p class="muted small" id="download-text"></p>
                 </div>
-                <p id="download-error" class="error" hidden></p>
+                <p id="download-error" class="error" dir="auto" hidden></p>
               </div>
               <div class="option">
-                <h3>Already have the files?</h3>
-                <p class="muted small">Choose the folder that holds <code>config.json</code>, <code>model.safetensors</code> and the tokenizer files: copied from another computer, downloaded from the model page's “Files” tab, or a Hugging Face cache folder. You can also drop the folder on this window.</p>
-                <div class="row"><button class="btn" id="btn-import">Import folder…</button></div>
-                <p id="import-error" class="error" hidden></p>
+                <h3 data-i18n="setup.have"></h3>
+                <p class="muted small" id="have-text"></p>
+                <div class="row"><button class="btn" id="btn-import" data-i18n="setup.import"></button></div>
+                <p id="import-error" class="error" dir="auto" hidden></p>
               </div>
             </div>
           </div>
@@ -143,13 +147,13 @@
             <div class="step-head">
               <span class="step-n">·</span>
               <div class="step-title">
-                <h2>Run on</h2>
+                <h2 data-i18n="setup.runOn"></h2>
                 <p class="muted small" id="runon-detail"></p>
               </div>
-              <select id="run-on" class="input select" aria-label="Run on">
-                <option value="auto">GPU when available</option>
-                <option value="cpu-fast">CPU, faster</option>
-                <option value="cpu-exact">CPU, exact (very slow)</option>
+              <select id="run-on" class="input select" data-i18n-aria="setup.runOn">
+                <option value="auto" data-i18n="runon.auto"></option>
+                <option value="cpu-fast" data-i18n="runon.cpu-fast"></option>
+                <option value="cpu-exact" data-i18n="runon.cpu-exact"></option>
               </select>
             </div>
           </div>
@@ -158,16 +162,16 @@
             <div class="step-head">
               <span class="step-n">·</span>
               <div class="step-title">
-                <h2>Audio decoder</h2>
+                <h2 data-i18n="setup.decoder"></h2>
                 <p class="muted small" id="ffmpeg-detail"></p>
               </div>
             </div>
           </div>
 
           <div class="setup-foot">
-            <button class="btn btn-ghost" id="btn-recheck">Check again</button>
-            <button class="btn btn-ghost" id="btn-log">Open engine log</button>
-            <button class="btn btn-ghost" id="btn-data">Open transcripts folder</button>
+            <button class="btn btn-ghost" id="btn-recheck" data-i18n="setup.recheck"></button>
+            <button class="btn btn-ghost" id="btn-log" data-i18n="setup.log"></button>
+            <button class="btn btn-ghost" id="btn-data" data-i18n="setup.data"></button>
           </div>
         </div>
       </section>
@@ -177,37 +181,37 @@
         <div class="t-head">
           <div class="t-title-row">
             <h1 id="t-title" class="t-title" dir="auto" spellcheck="false"></h1>
-            <span id="t-partial" class="badge badge-warn" hidden>Partial</span>
+            <span id="t-partial" class="badge badge-warn" data-i18n="t.partial" hidden></span>
           </div>
           <p id="t-meta" class="muted small"></p>
           <div id="t-progress" class="t-progress" hidden>
             <div class="progress"><div class="bar" id="t-bar"></div></div>
             <div class="t-progress-row">
               <span id="t-status" class="small"></span>
-              <button class="btn btn-sm btn-ghost" id="t-cancel">Cancel</button>
+              <button class="btn btn-sm btn-ghost" id="t-cancel" data-i18n="t.cancel"></button>
             </div>
           </div>
           <div class="toolbar">
             <div class="search">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M10 2a8 8 0 0 1 6.32 12.9l5.39 5.4-1.41 1.4-5.4-5.39A8 8 0 1 1 10 2Zm0 2a6 6 0 1 0 0 12 6 6 0 0 0 0-12Z"/></svg>
-              <input id="search" type="search" placeholder="Search (Ctrl+F)" dir="auto" autocomplete="off">
-              <span id="search-count" class="muted small"></span>
-              <button class="icon-btn" id="search-prev" title="Previous (Shift+Enter)" aria-label="Previous match">‹</button>
-              <button class="icon-btn" id="search-next" title="Next (Enter)" aria-label="Next match">›</button>
+              <input id="search" type="search" data-i18n-ph="t.search" dir="auto" autocomplete="off">
+              <span id="search-count" class="muted small" dir="ltr"></span>
+              <button class="icon-btn" id="search-prev" data-i18n-aria="t.prev">‹</button>
+              <button class="icon-btn" id="search-next" data-i18n-aria="t.next">›</button>
             </div>
-            <label class="toggle small"><input type="checkbox" id="stamps" checked> Timestamps</label>
-            <button class="btn btn-sm" id="btn-copy">Copy all</button>
+            <label class="toggle small"><input type="checkbox" id="stamps" checked> <span data-i18n="t.stamps"></span></label>
+            <button class="btn btn-sm" id="btn-copy" data-i18n="t.copyAll"></button>
             <div class="menu-wrap">
-              <button class="btn btn-sm btn-primary" id="btn-export" aria-haspopup="true">Export ▾</button>
+              <button class="btn btn-sm btn-primary" id="btn-export" aria-haspopup="true" data-i18n="t.export"></button>
               <div class="menu" id="export-menu" hidden>
-                <button data-fmt="docx">Word (.docx)</button>
-                <button data-fmt="txt">Text (.txt)</button>
-                <button data-fmt="md">Markdown (.md)</button>
-                <button data-fmt="srt">Subtitles (.srt)</button>
-                <button data-fmt="vtt">Subtitles (.vtt)</button>
+                <button data-fmt="docx" data-i18n="exp.docx"></button>
+                <button data-fmt="txt" data-i18n="exp.txt"></button>
+                <button data-fmt="md" data-i18n="exp.md"></button>
+                <button data-fmt="srt" data-i18n="exp.srt"></button>
+                <button data-fmt="vtt" data-i18n="exp.vtt"></button>
               </div>
             </div>
-            <button class="icon-btn danger" id="btn-delete" title="Delete this transcript" aria-label="Delete transcript">
+            <button class="icon-btn danger" id="btn-delete" data-i18n-aria="t.delete">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm4 2v8h2v-8h-2Zm4 0v8h2v-8h-2Z"/></svg>
             </button>
           </div>
@@ -222,14 +226,15 @@
   </div>
 
   <div id="drop-overlay" class="drop-overlay" hidden>
-    <div class="drop-card">Drop to transcribe</div>
+    <div class="drop-card" data-i18n="drop.overlay"></div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <div id="ctx-menu" class="menu ctx-menu" role="menu" hidden>
-    <button role="menuitem" id="ctx-play">▶ Play from here</button>
-    <button role="menuitem" id="ctx-copy">Copy</button>
+    <button role="menuitem" id="ctx-play" data-i18n="ctx.play"></button>
+    <button role="menuitem" id="ctx-copy" data-i18n="ctx.copy"></button>
   </div>
 
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

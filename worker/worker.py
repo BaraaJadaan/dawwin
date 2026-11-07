@@ -32,6 +32,27 @@ FORCE_CPU = os.environ.get("TAFREEGH_DEVICE", "").lower() == "cpu"
 PATTERNS = ["*.json", "*.safetensors", "tokenizer.model", "*.py"]
 _lock = threading.Lock()
 
+# Messages the user sees, in the app's interface language (TAFREEGH_LANG)
+LANG = os.environ.get("TAFREEGH_LANG", "en")
+_AR = {
+    "Hugging Face did not accept the token. Check it, or make a new read token.":
+        "لم يقبل Hugging Face الرمز. تحقّق منه أو أنشئ رمز قراءة جديدًا.",
+    "This Hugging Face account has no access to the model yet. Open the model page, accept its terms with the same account, then press Download again.":
+        "لا يملك حساب Hugging Face هذا صلاحية على النموذج بعد. افتح صفحة النموذج، ووافق على شروطه بالحساب نفسه، ثم اضغط «تنزيل النموذج» مجددًا.",
+    "Not enough free space in {dest}: the model needs {need} GB more, {free} GB is free. Choose another folder.":
+        "لا توجد مساحة كافية في {dest}: يحتاج النموذج {need} غيغابايت إضافية، والمتاح {free} غيغابايت. اختر مجلدًا آخر.",
+    "{name} came out the wrong size; it will download again.":
+        "حجم {name} غير صحيح؛ سيُنزَّل مجددًا.",
+    "{name} is damaged (checksum mismatch); press Download again.":
+        "{name} تالف (المجموع الاختباري لا يطابق)؛ اضغط «تنزيل النموذج» مجددًا.",
+    "The GPU does not have enough free memory ({err}); running on the CPU.":
+        "ذاكرة معالج الرسوميات لا تكفي ({err})؛ يعمل التفريغ على المعالج.",
+}
+
+
+def tr(en, **kw):
+    return (_AR.get(en, en) if LANG == "ar" else en).format(**kw)
+
 
 def quantize_for_cpu(model):
     """Linear layers to int8 (dynamic quantization), the rest to fp32. On CPUs without native
@@ -110,7 +131,7 @@ class Engine:
                     self.dtype = "int8"
                 break
             except torch.cuda.OutOfMemoryError as e:  # a small GPU: run on the CPU instead
-                fallback = f"The GPU does not have enough free memory ({e}); running on the CPU."
+                fallback = tr("The GPU does not have enough free memory ({err}); running on the CPU.", err=e)
                 log(fallback)
                 self.model = None
                 torch.cuda.empty_cache()
@@ -183,8 +204,8 @@ class Engine:
         def explain(e):
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code == 401 and not isinstance(e, GatedRepoError):
-                return "Hugging Face did not accept the token. Check it, or make a new read token."
-            return (
+                return tr("Hugging Face did not accept the token. Check it, or make a new read token.")
+            return tr(
                 "This Hugging Face account has no access to the model yet. Open the model page, "
                 "accept its terms with the same account, then press Download again."
             )
@@ -230,10 +251,10 @@ class Engine:
         missing = total - have()
         free = shutil.disk_usage(dest).free
         if free < missing + 200 * 2**20:
-            raise RuntimeError(
-                f"Not enough free space in {dest}: the model needs {missing / 1e9:.1f} GB more, "
-                f"{free / 1e9:.1f} GB is free. Choose another folder."
-            )
+            raise RuntimeError(tr(
+                "Not enough free space in {dest}: the model needs {need} GB more, {free} GB is free. Choose another folder.",
+                dest=dest, need=f"{missing / 1e9:.1f}", free=f"{free / 1e9:.1f}",
+            ))
 
         stop = threading.Event()
 
@@ -277,7 +298,7 @@ class Engine:
                         retry(e)
                 if size(part) != s.size:
                     os.remove(part)
-                    raise RuntimeError(f"{s.rfilename} came out the wrong size; it will download again.")
+                    raise RuntimeError(tr("{name} came out the wrong size; it will download again.", name=s.rfilename))
                 if s.lfs and getattr(s.lfs, "sha256", None):
                     h = hashlib.sha256()
                     with open(part, "rb") as f:
@@ -285,7 +306,7 @@ class Engine:
                             h.update(block)
                     if h.hexdigest() != s.lfs.sha256:
                         os.remove(part)
-                        raise RuntimeError(f"{s.rfilename} is damaged (checksum mismatch); press Download again.")
+                        raise RuntimeError(tr("{name} is damaged (checksum mismatch); press Download again.", name=s.rfilename))
                 os.replace(part, final)
         finally:
             stop.set()

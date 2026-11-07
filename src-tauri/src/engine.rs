@@ -113,13 +113,14 @@ impl PythonWorker {
         if let Some(t) = &opts.token {
             cmd.env("HF_TOKEN", t);
         }
+        cmd.env("TAFREEGH_LANG", crate::i18n::lang());
         match opts.run_on.as_str() {
             "cpu-fast" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "int8"),
             "cpu-exact" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "bf16"),
             _ => cmd.env_remove("TAFREEGH_DEVICE").env("TAFREEGH_CPU_MODE", "int8"),
         };
         no_window(&mut cmd);
-        let mut child = cmd.spawn().with_context(|| format!("cannot start {}", paths.python().display()))?;
+        let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", paths.python().display()))?;
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -185,7 +186,7 @@ impl PythonWorker {
         self.stdin
             .write_all(line.as_bytes())
             .and_then(|_| self.stdin.flush())
-            .map_err(|e| anyhow!("the engine stopped ({e}). Last output:\n{}", self.tail()))?;
+            .map_err(|e| anyhow!(crate::tr!("the engine stopped ({}). Last output:\n{}", e, self.tail())))?;
         Ok(id)
     }
 
@@ -215,12 +216,12 @@ impl PythonWorker {
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if let Ok(Some(status)) = self.child.try_wait() {
-                        bail!("the engine exited ({status}). Last output:\n{}", self.tail());
+                        bail!(crate::tr!("the engine exited ({}). Last output:\n{}", status, self.tail()));
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     let _ = self.child.wait();
-                    bail!("the engine exited. Last output:\n{}", self.tail());
+                    bail!(crate::tr!("the engine exited. Last output:\n{}", self.tail()));
                 }
             }
         }

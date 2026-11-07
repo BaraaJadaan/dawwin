@@ -114,6 +114,9 @@ pub struct Settings {
     /// "auto" (GPU when there is one) | "cpu-fast" (int8) | "cpu-exact" (bf16, much slower)
     #[serde(default)]
     pub run_on: Option<String>,
+    /// The interface language ("en", "ar"); unset until the UI picks one
+    #[serde(default)]
+    pub ui_lang: Option<String>,
 }
 
 impl Settings {
@@ -153,7 +156,7 @@ pub fn app_token(paths: &Paths) -> Option<String> {
 pub fn save_token(paths: &Paths, token: &str) -> Result<()> {
     let t = token.trim();
     if !t.starts_with("hf_") || t.len() < 20 || t.chars().any(char::is_whitespace) {
-        bail!("That does not look like a Hugging Face token (they start with “hf_”).");
+        bail!(crate::tr!("That does not look like a Hugging Face token (they start with “hf_”)."));
     }
     std::fs::create_dir_all(&paths.roaming)?;
     std::fs::write(paths.token_file(), t)?;
@@ -247,7 +250,7 @@ fn ensure_uv(paths: &Paths, log: &dyn Fn(String)) -> Result<PathBuf> {
     std::fs::create_dir_all(&bin)?;
     let url = format!("https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-x86_64-pc-windows-msvc.zip");
     let zip_path = bin.join("uv.zip");
-    log(format!("Downloading uv {UV_VERSION} (the tool that builds the Python environment)…"));
+    log(crate::tr!("Downloading uv {} (the tool that builds the Python environment)…", UV_VERSION));
     curl_download(&url, &zip_path, log)?;
     let sums = bin.join("uv.zip.sha256");
     curl_download(&format!("{url}.sha256"), &sums, log)?;
@@ -255,7 +258,7 @@ fn ensure_uv(paths: &Paths, log: &dyn Fn(String)) -> Result<PathBuf> {
     let got = format!("{:x}", Sha256::digest(std::fs::read(&zip_path)?));
     if want.len() != 64 || want != got {
         let _ = std::fs::remove_file(&zip_path);
-        bail!("The uv download is damaged (checksum mismatch). Press Set up again.");
+        bail!(crate::tr!("The uv download is damaged (checksum mismatch). Press Set up again."));
     }
     let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path)?)?;
     for i in 0..archive.len() {
@@ -271,7 +274,7 @@ fn ensure_uv(paths: &Paths, log: &dyn Fn(String)) -> Result<PathBuf> {
     let _ = std::fs::remove_file(&sums);
     let uv = bin.join("uv.exe");
     if !uv.is_file() {
-        bail!("uv.exe was not in the downloaded archive");
+        bail!(crate::tr!("uv.exe was not in the downloaded archive"));
     }
     Ok(uv)
 }
@@ -282,7 +285,7 @@ fn curl_download(url: &str, dest: &Path, log: &dyn Fn(String)) -> Result<()> {
     cmd.args(["-L", "--fail", "-sS", "--retry", "20", "--retry-all-errors", "--retry-delay", "3", "--connect-timeout", "30", "-C", "-", "-o"])
         .arg(dest)
         .arg(url);
-    run_logged(cmd, log).with_context(|| format!("download failed: {url}"))
+    run_logged(cmd, log).with_context(|| crate::tr!("download failed: {}", url))
 }
 
 // ---------------------------------------------------------------- Python env
@@ -319,19 +322,19 @@ pub fn setup_env(paths: &Paths, log: &dyn Fn(String)) -> Result<()> {
     let driver = nvidia_driver();
     let backend = torch_backend(driver.as_deref());
     match &driver {
-        Some(d) => log(format!("NVIDIA driver {d}: installing PyTorch for the GPU ({backend}).")),
-        None => log("No NVIDIA GPU found: installing the CPU build of PyTorch. Transcription will be slow.".into()),
+        Some(d) => log(crate::tr!("NVIDIA driver {}: installing PyTorch for the GPU ({}).", d, backend)),
+        None => log(crate::tr!("No NVIDIA GPU found: installing the CPU build of PyTorch. Transcription will be slower.")),
     }
     if !paths.python().is_file() {
-        log(format!("Creating a Python {PYTHON_VERSION} environment in {}", env.display()));
+        log(crate::tr!("Creating a Python {} environment in {}", PYTHON_VERSION, env.display()));
         let mut cmd = Command::new(&uv);
         cmd.arg("venv").arg(&env).args(["--python", PYTHON_VERSION, "--clear"]);
-        run_logged(cmd, log).context("uv venv failed")?;
+        run_logged(cmd, log).with_context(|| crate::tr!("uv venv failed"))?;
     }
     log(if backend == "cpu" {
-        "Installing PyTorch and Transformers (about 1 GB the first time)…".into()
+        crate::tr!("Installing PyTorch and Transformers (about 1 GB the first time)…")
     } else {
-        "Installing PyTorch with CUDA and Transformers (about 3 GB the first time)…".into()
+        crate::tr!("Installing PyTorch with CUDA and Transformers (about 3 GB the first time)…")
     });
     let mut cmd = Command::new(&uv);
     cmd.args(["pip", "install", "--python"])
@@ -341,15 +344,15 @@ pub fn setup_env(paths: &Paths, log: &dyn Fn(String)) -> Result<()> {
         .args(["--torch-backend", backend])
         .env("UV_HTTP_TIMEOUT", "600")
         .env("UV_HTTP_RETRIES", "10");
-    run_logged(cmd, log).context("installing packages failed (press Set up again to continue)")?;
+    run_logged(cmd, log).with_context(|| crate::tr!("installing packages failed (press Set up again to continue)"))?;
 
-    log("Checking the environment…".into());
+    log(crate::tr!("Checking the environment…"));
     let mut cmd = Command::new(paths.python());
     cmd.args([
         "-c",
         "import torch, transformers; print('torch', torch.__version__, '| CUDA', torch.cuda.is_available(), '| transformers', transformers.__version__)",
     ]);
-    run_logged(cmd, log).context("the new environment does not import torch")?;
+    run_logged(cmd, log).with_context(|| crate::tr!("the new environment does not import torch"))?;
     let marker = serde_json::json!({
         "requirements": requirements_hash(),
         "python": PYTHON_VERSION,
@@ -357,7 +360,7 @@ pub fn setup_env(paths: &Paths, log: &dyn Fn(String)) -> Result<()> {
         "nvidia_driver": driver,
     });
     std::fs::write(paths.env_marker(), serde_json::to_string_pretty(&marker)?)?;
-    log("Engine ready.".into());
+    log(crate::tr!("Engine ready."));
     Ok(())
 }
 
@@ -430,19 +433,19 @@ pub struct ModelStatus {
 pub fn validate_model_dir(dir: &Path) -> Result<(PathBuf, u64)> {
     let dir = resolve_cache_repo(dir).unwrap_or_else(|| dir.to_path_buf());
     let need = |f: &str| -> Result<std::fs::Metadata> {
-        std::fs::metadata(dir.join(f)).map_err(|_| anyhow!("{f} is missing"))
+        std::fs::metadata(dir.join(f)).map_err(|_| anyhow!(crate::tr!("{} is missing", f)))
     };
     let weights = need("model.safetensors")?.len();
-    let config = std::fs::read_to_string(dir.join("config.json")).map_err(|_| anyhow!("config.json is missing"))?;
+    let config = std::fs::read_to_string(dir.join("config.json")).map_err(|_| anyhow!(crate::tr!("{} is missing", "config.json")))?;
     need("tokenizer_config.json")?;
     if need("tokenizer.json").is_err() && need("tokenizer.model").is_err() {
-        bail!("tokenizer.json is missing");
+        bail!(crate::tr!("{} is missing", "tokenizer.json"));
     }
     if !config.contains("\"cohere_asr\"") {
-        bail!("config.json is not a Cohere Transcribe model");
+        bail!(crate::tr!("config.json is not a Cohere Transcribe model"));
     }
     if weights < 1_000_000_000 {
-        bail!("model.safetensors is incomplete ({:.1} GB)", weights as f64 / 1e9);
+        bail!(crate::tr!("model.safetensors is incomplete ({} GB)", format!("{:.1}", weights as f64 / 1e9)));
     }
     Ok((dir, weights))
 }

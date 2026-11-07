@@ -120,9 +120,12 @@ pub fn to_txt(t: &Transcript, stamps: bool) -> String {
 pub fn to_md(t: &Transcript, stamps: bool) -> String {
     let mut out = format!("# {}\n\n", t.title);
     out.push_str(&format!(
-        "- Duration: {}\n- Language: {}\n- Model: {}\n\n",
+        "- {}: {}\n- {}: {}\n- {}: {}\n\n",
+        crate::tr!("Duration"),
         ts(t.duration_s),
-        if t.language == "en" { "English" } else { "Arabic" },
+        crate::tr!("Language"),
+        if t.language == "en" { crate::tr!("English") } else { crate::tr!("Arabic") },
+        crate::tr!("Model"),
         t.model
     ));
     for s in visible(t) {
@@ -191,10 +194,9 @@ pub fn to_docx(t: &Transcript, stamps: bool) -> Result<Vec<u8>> {
         xml(&t.title)
     ));
     body.push_str(&format!(
-        "<w:p><w:pPr>{}</w:pPr><w:r><w:rPr><w:color w:val=\"6B7280\"/><w:sz w:val=\"18\"/><w:szCs w:val=\"18\"/></w:rPr><w:t xml:space=\"preserve\">Duration {} · {}</w:t></w:r></w:p>",
+        "<w:p><w:pPr>{}</w:pPr><w:r><w:rPr><w:color w:val=\"6B7280\"/><w:sz w:val=\"18\"/><w:szCs w:val=\"18\"/></w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
         if rtl { "<w:bidi/>" } else { "" },
-        ts(t.duration_s),
-        xml(&t.model)
+        xml(&crate::tr!("Duration {} · {}", ts(t.duration_s), &t.model))
     ));
     for s in visible(t) {
         body.push_str("<w:p>");

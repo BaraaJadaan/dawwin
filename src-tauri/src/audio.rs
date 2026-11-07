@@ -38,7 +38,7 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     no_window(&mut cmd);
-    let mut child = cmd.spawn().context("could not start ffmpeg")?;
+    let mut child = cmd.spawn().with_context(|| crate::tr!("could not start ffmpeg"))?;
     let mut out = child.stdout.take().unwrap();
     let mut err = child.stderr.take().unwrap();
     let err_thread = std::thread::spawn(move || {
@@ -62,7 +62,7 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
     let status = child.wait()?;
     let stderr = err_thread.join().unwrap_or_default();
     if !status.success() || bytes.len() < 4 {
-        bail!("ffmpeg could not read the file: {}", stderr.trim());
+        bail!(crate::tr!("ffmpeg could not read the file: {}", stderr.trim()));
     }
     Ok(bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
 }
@@ -76,7 +76,7 @@ fn decode_symphonia(path: &Path) -> Result<Vec<f32>> {
     use symphonia::core::meta::MetadataOptions;
     use symphonia::core::probe::Hint;
 
-    let file = std::fs::File::open(path).with_context(|| format!("cannot open {}", path.display()))?;
+    let file = std::fs::File::open(path).with_context(|| crate::tr!("cannot open {}", path.display()))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -84,16 +84,16 @@ fn decode_symphonia(path: &Path) -> Result<Vec<f32>> {
     }
     let probed = symphonia::default::get_probe()
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
-        .map_err(|e| anyhow!("unsupported format ({e}); install ffmpeg for this file type"))?;
+        .map_err(|e| anyhow!(crate::tr!("unsupported format ({}); install ffmpeg for this file type", e)))?;
     let mut format = probed.format;
     let track = format
         .default_track()
-        .ok_or_else(|| anyhow!("no audio track"))?;
+        .ok_or_else(|| anyhow!(crate::tr!("no audio track")))?;
     let track_id = track.id;
     let rate = track.codec_params.sample_rate.ok_or_else(|| anyhow!("unknown sample rate"))? as usize;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .map_err(|e| anyhow!("unsupported codec ({e}); install ffmpeg for this file type"))?;
+        .map_err(|e| anyhow!(crate::tr!("unsupported codec ({}); install ffmpeg for this file type", e)))?;
 
     let mut mono: Vec<f32> = Vec::new();
     let mut sbuf: Option<SampleBuffer<f32>> = None;
@@ -125,7 +125,7 @@ fn decode_symphonia(path: &Path) -> Result<Vec<f32>> {
         }
     }
     if mono.is_empty() {
-        bail!("no audio decoded");
+        bail!(crate::tr!("no audio decoded"));
     }
     resample(&mono, rate, SR)
 }

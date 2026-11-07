@@ -64,7 +64,9 @@ pub struct DownloadView {
     pub active: bool,
     pub done: u64,
     pub total: u64,
-    pub retry: Option<String>,
+    /// after a dropped connection: seconds until it resumes, and the attempt number
+    pub retry_wait: Option<u64>,
+    pub retry_attempt: Option<u64>,
     pub error: Option<String>,
 }
 
@@ -85,6 +87,8 @@ pub struct SetupView {
     pub env_backend: Option<String>,
     /// "auto" | "cpu-fast" | "cpu-exact"
     pub run_on: String,
+    /// The interface language, when one was picked
+    pub ui_lang: Option<String>,
     pub download: DownloadView,
     pub hf_home: String,
     pub data_dir: String,
@@ -128,6 +132,7 @@ impl Core {
         paths.install_worker_files()?;
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
+        crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));
         let core = Arc::new(Core {
             app,
             paths,
@@ -180,7 +185,10 @@ impl Core {
         let env_ready = setup::env_ready(&self.paths);
         let env_backend = setup::env_backend(&self.paths);
         let model = self.model_status();
-        let run_on = self.settings.lock().unwrap().run_on().to_string();
+        let (run_on, ui_lang) = {
+            let st = self.settings.lock().unwrap();
+            (st.run_on().to_string(), st.ui_lang.clone())
+        };
         self.update(|s| {
             let st = &mut s.setup;
             st.env_ready = env_ready;
@@ -193,6 +201,7 @@ impl Core {
             st.nvidia_driver = tools.nvidia_driver;
             st.env_backend = env_backend;
             st.run_on = run_on;
+            st.ui_lang = ui_lang;
             st.hf_home = setup::hf_home().display().to_string();
             st.data_dir = self.paths.roaming.display().to_string();
             st.env_dir = self.paths.env_dir().display().to_string();
@@ -222,10 +231,18 @@ impl Core {
     /// Use the model in `dir` (a folder with the model files, or a Hugging Face cache folder).
     pub fn import_model(&self, dir: &std::path::Path) -> Result<ModelStatus> {
         let (resolved, _) = setup::validate_model_dir(dir)
-            .map_err(|e| anyhow!("That folder does not hold the model: {e}."))?;
+            .map_err(|e| anyhow!(crate::tr!("That folder does not hold the model: {}.", e)))?;
         self.change_settings(|s| s.model_dir = Some(resolved.display().to_string()))?;
         self.send(Msg::Restart);
         Ok(self.model_status())
+    }
+
+    /// The interface language, for the messages Rust and the worker show.
+    pub fn set_ui_lang(&self, lang: &str) -> Result<()> {
+        let lang = if crate::i18n::LANGUAGES.contains(&lang) { lang } else { "en" };
+        crate::i18n::set(lang);
+        self.change_settings(|s| s.ui_lang = Some(lang.to_string()))?;
+        Ok(())
     }
 
     /// GPU or CPU: takes effect with a fresh worker.
@@ -352,16 +369,17 @@ fn sink(core: &Arc<Core>) -> EventSink {
             c.update(|s| {
                 s.setup.download.done = done;
                 s.setup.download.total = total;
-                s.setup.download.retry = None;
+                s.setup.download.retry_wait = None;
+                s.setup.download.retry_attempt = None;
             });
         }
         Some("download_retry") => {
-            let msg = format!(
-                "Connection dropped; resuming in {} s (attempt {})",
-                v.get("wait").and_then(|x| x.as_u64()).unwrap_or(0),
-                v.get("attempt").and_then(|x| x.as_u64()).unwrap_or(0)
-            );
-            c.update(|s| s.setup.download.retry = Some(msg));
+            let wait = v.get("wait").and_then(|x| x.as_u64());
+            let attempt = v.get("attempt").and_then(|x| x.as_u64());
+            c.update(|s| {
+                s.setup.download.retry_wait = wait;
+                s.setup.download.retry_attempt = attempt;
+            });
         }
         _ => {}
     })
@@ -370,7 +388,7 @@ fn sink(core: &Arc<Core>) -> EventSink {
 fn ensure_worker<'a>(core: &Arc<Core>, worker: &'a mut Option<PythonWorker>) -> Result<&'a mut PythonWorker> {
     if worker.is_none() {
         if !setup::env_ready(&core.paths) {
-            return Err(anyhow!("The engine is not set up yet. Press “Set up engine” first."));
+            return Err(anyhow!(crate::tr!("The engine is not set up yet. Press “Set up engine” first.")));
         }
         let model = core.model_status();
         core.update(|s| {
@@ -439,7 +457,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 }
                 let res = (|| -> Result<()> {
                     if !setup::env_ready(&core.paths) {
-                        return Err(anyhow!("Set up the engine first."));
+                        return Err(anyhow!(crate::tr!("Set up the engine first.")));
                     }
                     let dest = PathBuf::from(core.model_status().download_dir);
                     let opts = WorkerOptions { offline: false, token: setup::app_token(&core.paths), ..Default::default() };
@@ -448,13 +466,14 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     let r = w.download(&dest);
                     w.shutdown();
                     r?;
-                    setup::validate_model_dir(&dest).map_err(|e| anyhow!("The download finished but the folder is not complete: {e}"))?;
+                    setup::validate_model_dir(&dest).map_err(|e| anyhow!(crate::tr!("The download finished but the folder is not complete: {}", e)))?;
                     core.change_settings(|s| s.model_dir = Some(dest.display().to_string()))?;
                     Ok(())
                 })();
                 core.update(|s| {
                     s.setup.download.active = false;
-                    s.setup.download.retry = None;
+                    s.setup.download.retry_wait = None;
+                    s.setup.download.retry_attempt = None;
                     s.setup.download.error = res.as_ref().err().map(|e| format!("{e:#}"));
                     s.engine.state = "off".into();
                 });
@@ -514,7 +533,7 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     core.update_job(id, |j| j.status = "decoding".into());
 
     if !core.model_status().found {
-        return Err(anyhow!("The model is not set up yet. Download or import it on the Engine and model page."));
+        return Err(anyhow!(crate::tr!("The model is not set up yet. Download or import it on the Engine and model page.")));
     }
     let w = ensure_worker(core, worker)?;
     w.start_loading()?; // the model loads while the audio decodes

@@ -20,7 +20,7 @@ const S = {
   history: [],
   view: "home",
   current: null,      // the transcript on screen
-  lang: store.get("lang", "ar"),
+  spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   hits: [],
   hit: -1,
@@ -36,19 +36,30 @@ function ts(sec) {
 }
 function dur(sec) {
   sec = Math.round(sec || 0);
-  if (sec < 60) return `${sec} s`;
+  const and = t("dur.join");
+  if (sec < 60) return t("dur.s", { n: sec });
   const m = Math.floor(sec / 60), s = sec % 60;
-  if (m < 10) return s ? `${m} min ${s} s` : `${m} min`;
-  if (m < 60) return `${Math.round(sec / 60)} min`;
-  return `${Math.floor(m / 60)} h ${m % 60} min`;
+  if (m < 10) return s ? t("dur.m", { n: m }) + and + t("dur.s", { n: s }) : t("dur.m", { n: m });
+  if (m < 60) return t("dur.m", { n: Math.round(sec / 60) });
+  const h = Math.floor(m / 60), mm = m % 60;
+  return mm ? t("dur.h", { n: h }) + and + t("dur.m", { n: mm }) : t("dur.h", { n: h });
 }
 function eta(sec) {
-  if (sec == null || !isFinite(sec)) return "estimating time…";
-  if (sec < 50) return "less than a minute left";
-  return `about ${Math.ceil(sec / 60)} min left`;
+  if (sec == null || !isFinite(sec)) return t("eta.estimating");
+  if (sec < 50) return t("eta.lessMin");
+  return t("eta.mins", { n: Math.ceil(sec / 60) });
 }
 function date(ms) {
-  return new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(ms));
+  const opts = { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" };
+  return new Intl.DateTimeFormat(I18N[UI_LANG].locale, opts).format(new Date(ms));
+}
+/** The device a transcript ran on, as the app stored it ("GPU · NVIDIA …", "CPU (int8)"). */
+function deviceLabel(d) {
+  if (!d) return "";
+  if (d.startsWith("GPU · ")) return t("dev.gpu", { name: shortGpu(d.slice(6)) });
+  if (d.startsWith("CPU (int8)")) return t("dev.cpuInt8");
+  if (d.startsWith("CPU")) return t("dev.cpu");
+  return d;
 }
 function esc(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -93,35 +104,31 @@ function setupComplete(snap) {
 
 // ------------------------------------------------------------------ status chips
 
-function setChip(el, cls, text, title) {
+function setChip(el, cls, text) {
   el.className = "chip " + (cls || "");
   el.querySelector(".label").textContent = text;
-  el.title = title || "";
 }
 
 function renderChips() {
   const { engine: e, setup: st } = S.snap;
   const ce = $("chip-engine"), cm = $("chip-model");
-  if (st.env_busy) setChip(ce, "busy", "Setting up engine…");
-  else if (!st.env_ready) setChip(ce, "bad", "Engine not set up", "Open setup");
-  else if (e.state === "starting") setChip(ce, "busy", "Starting engine…");
-  else if (e.state === "error") setChip(ce, "bad", "Engine error", e.error || "");
+  if (st.env_busy) setChip(ce, "busy", t("chip.settingUp"));
+  else if (!st.env_ready) setChip(ce, "bad", t("chip.noEngine"));
+  else if (e.state === "starting") setChip(ce, "busy", t("chip.starting"));
+  else if (e.state === "error") setChip(ce, "bad", t("chip.error"));
   else if (st.run_on !== "auto" || e.device === "cpu" || e.cuda === false) {
-    const exact = st.run_on === "cpu-exact";
-    setChip(ce, "warn", exact ? "CPU · exact (slow)" : "CPU · faster mode",
-      e.note || (exact ? "Full precision on the processor: very slow" : "8-bit model on the processor: slower than a GPU, slightly less exact"));
+    setChip(ce, "warn", t(st.run_on === "cpu-exact" ? "chip.cpu-exact" : "chip.cpu-fast"));
   }
-  else if (e.cuda === true) setChip(ce, "ok", `GPU · ${shortGpu(e.gpu)}`, `Runs on the GPU with CUDA (torch ${e.torch || "?"}${e.vram_total_gb ? `, ${e.vram_total_gb} GB VRAM` : ""})`);
-  else if (e.cuda === false) setChip(ce, "warn", "CPU only (slow)", "No CUDA GPU was found; transcription will be many times slower");
-  else setChip(ce, "", "Engine ready", "The engine starts when it is needed");
+  else if (e.cuda === true) setChip(ce, "ok", t("chip.gpu", { gpu: shortGpu(e.gpu) }));
+  else setChip(ce, "", t("chip.engineReady"));
 
   if (st.download.active) {
     const pct = st.download.total ? Math.floor((100 * st.download.done) / st.download.total) : 0;
-    setChip(cm, "busy", `Downloading model ${pct}%`);
-  } else if (!st.model.found) setChip(cm, "bad", "Model not set up", "Download or import the model");
-  else if (e.state === "loading") setChip(cm, "busy", "Loading model…");
-  else if (e.state === "loaded") setChip(cm, "ok", "Model loaded", `In ${e.device === "cuda" ? "GPU" : "CPU"} memory${e.vram_used_gb ? ` (${e.vram_used_gb} GB)` : ""}; freed after 10 idle minutes`);
-  else setChip(cm, "ok", "Model ready", "On disk; it loads when you start a transcription");
+    setChip(cm, "busy", t("chip.downloading", { pct }));
+  } else if (!st.model.found) setChip(cm, "bad", t("chip.noModel"));
+  else if (e.state === "loading") setChip(cm, "busy", t("chip.loading"));
+  else if (e.state === "loaded") setChip(cm, "ok", t("chip.loaded"));
+  else setChip(cm, "ok", t("chip.ready"));
 }
 
 // ------------------------------------------------------------------ queue
@@ -132,13 +139,13 @@ function jobById(id) {
 
 function jobLine(j) {
   switch (j.status) {
-    case "queued": return "Waiting";
-    case "decoding": return "Reading audio…";
-    case "loading": return "Loading model…";
+    case "queued": return t("job.queued");
+    case "decoding": return t("job.decoding");
+    case "loading": return t("job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
-    case "done": return `Done in ${dur(j.elapsed_s)}`;
-    case "cancelled": return j.saved ? "Cancelled · partial transcript saved" : "Cancelled";
-    case "failed": return "Failed: " + (j.error || "unknown error").split("\n")[0];
+    case "done": return t("job.done", { dur: dur(j.elapsed_s) });
+    case "cancelled": return t(j.saved ? "job.cancelledSaved" : "job.cancelled");
+    case "failed": return t("job.failed", { err: (j.error || t("job.unknown")).split("\n")[0] });
     default: return j.status;
   }
 }
@@ -152,13 +159,12 @@ function renderQueue() {
   for (const j of jobs) {
     const li = document.createElement("li");
     li.className = "item" + (S.current?.id === j.id && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
-    li.title = j.status === "failed" ? j.error || "" : j.path;
     const indet = j.status === "decoding" || j.status === "loading";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
       <div class="sub">${esc(jobLine(j))}</div>
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
-      <button class="icon-btn x" title="${ACTIVE.has(j.status) ? "Cancel" : "Dismiss"}" aria-label="${ACTIVE.has(j.status) ? "Cancel" : "Dismiss"}">×</button>`;
+      <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     li.onclick = () => openTranscript(j.id);
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
@@ -186,7 +192,7 @@ function renderHistory() {
     li.className = "item" + (S.current?.id === h.id && S.view === "transcript" ? " active" : "");
     li.innerHTML = `
       <div class="title" dir="auto">${esc(h.title)}</div>
-      <div class="sub"><span>${esc(date(h.created_ms))}</span><span>·</span><span>${esc(dur(h.duration_s))}</span>${h.partial ? "<span>· partial</span>" : ""}</div>
+      <div class="sub"><span>${esc(date(h.created_ms))}</span><span>·</span><span>${esc(dur(h.duration_s))}</span>${h.partial ? `<span>· ${esc(t("hist.partial"))}</span>` : ""}</div>
       <div class="preview" dir="auto">${esc(h.preview)}</div>`;
     li.onclick = () => openTranscript(h.id);
     ul.append(li);
@@ -203,18 +209,12 @@ function renderSetup() {
   $("step-model").classList.toggle("done", m.found);
 
   // 1. engine
-  const gpu = st.nvidia_driver ? "PyTorch with CUDA" : "PyTorch (CPU: no NVIDIA GPU found, so it will be slow)";
-  let ed;
-  if (st.env_ready) {
-    ed = `Python 3.12 · ${st.env_backend === "cpu" ? "PyTorch for CPU" : "PyTorch with CUDA"}${e.torch ? ` (torch ${e.torch})` : ""} · ${st.env_dir}`;
-  } else {
-    ed = `Python 3.12 with ${gpu} and Transformers, installed into ${st.env_dir}. `
-      + (st.nvidia_driver ? "About 5 GB on disk; the first time downloads about 3 GB." : "About 1.5 GB on disk.")
-      + (st.uv ? "" : " Tafreegh fetches uv, the installer it uses, by itself.");
-  }
-  $("engine-detail").textContent = ed;
+  const torch = e.torch ? ` (torch ${e.torch})` : "";
+  $("engine-detail").innerHTML = st.env_ready
+    ? tHtml(st.env_backend === "cpu" ? "setup.ready.cpu" : "setup.ready.cuda", { torch, dir: ltr(st.env_dir) })
+    : tHtml(st.nvidia_driver ? "setup.todo.gpu" : "setup.todo.cpu", { dir: ltr(st.env_dir) }) + (st.uv ? "" : tHtml("setup.uv"));
   const bs = $("btn-setup");
-  bs.textContent = st.env_busy ? "Setting up…" : st.env_ready ? "Reinstall" : "Set up engine";
+  bs.textContent = t(st.env_busy ? "setup.settingUp" : st.env_ready ? "setup.reinstall" : "setup.setUp");
   bs.className = "btn " + (st.env_ready ? "btn-ghost" : "btn-primary");
   bs.disabled = st.env_busy;
   const log = $("setup-log");
@@ -228,58 +228,48 @@ function renderSetup() {
   $("setup-error").textContent = st.env_error || "";
 
   // 2. model
-  const where = m.source === "hf-cache" ? "from the Hugging Face cache" : "";
-  $("model-detail").textContent = m.found
-    ? `Ready · ${(m.bytes / 1e9).toFixed(1)} GB ${where} · ${m.dir}`
-    : `${st.model_id}. Download it here, or import the files if you already have them.`;
+  $("model-detail").innerHTML = m.found
+    ? tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) })
+    : tHtml("setup.modelMissing", { id: ltr(st.model_id) });
   $("btn-import-other").hidden = !m.found;
   $("model-get").hidden = m.found;
-
-  const tokenText = {
-    app: "A token is saved in Tafreegh.",
-    "hf-login": "Using your Hugging Face login (from “hf auth login”). Paste a token only to use another account.",
-    env: "Using the HF_TOKEN environment variable.",
-    "": "No token yet.",
-  }[m.token] ?? "";
-  $("token-state").textContent = tokenText;
+  $("token-state").textContent = t(m.token ? `token.${m.token}` : "token.none");
   $("btn-forget-token").hidden = m.token !== "app";
   $("download-dir").textContent = m.download_dir;
 
   const d = st.download;
   const bd = $("btn-download");
-  bd.textContent = d.active ? "Pause" : d.done > 0 ? "Resume download" : "Download model";
+  bd.textContent = t(d.active ? "dl.pause" : d.done > 0 ? "dl.resume" : "dl.download");
   bd.className = "btn " + (d.active ? "" : "btn-primary");
   bd.disabled = !st.env_ready || (!m.token && !d.active);
-  $("download-hint").textContent = !st.env_ready ? "Set up the engine first (step 1)." : !m.token ? "Save a token first." : "";
+  $("download-hint").textContent = !st.env_ready ? t("dl.needEngine") : !m.token ? t("dl.needToken") : "";
   $("btn-download-dir").disabled = d.active;
   $("download-box").hidden = !(d.active || d.done > 0);
   const pct = d.total ? (100 * d.done) / d.total : 0;
   $("download-bar").style.width = pct.toFixed(1) + "%";
-  $("download-text").textContent = d.total
-    ? `${(d.done / 1e9).toFixed(2)} of ${(d.total / 1e9).toFixed(2)} GB (${pct.toFixed(0)}%)${d.retry ? " · " + d.retry : d.active ? "" : " · paused"}`
-    : d.active ? "Connecting to Hugging Face…" : "";
+  let dl = "";
+  if (d.total) {
+    dl = t("dl.progress", { done: (d.done / 1e9).toFixed(2), total: (d.total / 1e9).toFixed(2), pct: pct.toFixed(0) });
+    if (d.retry_wait != null) dl += " · " + t("dl.retry", { wait: d.retry_wait, n: d.retry_attempt });
+    else if (!d.active) dl += " · " + t("dl.paused");
+  } else if (d.active) dl = t("dl.connecting");
+  $("download-text").textContent = dl;
   $("download-error").hidden = !d.error || d.error === "stopped";
   $("download-error").textContent = d.error || "";
 
-  $("run-on").value = st.run_on || "auto";
-  $("runon-detail").textContent = {
-    auto: st.nvidia_driver
-      ? "The NVIDIA GPU with CUDA. If its memory is too small, Tafreegh switches to the CPU by itself."
-      : "No NVIDIA GPU found, so the CPU in faster mode.",
-    "cpu-fast": "The processor, with an 8-bit version of the model: on an 8-core laptop about 3× faster than real time (24 min of audio in about 8 min), slightly less exact than the GPU.",
-    "cpu-exact": "The processor at full precision: as exact as the GPU, but about 7× slower than real time.",
-  }[st.run_on || "auto"] + (e.note ? " " + e.note : "");
+  const runOn = st.run_on || "auto";
+  $("run-on").value = runOn;
+  const key = runOn === "auto" ? (st.nvidia_driver ? "runon.d.auto.gpu" : "runon.d.auto.cpu") : `runon.d.${runOn}`;
+  $("runon-detail").textContent = t(key) + (e.note ? " " + e.note : "");
 
-  $("ffmpeg-detail").textContent = st.ffmpeg
-    ? `ffmpeg reads every audio and video format (${st.ffmpeg}).`
-    : "Built in: wav, mp3, m4a, mp4, flac and ogg (Vorbis). For WhatsApp voice notes (opus) and other formats, install ffmpeg (winget install Gyan.FFmpeg), then press Check again.";
+  $("ffmpeg-detail").innerHTML = st.ffmpeg ? tHtml("ffmpeg.yes", { path: ltr(st.ffmpeg) }) : tHtml("ffmpeg.no");
 }
 
 async function importModel(errorEl) {
   errorEl.hidden = true;
   try {
     onState(await invoke("import_model"));
-    if (S.snap.setup.model.found) toast("Model found. Ready to transcribe.");
+    if (S.snap.setup.model.found) toast(t("toast.modelReady"));
   } catch (err) {
     errorEl.textContent = String(err);
     errorEl.hidden = false;
@@ -289,7 +279,7 @@ async function importModel(errorEl) {
 function renderHomeNote() {
   const el = $("home-note");
   if (setupComplete(S.snap)) { el.innerHTML = ""; return; }
-  el.innerHTML = `<div class="notice"><span>One-time setup is needed before the first transcription.</span><button class="btn btn-sm btn-primary">Open setup</button></div>`;
+  el.innerHTML = `<div class="notice"><span>${esc(t("home.setupNeeded"))}</span><button class="btn btn-sm btn-primary">${esc(t("home.openSetup"))}</button></div>`;
   el.querySelector("button").onclick = () => showView("setup");
 }
 
@@ -323,48 +313,50 @@ function isLive(id) {
 }
 
 async function openTranscript(id) {
-  let t = null;
-  try { t = await invoke("get_transcript", { id }); } catch { /* not started yet */ }
+  let tx = null;
+  try { tx = await invoke("get_transcript", { id }); } catch { /* not started yet */ }
   const j = jobById(id);
-  if (!t && j) {
-    t = { id, title: j.title, source_path: j.path, created_ms: Date.now(), duration_s: j.duration_s, language: j.language, elapsed_s: 0, device: "", model: "", partial: false, segments: [] };
+  if (!tx && j) {
+    tx = { id, title: j.title, source_path: j.path, created_ms: Date.now(), duration_s: j.duration_s, language: j.language, elapsed_s: 0, device: "", model: "", partial: false, segments: [] };
   }
-  if (!t) { toast("That transcript is no longer there."); await loadHistory(); return; }
-  S.current = t;
+  if (!tx) { toast(t("toast.gone")); await loadHistory(); return; }
+  S.current = tx;
   showView("transcript");
   renderTranscript();
 }
 
 function renderTranscript() {
-  const t = S.current;
-  const live = isLive(t.id);
+  const cur = S.current;
+  const live = isLive(cur.id);
   const title = $("t-title");
-  title.textContent = t.title;
+  title.textContent = cur.title;
   title.contentEditable = live ? "false" : "true";
-  $("t-partial").hidden = !t.partial || live;
+  $("t-partial").hidden = !cur.partial || live;
   renderMeta();
   renderLiveProgress();
   $("btn-delete").hidden = live;
   const box = $("segments");
-  box.dir = t.language === "en" ? "ltr" : "rtl";
-  box.lang = t.language === "en" ? "en" : "ar";
+  box.dir = cur.language === "en" ? "ltr" : "rtl";
+  box.lang = cur.language === "en" ? "en" : "ar";
   box.innerHTML = "";
-  if (box.dataset.for !== t.id) { box.scrollTop = 0; box.dataset.for = t.id; }
-  t.segments.forEach((s, i) => box.append(segRow(s, i, live)));
-  if (!t.segments.length) box.append(emptyLive());
+  if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; }
+  cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
+  if (!cur.segments.length) box.append(emptyLive());
   runSearch(false);
   setupAudio(live);
 }
 
 function renderMeta() {
-  const t = S.current;
+  const c = S.current;
   const bits = [];
-  if (t.duration_s) bits.push(dur(t.duration_s));
-  bits.push(t.language === "en" ? "English" : "Arabic");
-  if (t.created_ms) bits.push(date(t.created_ms));
-  if (t.elapsed_s && !isLive(t.id)) bits.push(`transcribed in ${dur(t.elapsed_s)}${t.device ? " on " + t.device : ""}`);
-  const flagged = t.segments.filter((s) => s.flag === "repeat").length;
-  if (flagged) bits.push(`${flagged} line${flagged > 1 ? "s" : ""} to check`);
+  if (c.duration_s) bits.push(dur(c.duration_s));
+  bits.push(t(c.language === "en" ? "lang.en" : "lang.ar"));
+  if (c.created_ms) bits.push(date(c.created_ms));
+  if (c.elapsed_s && !isLive(c.id)) {
+    bits.push(t("meta.took", { dur: dur(c.elapsed_s) }) + (c.device ? t("meta.on", { device: deviceLabel(c.device) }) : ""));
+  }
+  const flagged = c.segments.filter((s) => s.flag === "repeat").length;
+  if (flagged) bits.push(t("meta.toCheck", { n: flagged }));
   $("t-meta").textContent = bits.join(" · ");
 }
 
@@ -372,7 +364,7 @@ function emptyLive() {
   const d = document.createElement("div");
   d.className = "empty-live";
   const j = jobById(S.current.id);
-  d.textContent = j && ACTIVE.has(j.status) ? "The transcript appears here, line by line, as it is written." : "This transcript is empty.";
+  d.textContent = t(j && ACTIVE.has(j.status) ? "t.emptyLive" : "t.empty");
   return d;
 }
 
@@ -383,7 +375,6 @@ function segRow(s, i, live) {
   const time = document.createElement("button");
   time.className = "time";
   time.textContent = ts(s.start);
-  time.title = `Play from ${ts(s.start)}`;
   time.onclick = () => playFrom(s.start);
   const text = document.createElement("div");
   text.className = "text";
@@ -404,19 +395,20 @@ function segRow(s, i, live) {
   if (s.flag === "repeat" || s.edited) {
     const note = document.createElement("div");
     note.className = "note" + (s.flag === "repeat" ? "" : " edited");
-    note.textContent = s.flag === "repeat" ? "⚠ The model repeated a word here; the repetition was cut. Listen to check this line." : "Edited";
+    note.dir = I18N[UI_LANG].dir; // the note is in the interface language, not the transcript's
+    note.textContent = t(s.flag === "repeat" ? "note.repeat" : "note.edited");
     row.append(note);
   }
   return row;
 }
 
 async function saveSegment(i, el) {
-  const t = S.current;
-  const seg = t.segments[i];
+  const cur = S.current;
+  const seg = cur.segments[i];
   const text = el.innerText.replace(/\s+/g, " ").trim();
   if (text === seg.text) { paintSegment(i); return; }
   try {
-    await invoke("update_segment", { id: t.id, index: i, text });
+    await invoke("update_segment", { id: cur.id, index: i, text });
     seg.text = text;
     seg.edited = true;
     const row = el.closest(".seg");
@@ -429,8 +421,8 @@ async function saveSegment(i, el) {
 }
 
 function renderLiveProgress() {
-  const t = S.current;
-  const j = jobById(t.id);
+  const cur = S.current;
+  const j = jobById(cur.id);
   const box = $("t-progress");
   if (!j || !ACTIVE.has(j.status)) { box.hidden = true; return; }
   box.hidden = false;
@@ -438,7 +430,7 @@ function renderLiveProgress() {
   box.querySelector(".progress").classList.toggle("indeterminate", indet);
   $("t-bar").style.width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
   let line = jobLine(j);
-  if (j.status === "transcribing" && j.duration_s) line += ` · ${ts(j.progress * j.duration_s)} of ${ts(j.duration_s)}`;
+  if (j.status === "transcribing" && j.duration_s) line += " · " + t("t.of", { a: ts(j.progress * j.duration_s), b: ts(j.duration_s) });
   $("t-status").textContent = line;
 }
 
@@ -460,7 +452,7 @@ function runSearch(scroll) {
   });
   if (S.hit >= S.hits.length) S.hit = S.hits.length - 1;
   if (S.hit < 0 && S.hits.length) S.hit = 0;
-  $("search-count").textContent = q ? (S.hits.length ? `${S.hit + 1} / ${S.hits.length}` : "no matches") : "";
+  $("search-count").textContent = q ? (S.hits.length ? `${S.hit + 1} / ${S.hits.length}` : t("t.noMatches")) : "";
   segs.forEach((_, i) => paintSegment(i));
   if (scroll) scrollToHit();
 }
@@ -500,21 +492,21 @@ function stopAudio() {
 }
 
 async function setupAudio(live) {
-  const t = S.current;
+  const c = S.current;
   const player = $("player"), a = $("audio"), note = $("player-note");
   if (live) { player.hidden = true; return; }
-  if (S.audioFor === t.id && a.src) { player.hidden = false; return; }
-  S.audioFor = t.id;
+  if (S.audioFor === c.id && a.src) { player.hidden = false; return; }
+  S.audioFor = c.id;
   a.removeAttribute("src");
   a.dataset.fallback = "";
   note.textContent = "";
   let p = null;
-  try { p = await invoke("audio_path", { id: t.id }); } catch { /* ignore */ }
-  if (S.current?.id !== t.id) return;
+  try { p = await invoke("audio_path", { id: c.id }); } catch { /* ignore */ }
+  if (S.current?.id !== c.id) return;
   player.hidden = false;
   if (!p) {
     a.hidden = true;
-    note.textContent = `The original recording is not at ${t.source_path || "its old place"} any more, so it cannot be played.`;
+    note.innerHTML = tHtml("audio.missing", { path: c.source_path ? ltr(c.source_path) : t("audio.oldPlace") });
     return;
   }
   a.hidden = false;
@@ -577,7 +569,7 @@ function wireListen() {
   $("ctx-play").onclick = () => { hideCtx(); if (ctxAt != null) playFrom(ctxAt); };
   $("ctx-copy").onclick = async () => {
     hideCtx();
-    try { await navigator.clipboard.writeText(document.getSelection().toString()); } catch (err) { toast("Could not copy: " + err); }
+    try { await navigator.clipboard.writeText(document.getSelection().toString()); } catch (err) { toast(t("toast.copyFailed", { err })); }
   };
   $("ctx-menu").addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the selection
   document.addEventListener("mousedown", (ev) => { if (!ev.target.closest("#ctx-menu")) hideCtx(); });
@@ -604,24 +596,24 @@ function wireListen() {
 
 $("audio").addEventListener("error", async () => {
   const a = $("audio");
-  const t = S.current;
-  if (!t || a.dataset.fallback === "1" || !a.getAttribute("src")) return;
+  const c = S.current;
+  if (!c || a.dataset.fallback === "1" || !a.getAttribute("src")) return;
   a.dataset.fallback = "1";
-  $("player-note").textContent = "Converting the recording for playback…";
+  $("player-note").textContent = t("audio.converting");
   try {
-    const p = await invoke("audio_preview", { id: t.id });
-    if (S.current?.id !== t.id) return;
+    const p = await invoke("audio_preview", { id: c.id });
+    if (S.current?.id !== c.id) return;
     a.src = fileSrc(p);
     $("player-note").textContent = "";
   } catch (err) {
-    $("player-note").textContent = "This recording cannot be played here: " + err;
+    $("player-note").textContent = t("audio.cannot", { err });
   }
 });
 
 function playFrom(sec) {
   const a = $("audio");
   if ($("player").hidden || a.hidden || !a.getAttribute("src")) {
-    toast(isLive(S.current.id) ? "Playback is available when the transcript is finished." : "The recording is not available to play.");
+    toast(t(isLive(S.current.id) ? "toast.notFinished" : "toast.noRecording"));
     return;
   }
   const go = () => { a.currentTime = Math.max(0, sec - 0.2); a.play().catch(() => {}); };
@@ -630,10 +622,10 @@ function playFrom(sec) {
 
 let playingIdx = -1;
 $("audio").addEventListener("timeupdate", () => {
-  const t = S.current;
-  if (!t) return;
+  const cur = S.current;
+  if (!cur) return;
   const now = $("audio").currentTime;
-  const i = t.segments.findIndex((s) => now >= s.start - 0.2 && now < s.end);
+  const i = cur.segments.findIndex((s) => now >= s.start - 0.2 && now < s.end);
   if (i === playingIdx) return;
   $("segments").querySelector(".seg.playing")?.classList.remove("playing");
   playingIdx = i;
@@ -650,7 +642,7 @@ async function addFiles(paths) {
   for (const p of paths.filter((p) => !isMedia(p))) {
     try {
       onState(await invoke("import_model_path", { path: p }));
-      toast("Model found in that folder. Ready to transcribe.");
+      toast(t("toast.modelFound"));
     } catch (err) {
       if (S.view === "setup" && !S.snap.setup.model.found) {
         $("import-error").textContent = String(err);
@@ -658,14 +650,14 @@ async function addFiles(paths) {
       } else skipped++;
     }
   }
-  if (skipped) toast(`Skipped ${skipped} item${skipped > 1 ? "s" : ""}: not audio or video.`);
+  if (skipped) toast(t("toast.skipped", { n: skipped }));
   if (!ok.length) return;
   if (!setupComplete(S.snap)) {
-    toast("Finish the one-time setup first.");
+    toast(t("toast.setupFirst"));
     showView("setup");
     return;
   }
-  const ids = await invoke("enqueue", { paths: ok, language: S.lang });
+  const ids = await invoke("enqueue", { paths: ok, language: S.spoken });
   S.snap = await invoke("get_state");
   renderQueue();
   if (ids.length) openTranscript(ids[0]);
@@ -680,9 +672,9 @@ async function exportAs(fmt) {
   $("export-menu").hidden = true;
   try {
     const path = await invoke("export_transcript", { id: S.current.id, format: fmt, stamps: S.stamps });
-    if (path) toast(`Saved ${path.split(/[\\/]/).pop()}`, { label: "Show in folder", run: () => invoke("reveal", { path }) });
+    if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
   } catch (err) {
-    toast("Export failed: " + err);
+    toast(t("toast.exportFailed", { err }));
   }
 }
 
@@ -690,9 +682,9 @@ async function copyAll() {
   try {
     const text = await invoke("transcript_text", { id: S.current.id, stamps: S.stamps });
     await navigator.clipboard.writeText(text);
-    toast(`Copied ${S.current.segments.length} lines`);
+    toast(t("toast.copied", { n: S.current.segments.length }));
   } catch (err) {
-    toast("Could not copy: " + err);
+    toast(t("toast.copyFailed", { err }));
   }
 }
 
@@ -702,7 +694,7 @@ async function deleteCurrent() {
   if (deleteArmed !== S.current.id) {
     deleteArmed = S.current.id;
     b.classList.add("armed");
-    toast("Press delete again to remove this transcript (the recording itself is kept).");
+    toast(t("toast.deleteConfirm"));
     setTimeout(() => { deleteArmed = null; b.classList.remove("armed"); }, 4000);
     return;
   }
@@ -715,21 +707,21 @@ async function deleteCurrent() {
   S.audioFor = null;
   await loadHistory();
   showView("home");
-  toast("Transcript deleted.");
+  toast(t("toast.deleted"));
 }
 
 async function renameCurrent() {
   const el = $("t-title");
-  const t = S.current;
+  const cur = S.current;
   const title = el.textContent.replace(/\s+/g, " ").trim();
-  if (!t || title === t.title) return;
-  if (!title) { el.textContent = t.title; return; }
+  if (!cur || title === cur.title) return;
+  if (!title) { el.textContent = cur.title; return; }
   try {
-    await invoke("rename_transcript", { id: t.id, title });
-    t.title = title;
+    await invoke("rename_transcript", { id: cur.id, title });
+    cur.title = title;
     loadHistory();
   } catch (err) {
-    el.textContent = t.title;
+    el.textContent = cur.title;
     toast(String(err));
   }
 }
@@ -760,15 +752,15 @@ function onState(snap) {
 }
 
 function onSegment({ id, segment }) {
-  const t = S.current;
-  if (!t || t.id !== id || S.view !== "transcript") return;
-  const last = t.segments[t.segments.length - 1];
+  const cur = S.current;
+  if (!cur || cur.id !== id || S.view !== "transcript") return;
+  const last = cur.segments[cur.segments.length - 1];
   if (last && segment.start <= last.start) return;
-  t.segments.push(segment);
+  cur.segments.push(segment);
   const box = $("segments");
   box.querySelector(".empty-live")?.remove();
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  box.append(segRow(segment, t.segments.length - 1, true));
+  box.append(segRow(segment, cur.segments.length - 1, true));
   if (nearBottom) box.scrollTop = box.scrollHeight;
   if ($("search").value.trim()) runSearch(false);
   renderMeta();
@@ -782,7 +774,7 @@ function wire() {
   $("dropzone").addEventListener("click", (ev) => { if (!ev.target.closest(".segmented")) chooseFiles(); });
   $("dropzone").addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); chooseFiles(); } });
   for (const b of document.querySelectorAll(".segmented button")) {
-    b.onclick = (ev) => { ev.stopPropagation(); S.lang = b.dataset.lang; store.set("lang", S.lang); paintLang(); };
+    b.onclick = (ev) => { ev.stopPropagation(); S.spoken = b.dataset.lang; store.set("lang", S.spoken); paintLang(); };
   }
   paintLang();
   for (const c of document.querySelectorAll("[data-goto=setup]")) c.onclick = () => { showView("setup"); renderSetup(); };
@@ -790,7 +782,7 @@ function wire() {
   $("btn-setup").onclick = () => invoke("setup_engine");
   $("btn-import").onclick = () => importModel($("import-error"));
   $("run-on").onchange = async () => {
-    try { onState(await invoke("set_run_on", { value: $("run-on").value })); toast("Saved. It applies to the next transcription."); }
+    try { onState(await invoke("set_run_on", { value: $("run-on").value })); toast(t("toast.runOn")); }
     catch (err) { toast(String(err)); }
   };
   $("btn-import-other").onclick = () => importModel($("import-other-error"));
@@ -801,16 +793,14 @@ function wire() {
     try {
       onState(await invoke("set_hf_token", { token }));
       $("hf-token").value = "";
-      toast("Token saved.");
+      toast(t("toast.tokenSaved"));
     } catch (err) { toast(String(err)); }
   };
   $("hf-token").addEventListener("keydown", (ev) => { if (ev.key === "Enter") $("btn-token").click(); });
-  $("btn-forget-token").onclick = async () => { onState(await invoke("forget_hf_token")); toast("Token removed."); };
-  for (const a of document.querySelectorAll("a[data-link]")) {
-    a.onclick = (ev) => { ev.preventDefault(); invoke("open_url", { url: S.snap.setup[a.dataset.link] }); };
-  }
+  $("btn-forget-token").onclick = async () => { onState(await invoke("forget_hf_token")); toast(t("toast.tokenRemoved")); };
+  $("ui-lang").onchange = () => setUiLang($("ui-lang").value);
   $("btn-download").onclick = () => invoke(S.snap.setup.download.active ? "stop_download" : "download_model");
-  $("btn-recheck").onclick = async () => { onState(await invoke("refresh_setup")); toast("Checked again."); };
+  $("btn-recheck").onclick = async () => { onState(await invoke("refresh_setup")); toast(t("toast.checked")); };
   $("btn-log").onclick = () => invoke("open_log");
   $("btn-data").onclick = () => invoke("reveal", { path: S.snap.setup.data_dir + "\\history" });
 
@@ -862,15 +852,55 @@ function wire() {
   });
 }
 
+/** Strings with links or code inside, and the language menu. */
+function renderStatic() {
+  $("how1").innerHTML = tHtml("setup.how1", { link: raw(`<a href="#" data-link="model_url">${esc(t("setup.how1.link"))}</a>`) });
+  $("how2").innerHTML = tHtml("setup.how2", { link: raw(`<a href="#" data-link="tokens_url">${esc(t("setup.how2.link"))}</a>`) });
+  for (const a of document.querySelectorAll("a[data-link]")) {
+    a.onclick = (ev) => { ev.preventDefault(); invoke("open_url", { url: S.snap.setup[a.dataset.link] }); };
+  }
+  $("have-text").innerHTML = tHtml("setup.haveText", { c1: raw('<code dir="ltr">config.json</code>'), c2: raw('<code dir="ltr">model.safetensors</code>') });
+  const sel = $("ui-lang");
+  sel.innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
+  sel.value = UI_LANG;
+}
+
+/** Switch the interface language and redraw everything that shows text. */
+async function setUiLang(lang, tellApp = true) {
+  UI_LANG = I18N[lang] ? lang : "en";
+  store.set("uiLang", UI_LANG);
+  applyI18n();
+  renderStatic();
+  if (S.snap) {
+    renderChips();
+    renderQueue();
+    renderHistory();
+    renderHomeNote();
+    if (S.view === "setup") renderSetup();
+    if (S.view === "transcript" && S.current) renderTranscript();
+  }
+  if (tellApp) {
+    try { onState(await invoke("set_ui_language", { lang: UI_LANG })); } catch { /* older backend */ }
+  }
+}
+
 function paintLang() {
-  for (const b of document.querySelectorAll(".segmented button")) b.setAttribute("aria-checked", String(b.dataset.lang === S.lang));
+  for (const b of document.querySelectorAll(".segmented button")) b.setAttribute("aria-checked", String(b.dataset.lang === S.spoken));
 }
 
 async function init() {
+  // the interface language: the app's setting, else this window's last choice, else Windows' language
+  UI_LANG = store.get("uiLang", (navigator.language || "en").toLowerCase().startsWith("ar") ? "ar" : "en");
+  applyI18n();
+  renderStatic();
   wire();
-  onState(await invoke("get_state"));
+  const snap = await invoke("get_state");
+  const saved = snap.setup.ui_lang;
+  onState(snap);
+  if (saved && saved !== UI_LANG) await setUiLang(saved, false);
+  else if (!saved) await setUiLang(UI_LANG);
   await loadHistory();
   if (!setupComplete(S.snap)) { showView("setup"); renderSetup(); } else showView("home");
 }
 
-init().catch((err) => toast("Startup failed: " + err));
+init().catch((err) => toast(t("toast.startup", { err })));

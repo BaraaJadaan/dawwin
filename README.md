@@ -18,6 +18,7 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
 - **Export** to Word (.docx, right to left), .txt, .md, .srt and .vtt subtitles, or copy everything.
 - **History** of past transcripts, renamed or deleted from the transcript view.
 - Runs on an **NVIDIA GPU (CUDA)**, or on the **CPU** for computers without one (see *Run on* below).
+- **Interface in English or Arabic** (right to left), switched from the top bar; it starts in Windows' language.
 
 ## Install
 
@@ -101,6 +102,9 @@ Rust implementation yet.
 - `src-tauri/src/setup.rs` finds the model, keeps the settings, fetches uv and builds the Python env.
 - `audio::voice_profile` records, for each line, when its speech happens (skipping pauses); the UI uses
   it to place a selected word in the audio.
+- Languages: the interface strings are in `ui/i18n.js` (with Arabic plural forms); messages that come from Rust
+  (errors, setup steps, dialog titles, export headings) are in `src-tauri/src/i18n.rs`, and the worker's few
+  messages in `worker/worker.py`. To add a language, add it in those three places.
 - `src-tauri/src/transcript.rs` holds the exports. Subtitle cues split each chunk into lines of about
   14 words, with times inside a chunk estimated from character counts.
 

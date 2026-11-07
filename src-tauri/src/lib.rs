@@ -3,6 +3,7 @@
 mod audio;
 mod engine;
 mod history;
+pub mod i18n;
 mod queue;
 mod setup;
 mod transcript;
@@ -67,7 +68,7 @@ fn forget_hf_token(core: C) -> R<Snapshot> {
 #[tauri::command]
 async fn choose_download_dir(app: AppHandle) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let Some(dir) = app.dialog().file().set_title("Where should the model (about 4 GB) be saved?").blocking_pick_folder() else {
+    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should the model (about 4 GB) be saved?")).blocking_pick_folder() else {
         return Ok(core.snapshot());
     };
     let dir = dir.into_path().map_err(|x| x.to_string())?;
@@ -88,7 +89,7 @@ async fn import_model(app: AppHandle) -> R<Snapshot> {
     let Some(dir) = app
         .dialog()
         .file()
-        .set_title("Choose the folder with the model files (config.json, model.safetensors, tokenizer…)")
+        .set_title(crate::tr!("Choose the folder with the model files (config.json, model.safetensors, tokenizer…)"))
         .blocking_pick_folder()
     else {
         return Ok(core.snapshot());
@@ -102,6 +103,17 @@ async fn import_model(app: AppHandle) -> R<Snapshot> {
 #[tauri::command]
 fn import_model_path(core: C, path: String) -> R<Snapshot> {
     core.import_model(std::path::Path::new(&path.replace('/', "\\"))).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+/// The interface language: messages from Rust and the worker, dialog titles, the window title.
+#[tauri::command]
+fn set_ui_language(app: AppHandle, lang: String) -> R<Snapshot> {
+    let core = app.state::<Arc<Core>>();
+    core.set_ui_lang(&lang).map_err(e)?;
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_title(&crate::tr!("Tafreegh · Arabic transcription"));
+    }
     Ok(core.snapshot())
 }
 
@@ -127,9 +139,9 @@ const AUDIO_EXT: &[&str] = &["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", 
 async fn pick_files(app: AppHandle) -> Vec<String> {
     app.dialog()
         .file()
-        .set_title("Choose recordings to transcribe")
-        .add_filter("Audio and video", AUDIO_EXT)
-        .add_filter("All files", &["*"])
+        .set_title(crate::tr!("Choose recordings to transcribe"))
+        .add_filter(crate::tr!("Audio and video"), AUDIO_EXT)
+        .add_filter(crate::tr!("All files"), &["*"])
         .blocking_pick_files()
         .unwrap_or_default()
         .into_iter()
@@ -166,7 +178,7 @@ fn get_transcript(core: C, id: String) -> R<Transcript> {
 
 fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript> {
     if core.is_live(id) {
-        return Err("This transcript is still being written. Edit it when it is done.".into());
+        return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
     let dir = core.paths.history_dir();
     let mut t = history::load(&dir, id).map_err(e)?;
@@ -192,7 +204,7 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
 fn rename_transcript(core: C, id: String, title: String) -> R<()> {
     let title = title.trim().to_string();
     if title.is_empty() {
-        return Err("A title cannot be empty.".into());
+        return Err(crate::tr!("A title cannot be empty."));
     }
     edit(&core, &id, |t| t.title = title).map(|_| ())
 }
@@ -219,17 +231,17 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let (ext, label) = match format.as_str() {
-        "txt" => ("txt", "Text"),
-        "md" => ("md", "Markdown"),
-        "srt" => ("srt", "SubRip subtitles"),
-        "vtt" => ("vtt", "WebVTT subtitles"),
-        "docx" => ("docx", "Word document"),
+        "txt" => ("txt", crate::tr!("Text")),
+        "md" => ("md", "Markdown".to_string()),
+        "srt" => ("srt", crate::tr!("SubRip subtitles")),
+        "vtt" => ("vtt", crate::tr!("WebVTT subtitles")),
+        "docx" => ("docx", crate::tr!("Word document")),
         _ => return Err(format!("unknown format {format}")),
     };
     let mut dlg = app
         .dialog()
         .file()
-        .set_title("Export transcript")
+        .set_title(crate::tr!("Export transcript"))
         .set_file_name(format!("{}.{ext}", safe_name(&t.title)))
         .add_filter(label, &[ext]);
     if let Some(dir) = PathBuf::from(&t.source_path).parent().filter(|d| d.is_dir()) {
@@ -329,6 +341,7 @@ pub fn run() {
             import_model,
             import_model_path,
             set_run_on,
+            set_ui_language,
             export_to_path,
             open_url,
             pick_files,

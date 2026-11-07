@@ -1,0 +1,15 @@
+# The inference env Tafreegh creates with uv (pinned to the set that was measured:
+# 24 min of Syrian Arabic in 159 s on an RTX 4060 Laptop GPU).
+# torch comes from PyTorch's CUDA 12.8 index: the app passes `--torch-backend cu128`.
+torch==2.11.0
+transformers==5.16.1
+accelerate==1.15.0
+huggingface-hub==1.33.0
+safetensors==0.8.0
+tokenizers==0.23.3
+sentencepiece==0.2.3
+protobuf==7.36.2
+numpy==2.5.4
+librosa==1.0.0
+soundfile==0.14.0
+soxr==1.1.0

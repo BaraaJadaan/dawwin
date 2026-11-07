@@ -1,4 +1,5 @@
-# Push a tag like v0.1.0 to build the Windows installer and attach it to a draft release.
+# Push a tag like v0.1.0: builds the Windows installer and a portable exe, signs them when SignPath
+# is set up, and attaches them with SHA-256 checksums to a draft release.
 name: Release
 
 on:
@@ -21,16 +22,53 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - run: npm install
+
+      - run: npm ci
       - run: cargo test --manifest-path src-tauri/Cargo.toml
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: npx tauri build
+
+      - name: Collect the files
+        shell: pwsh
+        run: |
+          $v = (Get-Content src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "src-tauri/target/release/bundle/nsis/Tafreegh_${v}_x64-setup.exe" dist/
+          Copy-Item "src-tauri/target/release/tafreegh.exe" "dist/Tafreegh_${v}_x64-portable.exe"
+
+      # Code signing (SignPath Foundation, free for open source): runs once the repository has the
+      # variable SIGNPATH_ORGANIZATION_ID and the secret SIGNPATH_API_TOKEN. See docs/how-it-works.md.
+      - name: Upload the files to sign
+        id: unsigned
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Tafreegh ${{ github.ref_name }}
-          releaseBody: |
-            Windows installer for Tafreegh, local Arabic speech-to-text.
-            On first start the app sets up its speech engine and the model; see the README.
-          releaseDraft: true
-          prerelease: false
+          name: unsigned
+          path: dist/*.exe
+      - name: Sign with SignPath
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: signed
+      - name: Use the signed files
+        if: vars.SIGNPATH_ORGANIZATION_ID != ''
+        shell: pwsh
+        run: Copy-Item signed/*.exe dist/ -Force
+
+      - name: Checksums
+        shell: pwsh
+        run: |
+          Get-ChildItem dist -Filter *.exe | ForEach-Object {
+            "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name
+          } | Set-Content -Encoding ascii dist/SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: Tafreegh ${{ github.ref_name }}
+          files: dist/*

@@ -4,6 +4,8 @@ version = "0.1.0"
 description = "Local Arabic speech-to-text with Cohere Transcribe Arabic"
 edition = "2021"
 license = "MIT"
+repository = "https://github.com/BaraaJadaan/tafreegh"
+authors = ["Baraa Jadaan"]
 
 [lib]
 name = "tafreegh_lib"

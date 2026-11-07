@@ -101,7 +101,13 @@ async fn import_model(app: AppHandle) -> R<Snapshot> {
 /// The same, for a folder dropped on the window.
 #[tauri::command]
 fn import_model_path(core: C, path: String) -> R<Snapshot> {
-    core.import_model(std::path::Path::new(&path)).map_err(e)?;
+    core.import_model(std::path::Path::new(&path.replace('/', "\\"))).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+#[tauri::command]
+fn set_run_on(core: C, value: String) -> R<Snapshot> {
+    core.set_run_on(&value).map_err(e)?;
     Ok(core.snapshot())
 }
 
@@ -322,6 +328,7 @@ pub fn run() {
             choose_download_dir,
             import_model,
             import_model_path,
+            set_run_on,
             export_to_path,
             open_url,
             pick_files,

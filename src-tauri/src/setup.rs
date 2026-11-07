@@ -111,6 +111,19 @@ pub struct Settings {
     /// Where "Download model" saves the files
     #[serde(default)]
     pub download_dir: Option<String>,
+    /// "auto" (GPU when there is one) | "cpu-fast" (int8) | "cpu-exact" (bf16, much slower)
+    #[serde(default)]
+    pub run_on: Option<String>,
+}
+
+impl Settings {
+    pub fn run_on(&self) -> &str {
+        match self.run_on.as_deref() {
+            Some("cpu-fast") => "cpu-fast",
+            Some("cpu-exact") => "cpu-exact",
+            _ => "auto",
+        }
+    }
 }
 
 impl Settings {

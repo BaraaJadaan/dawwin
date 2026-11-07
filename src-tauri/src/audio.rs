@@ -227,6 +227,43 @@ pub fn split_middle(audio: &[f32], a: usize, b: usize) -> usize {
     (a + cut).clamp(a + frame, b.saturating_sub(frame).max(a + frame))
 }
 
+/// Where the speech is inside `[a, b)`: the times (in seconds from the start of the recording) at
+/// which 0, 1/n, 2/n … n/n of the voiced part has gone by. The model only times whole chunks; this
+/// lets the UI place a word in its chunk by how far into the text it is, skipping pauses.
+/// Empty when the range holds too little speech to tell.
+pub fn voice_profile(audio: &[f32], a: usize, b: usize, n: usize) -> Vec<f32> {
+    let frame = SR / 50;
+    let rms = smoothed_rms(&audio[a..b]);
+    if rms.len() < 10 || n == 0 {
+        return Vec::new();
+    }
+    let db: Vec<f32> = rms.iter().map(|r| 20.0 * r.max(1e-6).log10()).collect();
+    let mut sorted = db.clone();
+    sorted.sort_by(|x, y| x.total_cmp(y));
+    let loud = sorted[sorted.len() * 9 / 10];
+    if loud < -60.0 {
+        return Vec::new(); // silence
+    }
+    // frames within 25 dB of the loud ones are speech; the rest are pauses and breath
+    let voiced: Vec<usize> = (0..db.len()).filter(|&i| db[i] > loud - 25.0).collect();
+    let total = voiced.len();
+    if total < 25 {
+        return Vec::new(); // under half a second of speech
+    }
+    let t0 = a as f32 / SR as f32;
+    let fs = frame as f32 / SR as f32;
+    let at = |frame_idx: usize| ((t0 + frame_idx as f32 * fs) * 100.0).round() / 100.0;
+    (0..=n)
+        .map(|k| {
+            if k == n {
+                at(voiced[total - 1] + 1)
+            } else {
+                at(voiced[(k * total / n).min(total - 1)])
+            }
+        })
+        .collect()
+}
+
 /// Digital silence (or near it): nothing for the model to hear.
 pub fn is_silent(audio: &[f32]) -> bool {
     audio.iter().fold(0f32, |m, x| m.max(x.abs())) < 1e-3
@@ -294,6 +331,20 @@ mod tests {
             let t = *b as f32 / SR as f32;
             assert!((t % 7.0) < 0.45, "cut at {t} is not in a gap");
         }
+    }
+
+    #[test]
+    fn voice_profile_skips_the_silence() {
+        // 5 s of silence, then 5 s of speech-like tone
+        let audio: Vec<f32> = (0..10 * SR)
+            .map(|i| if i < 5 * SR { 0.0 } else { (i as f32 * 0.07).sin() * 0.3 })
+            .collect();
+        let p = voice_profile(&audio, 0, audio.len(), 10);
+        assert_eq!(p.len(), 11);
+        assert!((p[0] - 5.0).abs() < 0.2, "speech starts at 5 s, got {}", p[0]);
+        assert!((p[5] - 7.5).abs() < 0.3, "half the speech is gone by 7.5 s, got {}", p[5]);
+        assert!(p.windows(2).all(|w| w[0] <= w[1]));
+        assert!(voice_profile(&vec![0.0; 3 * SR], 0, 3 * SR, 10).is_empty());
     }
 
     #[test]

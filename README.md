@@ -11,10 +11,13 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
   timestamp for every chunk (up to 30 s).
 - **Check and fix**: click a timestamp to play the recording from there; click a line to correct it.
   Lines where the model got stuck repeating a word are cut and marked for checking.
+- **Hear a word**: select a word (or Ctrl+click it) and press **▶ Listen** to play from about where it
+  is said. The model times whole lines, so the word's place is estimated from where the speech is in
+  the line; playback starts 1.5 s early so you hear it within the next few seconds.
 - **Search** with Ctrl+F. أ/إ/آ/ا, ة/ه and ى/ي count as the same letter, and diacritics are ignored.
 - **Export** to Word (.docx, right to left), .txt, .md, .srt and .vtt subtitles, or copy everything.
 - **History** of past transcripts, renamed or deleted from the transcript view.
-- Shows whether it runs on the **GPU (CUDA)** or the CPU, and the model state.
+- Runs on an **NVIDIA GPU (CUDA)**, or on the **CPU** for computers without one (see *Run on* below).
 
 ## Install
 
@@ -32,9 +35,10 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
      - **Download it.** The model is free but gated. Sign in to Hugging Face, open the
        [model page](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) and accept
        its terms. Then create a [read token](https://huggingface.co/settings/tokens) and paste it into
-       Tafreegh. Choose where to save the model, then press **Download model**. A dropped connection
-       resumes by itself, and **Pause** keeps what was already downloaded. If you already signed in
-       with `hf auth login`, no token is needed.
+       Tafreegh. Choose where to save the model, then press **Download model**. After a dropped
+       connection, **Pause**, or even closing the app, the download continues from where it stopped
+       (Tafreegh asks only for the missing bytes), and each file is checked against its published
+       SHA-256. If you already signed in with `hf auth login`, no token is needed.
      - **Import the files you already have.** Use this for a copy from another computer, files
        downloaded by hand from the model page's *Files* tab (`config.json`, `model.safetensors`,
        `tokenizer.json`, `tokenizer.model`, `tokenizer_config.json` and the other `.json` files), or a
@@ -42,16 +46,25 @@ an open 2B-parameter model. Your audio and transcripts never leave the computer.
        model is already in your Hugging Face cache (`HF_HOME`), Tafreegh finds it on its own.
 3. Drop a recording on the window.
 
-**Speed:** an RTX 4060 Laptop GPU transcribes 24 minutes of audio in about 2–3 minutes. The model
-loads when the first file starts (15–30 s). It stays in GPU memory (about 4 GB) and is freed after
+**Speed:** an RTX 4060 Laptop GPU transcribes 24 minutes of audio in under a minute, plus 15–50 s to
+load the model when the first file starts. The model stays in memory (about 4 GB) and is freed after
 10 idle minutes.
+
+**Run on** (on the *Engine and model* page):
+
+| Setting | What it does | 2 min of audio on a Ryzen 7 laptop (8 cores) |
+| --- | --- | --- |
+| GPU when available (default) | CUDA on an NVIDIA GPU; switches to the CPU when the GPU has too little memory, or there is no NVIDIA GPU | 5 s on an RTX 4060 |
+| CPU, faster | an 8-bit version of the model; about 3× faster than real time, slightly less exact (90% of words identical to the GPU result in a test) | 35 s |
+| CPU, exact | full precision; as exact as the GPU but about 7× slower than real time | about 14 min |
 
 **Formats:** wav, mp3, m4a, mp4, flac and ogg/Vorbis work out of the box. WhatsApp voice notes
 (opus) and other formats need ffmpeg (`winget install Gyan.FFmpeg`); Tafreegh uses it when it is
 installed.
 
-**Requirements:** Windows 10 or 11, 64-bit. Use an NVIDIA GPU with 6 GB of VRAM or more for usable
-speed. You need about 10 GB of free disk space and 8 GB of RAM.
+**Requirements:** Windows 10 or 11, 64-bit, about 10 GB of free disk space and 8 GB of RAM (about
+5 GB of it free while transcribing). An NVIDIA GPU with 6 GB of VRAM or more makes it fast, but the
+CPU works too.
 
 ## Where things live
 
@@ -77,12 +90,17 @@ Rust implementation yet.
   so words are not split.
 - `src-tauri/src/engine.rs` defines the `Engine` interface. Its one implementation, `PythonWorker`,
   runs `worker/worker.py` and talks JSON lines over stdin/stdout. The worker runs
-  `CohereAsrForConditionalGeneration` in bf16, 4 chunks per batch. A native engine (ONNX through
+  `CohereAsrForConditionalGeneration` in bf16 on CUDA, 4 chunks per batch. On the CPU it converts the
+  linear layers to int8 (dynamic quantization) one at a time, which is about 12× faster than bf16 on
+  CPUs without native bf16. Its model download uses HTTP Range requests on a `.part` file, because
+  huggingface_hub 1.x starts an interrupted file over. A native engine (ONNX through
   `ort`, or a `candle` port) can replace it by implementing the same trait.
 - `src-tauri/src/queue.rs` runs the queue on one engine thread. The model sometimes loops on a word
   ("ست ست ست …"). Six repeats in a row, or a short phrase repeated, sends the chunk back through in two
   halves. A half that still loops gets the repetition cut to two and a "check this line" mark.
 - `src-tauri/src/setup.rs` finds the model, keeps the settings, fetches uv and builds the Python env.
+- `audio::voice_profile` records, for each line, when its speech happens (skipping pauses); the UI uses
+  it to place a selected word in the audio.
 - `src-tauri/src/transcript.rs` holds the exports. Subtitle cues split each chunk into lines of about
   14 words, with times inside a chunk estimated from character counts.
 

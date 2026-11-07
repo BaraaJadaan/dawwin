@@ -16,6 +16,9 @@ pub struct Segment {
     pub flag: Option<String>,
     #[serde(default)]
     pub edited: bool,
+    /// Where the speech is in the line (see `audio::voice_profile`), to find a word in the audio
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub voice: Vec<f32>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -304,8 +307,8 @@ mod tests {
             model: "m".into(),
             partial: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![] },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![] },
             ],
         }
     }

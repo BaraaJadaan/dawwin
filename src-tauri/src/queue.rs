@@ -53,6 +53,10 @@ pub struct EngineView {
     pub vram_total_gb: Option<f64>,
     pub vram_used_gb: Option<f64>,
     pub error: Option<String>,
+    /// "bfloat16" | "int8", once loaded
+    pub dtype: Option<String>,
+    /// e.g. the GPU had too little memory, so it runs on the CPU
+    pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -79,6 +83,8 @@ pub struct SetupView {
     pub nvidia_driver: Option<String>,
     /// The PyTorch build the env has: "cu128", "cpu", …
     pub env_backend: Option<String>,
+    /// "auto" | "cpu-fast" | "cpu-exact"
+    pub run_on: String,
     pub download: DownloadView,
     pub hf_home: String,
     pub data_dir: String,
@@ -174,6 +180,7 @@ impl Core {
         let env_ready = setup::env_ready(&self.paths);
         let env_backend = setup::env_backend(&self.paths);
         let model = self.model_status();
+        let run_on = self.settings.lock().unwrap().run_on().to_string();
         self.update(|s| {
             let st = &mut s.setup;
             st.env_ready = env_ready;
@@ -185,6 +192,7 @@ impl Core {
             st.tokens_url = setup::TOKENS_URL.into();
             st.nvidia_driver = tools.nvidia_driver;
             st.env_backend = env_backend;
+            st.run_on = run_on;
             st.hf_home = setup::hf_home().display().to_string();
             st.data_dir = self.paths.roaming.display().to_string();
             st.env_dir = self.paths.env_dir().display().to_string();
@@ -218,6 +226,16 @@ impl Core {
         self.change_settings(|s| s.model_dir = Some(resolved.display().to_string()))?;
         self.send(Msg::Restart);
         Ok(self.model_status())
+    }
+
+    /// GPU or CPU: takes effect with a fresh worker.
+    pub fn set_run_on(&self, value: &str) -> Result<()> {
+        if !matches!(value, "auto" | "cpu-fast" | "cpu-exact") {
+            return Err(anyhow!("unknown setting {value}"));
+        }
+        self.change_settings(|s| s.run_on = Some(value.to_string()))?;
+        self.send(Msg::Restart);
+        Ok(())
     }
 
     // ------------------------------------------------------------ setup
@@ -363,6 +381,7 @@ fn ensure_worker<'a>(core: &Arc<Core>, worker: &'a mut Option<PythonWorker>) -> 
             offline: model.found,
             model_dir: model.found.then(|| PathBuf::from(&model.dir)),
             token: None,
+            run_on: core.settings.lock().unwrap().run_on().to_string(),
         };
         *worker = Some(PythonWorker::spawn(&core.paths, opts, sink(core))?);
     }
@@ -401,7 +420,8 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         e.gpu = v.get("gpu").and_then(|x| x.as_str()).map(String::from);
                         e.torch = v.get("torch").and_then(|x| x.as_str()).map(String::from);
                         e.vram_total_gb = v.get("vram_total_gb").and_then(|x| x.as_f64());
-                        e.device = Some(if e.cuda == Some(true) { "cuda".into() } else { "cpu".into() });
+                        let forced_cpu = v.get("force_cpu").and_then(|x| x.as_bool()) == Some(true);
+                        e.device = Some(if e.cuda == Some(true) && !forced_cpu { "cuda".into() } else { "cpu".into() });
                     }),
                     Err(e) => {
                         worker = None;
@@ -422,7 +442,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         return Err(anyhow!("Set up the engine first."));
                     }
                     let dest = PathBuf::from(core.model_status().download_dir);
-                    let opts = WorkerOptions { offline: false, model_dir: None, token: setup::app_token(&core.paths) };
+                    let opts = WorkerOptions { offline: false, token: setup::app_token(&core.paths), ..Default::default() };
                     let mut w = PythonWorker::spawn(&core.paths, opts, sink(&core))?;
                     w.abort = Some(core.download_abort.clone());
                     let r = w.download(&dest);
@@ -450,6 +470,9 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 core.update(|s| {
                     s.engine.state = "off".into();
                     s.engine.vram_used_gb = None;
+                    s.engine.dtype = None;
+                    s.engine.note = None;
+                    s.engine.device = None;
                 });
                 if setup::env_ready(&core.paths) {
                     core.send(Msg::Probe);
@@ -515,9 +538,12 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
             s.engine.gpu = info.gpu.clone();
         }
         s.engine.vram_used_gb = info.vram_used_gb;
+        s.engine.dtype = info.dtype.clone();
+        s.engine.note = info.fallback.clone();
     });
     let device = match &info.gpu {
         Some(g) if info.device.starts_with("cuda") => format!("GPU · {g}"),
+        _ if info.dtype.as_deref() == Some("int8") => "CPU (int8)".into(),
         _ => "CPU".into(),
     };
 
@@ -629,6 +655,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: St
         text,
         flag: flag.map(String::from),
         edited: false,
+        voice: audio::voice_profile(&audio.samples, a, b, 20),
     };
     if find_loop(&text).is_none() {
         return Ok(vec![seg(a, b, text, None)]);
@@ -643,4 +670,72 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: St
         out.extend(fix_loops(w, audio, r, t, lang, depth + 1)?);
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::EngineInfo;
+    use std::collections::VecDeque;
+
+    /// Replays canned transcripts and records what it was asked.
+    struct Fake {
+        calls: Vec<Vec<(usize, usize)>>,
+        replies: VecDeque<Vec<String>>,
+    }
+
+    impl Engine for Fake {
+        fn start_loading(&mut self) -> Result<()> {
+            Ok(())
+        }
+        fn ensure_loaded(&mut self) -> Result<EngineInfo> {
+            Ok(EngineInfo::default())
+        }
+        fn transcribe(&mut self, _a: &Audio, ranges: &[(usize, usize)], _l: &str) -> Result<Vec<String>> {
+            self.calls.push(ranges.to_vec());
+            Ok(self.replies.pop_front().expect("no more canned replies"))
+        }
+        fn forget(&mut self, _: &str) {}
+    }
+
+    fn looping() -> String {
+        format!("ناجح 20 ما في {}س", "ست ".repeat(20))
+    }
+
+    #[test]
+    fn a_looping_chunk_is_transcribed_again_in_two_halves() {
+        let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
+        let mut e = Fake { calls: vec![], replies: VecDeque::from(vec![vec!["أول نص".into(), "ثاني نص".into()]]) };
+        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), looping(), "ar", 0).unwrap();
+        assert_eq!(e.calls.len(), 1);
+        assert_eq!(e.calls[0].len(), 2, "both halves in one batch");
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["أول نص", "ثاني نص"]);
+        assert!(segs.iter().all(|s| s.flag.is_none()));
+        assert_eq!(segs[0].start, 0.0);
+        assert_eq!(segs[0].end, segs[1].start);
+        assert_eq!(segs[1].end, 20.0);
+    }
+
+    #[test]
+    fn halves_that_keep_looping_are_cut_and_flagged() {
+        let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
+        let replies = (0..3).map(|_| vec![looping(), looping()]).collect();
+        let mut e = Fake { calls: vec![], replies };
+        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), looping(), "ar", 0).unwrap();
+        assert_eq!(e.calls.len(), 3, "split once, then each half once more");
+        assert_eq!(segs.len(), 4);
+        for s in &segs {
+            assert_eq!(s.flag.as_deref(), Some("repeat"));
+            assert_eq!(s.text, "ناجح 20 ما في ست ست …");
+        }
+    }
+
+    #[test]
+    fn ordinary_text_is_kept_as_one_line() {
+        let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
+        let mut e = Fake { calls: vec![], replies: VecDeque::new() };
+        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), "طيب هلا مكتب الاختبارات".into(), "ar", 0).unwrap();
+        assert!(e.calls.is_empty());
+        assert_eq!(segs.len(), 1);
+    }
 }

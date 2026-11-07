@@ -29,6 +29,10 @@ pub struct EngineInfo {
     pub device: String,
     pub gpu: Option<String>,
     pub vram_used_gb: Option<f64>,
+    /// "bfloat16" | "int8"
+    pub dtype: Option<String>,
+    /// Why it runs on the CPU although a GPU was wanted
+    pub fallback: Option<String>,
 }
 
 pub trait Engine: Send {
@@ -62,6 +66,8 @@ pub struct WorkerOptions {
     pub model_dir: Option<PathBuf>,
     /// A Hugging Face token the user gave the app (only needed to download)
     pub token: Option<String>,
+    /// "auto" | "cpu-fast" | "cpu-exact"
+    pub run_on: String,
 }
 
 pub struct PythonWorker {
@@ -107,6 +113,11 @@ impl PythonWorker {
         if let Some(t) = &opts.token {
             cmd.env("HF_TOKEN", t);
         }
+        match opts.run_on.as_str() {
+            "cpu-fast" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "int8"),
+            "cpu-exact" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "bf16"),
+            _ => cmd.env_remove("TAFREEGH_DEVICE").env("TAFREEGH_CPU_MODE", "int8"),
+        };
         no_window(&mut cmd);
         let mut child = cmd.spawn().with_context(|| format!("cannot start {}", paths.python().display()))?;
         let stdin = child.stdin.take().unwrap();
@@ -266,6 +277,8 @@ fn info_from(v: &Value) -> EngineInfo {
         device: v.get("device").and_then(|d| d.as_str()).unwrap_or("?").to_string(),
         gpu: v.get("gpu").and_then(|d| d.as_str()).map(String::from),
         vram_used_gb: v.get("vram_used_gb").and_then(|d| d.as_f64()),
+        dtype: v.get("dtype").and_then(|d| d.as_str()).map(String::from),
+        fallback: v.get("fallback").and_then(|d| d.as_str()).map(String::from),
     }
 }
 

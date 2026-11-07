@@ -38,7 +38,8 @@ function dur(sec) {
   sec = Math.round(sec || 0);
   if (sec < 60) return `${sec} s`;
   const m = Math.floor(sec / 60), s = sec % 60;
-  if (m < 60) return s && m < 10 ? `${m} min ${s} s` : `${m} min`;
+  if (m < 10) return s ? `${m} min ${s} s` : `${m} min`;
+  if (m < 60) return `${Math.round(sec / 60)} min`;
   return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
 function eta(sec) {
@@ -105,6 +106,11 @@ function renderChips() {
   else if (!st.env_ready) setChip(ce, "bad", "Engine not set up", "Open setup");
   else if (e.state === "starting") setChip(ce, "busy", "Starting engine…");
   else if (e.state === "error") setChip(ce, "bad", "Engine error", e.error || "");
+  else if (st.run_on !== "auto" || e.device === "cpu" || e.cuda === false) {
+    const exact = st.run_on === "cpu-exact";
+    setChip(ce, "warn", exact ? "CPU · exact (slow)" : "CPU · faster mode",
+      e.note || (exact ? "Full precision on the processor: very slow" : "8-bit model on the processor: slower than a GPU, slightly less exact"));
+  }
   else if (e.cuda === true) setChip(ce, "ok", `GPU · ${shortGpu(e.gpu)}`, `Runs on the GPU with CUDA (torch ${e.torch || "?"}${e.vram_total_gb ? `, ${e.vram_total_gb} GB VRAM` : ""})`);
   else if (e.cuda === false) setChip(ce, "warn", "CPU only (slow)", "No CUDA GPU was found; transcription will be many times slower");
   else setChip(ce, "", "Engine ready", "The engine starts when it is needed");
@@ -255,6 +261,15 @@ function renderSetup() {
   $("download-error").hidden = !d.error || d.error === "stopped";
   $("download-error").textContent = d.error || "";
 
+  $("run-on").value = st.run_on || "auto";
+  $("runon-detail").textContent = {
+    auto: st.nvidia_driver
+      ? "The NVIDIA GPU with CUDA. If its memory is too small, Tafreegh switches to the CPU by itself."
+      : "No NVIDIA GPU found, so the CPU in faster mode.",
+    "cpu-fast": "The processor, with an 8-bit version of the model: on an 8-core laptop about 3× faster than real time (24 min of audio in about 8 min), slightly less exact than the GPU.",
+    "cpu-exact": "The processor at full precision: as exact as the GPU, but about 7× slower than real time.",
+  }[st.run_on || "auto"] + (e.note ? " " + e.note : "");
+
   $("ffmpeg-detail").textContent = st.ffmpeg
     ? `ffmpeg reads every audio and video format (${st.ffmpeg}).`
     : "Built in: wav, mp3, m4a, mp4, flac and ogg (Vorbis). For WhatsApp voice notes (opus) and other formats, install ffmpeg (winget install Gyan.FFmpeg), then press Check again.";
@@ -334,6 +349,7 @@ function renderTranscript() {
   box.dir = t.language === "en" ? "ltr" : "rtl";
   box.lang = t.language === "en" ? "en" : "ar";
   box.innerHTML = "";
+  if (box.dataset.for !== t.id) { box.scrollTop = 0; box.dataset.for = t.id; }
   t.segments.forEach((s, i) => box.append(segRow(s, i, live)));
   if (!t.segments.length) box.append(emptyLive());
   runSearch(false);
@@ -376,8 +392,9 @@ function segRow(s, i, live) {
   text.spellcheck = false;
   if (!live) {
     text.contentEditable = "plaintext-only";
-    text.title = "Click to edit";
-    text.addEventListener("focus", () => { text.textContent = S.current.segments[i].text; });
+    text.title = "Click to edit · select a word, or Ctrl+click it, to hear it";
+    // editing works on plain text: drop the search highlights (only then, so a selection survives)
+    text.addEventListener("focus", () => { if (text.querySelector("mark")) text.textContent = S.current.segments[i].text; });
     text.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); text.blur(); }
       if (ev.key === "Escape") { text.textContent = S.current.segments[i].text; text.blur(); }
@@ -503,6 +520,82 @@ async function setupAudio(live) {
   }
   a.hidden = false;
   a.src = fileSrc(p);
+  note.textContent = HINT;
+}
+
+// ------------------------------------------------------------------ hear a word
+
+const HINT = "Select a word, or Ctrl+click it, to play from about where it is said.";
+
+/** About when a word is said. The model times whole lines (up to 30 s), so the word is placed by
+ *  how far into the line it is, over the stretches with speech (`voice`); playback starts 1.5 s
+ *  early so the word is heard within the next few seconds. */
+function wordTime(i, charIdx) {
+  const s = S.current.segments[i];
+  const frac = Math.min(1, Math.max(0, charIdx / Math.max(1, s.text.length)));
+  const v = s.voice;
+  let t;
+  if (v && v.length >= 2) {
+    const x = frac * (v.length - 1), k = Math.floor(x);
+    t = k >= v.length - 1 ? v[v.length - 1] : v[k] + (v[k + 1] - v[k]) * (x - k);
+  } else {
+    t = s.start + frac * (s.end - s.start);
+  }
+  return Math.max(s.start, t - 1.5);
+}
+
+function charOffset(textEl, node, offset) {
+  const r = document.createRange();
+  r.selectNodeContents(textEl);
+  r.setEnd(node, offset);
+  return r.toString().length;
+}
+
+let listenAt = null;
+function updateListenPop() {
+  const pop = $("listen-pop");
+  const sel = document.getSelection();
+  pop.hidden = true;
+  listenAt = null;
+  if (S.view !== "transcript" || !sel || sel.isCollapsed || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+  const textEl = startEl?.closest(".seg .text");
+  if (!textEl || !$("segments").contains(textEl)) return;
+  const i = Number(textEl.closest(".seg").dataset.i);
+  listenAt = wordTime(i, charOffset(textEl, range.startContainer, range.startOffset));
+  const rects = range.getClientRects();
+  const r = rects.length ? rects[0] : range.getBoundingClientRect();
+  const top = r.top - 38 < 70 ? r.bottom + 8 : r.top - 38;
+  pop.style.left = `${r.left + r.width / 2}px`;
+  pop.style.top = `${top}px`;
+  pop.hidden = false;
+}
+
+function wireListen() {
+  let timer;
+  document.addEventListener("selectionchange", () => { clearTimeout(timer); timer = setTimeout(updateListenPop, 120); });
+  const pop = $("listen-pop");
+  pop.addEventListener("mousedown", (ev) => ev.preventDefault()); // keep the selection
+  pop.addEventListener("click", () => { if (listenAt != null) playFrom(listenAt); });
+  $("segments").addEventListener("scroll", () => { $("listen-pop").hidden = true; });
+  // Ctrl+click a word: play from it without starting to edit
+  $("segments").addEventListener("mousedown", (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    const textEl = ev.target.closest(".seg .text");
+    if (!textEl) return;
+    ev.preventDefault();
+    const pos = document.caretPositionFromPoint
+      ? document.caretPositionFromPoint(ev.clientX, ev.clientY)
+      : document.caretRangeFromPoint(ev.clientX, ev.clientY);
+    if (!pos) return;
+    const node = pos.offsetNode ?? pos.startContainer;
+    const off = pos.offset ?? pos.startOffset;
+    let idx = charOffset(textEl, node, off);
+    const text = S.current.segments[Number(textEl.closest(".seg").dataset.i)].text;
+    while (idx > 0 && !/\s/.test(text[idx - 1])) idx--; // the start of the word
+    playFrom(wordTime(Number(textEl.closest(".seg").dataset.i), idx));
+  });
 }
 
 $("audio").addEventListener("error", async () => {
@@ -680,6 +773,7 @@ function onSegment({ id, segment }) {
 // ------------------------------------------------------------------ wiring
 
 function wire() {
+  wireListen();
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => { if (!ev.target.closest(".segmented")) chooseFiles(); });
   $("dropzone").addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); chooseFiles(); } });
@@ -691,6 +785,10 @@ function wire() {
 
   $("btn-setup").onclick = () => invoke("setup_engine");
   $("btn-import").onclick = () => importModel($("import-error"));
+  $("run-on").onchange = async () => {
+    try { onState(await invoke("set_run_on", { value: $("run-on").value })); toast("Saved. It applies to the next transcription."); }
+    catch (err) { toast(String(err)); }
+  };
   $("btn-import-other").onclick = () => importModel($("import-other-error"));
   $("btn-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
   $("btn-token").onclick = async () => {

@@ -143,6 +143,21 @@
             <div class="step-head">
               <span class="step-n">·</span>
               <div class="step-title">
+                <h2>Run on</h2>
+                <p class="muted small" id="runon-detail"></p>
+              </div>
+              <select id="run-on" class="input select" aria-label="Run on">
+                <option value="auto">GPU when available</option>
+                <option value="cpu-fast">CPU, faster</option>
+                <option value="cpu-exact">CPU, exact (very slow)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="card step">
+            <div class="step-head">
+              <span class="step-n">·</span>
+              <div class="step-title">
                 <h2>Audio decoder</h2>
                 <p class="muted small" id="ffmpeg-detail"></p>
               </div>
@@ -210,6 +225,7 @@
     <div class="drop-card">Drop to transcribe</div>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <button id="listen-pop" class="listen-pop" hidden title="Play the recording from this word">▶ Listen</button>
 
   <script src="app.js"></script>
 </body>

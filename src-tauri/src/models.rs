@@ -53,13 +53,18 @@ pub fn variant_of(path: &Path) -> Option<Variant> {
     VARIANTS.into_iter().find(|v| v.file.eq_ignore_ascii_case(name))
 }
 
+/// Hugging Face, or the mirror named by HF_ENDPOINT (its usual setting) where it is blocked.
+fn endpoint() -> String {
+    std::env::var("HF_ENDPOINT").ok().filter(|e| !e.is_empty()).unwrap_or_else(|| "https://huggingface.co".into()).trim_end_matches('/').to_string()
+}
+
 pub fn url(v: Variant) -> String {
-    format!("https://huggingface.co/{REPOSITORY}/resolve/{REVISION}/{}", v.file)
+    format!("{}/{REPOSITORY}/resolve/{REVISION}/{}", endpoint(), v.file)
 }
 
 /// Where to download a model by hand.
 pub fn files_page() -> String {
-    format!("https://huggingface.co/{REPOSITORY}/tree/{REVISION}")
+    format!("{}/{REPOSITORY}/tree/{REVISION}", endpoint())
 }
 
 pub fn part_path(dest: &Path) -> PathBuf {

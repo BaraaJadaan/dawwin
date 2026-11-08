@@ -76,11 +76,17 @@ fn adopt_old_data(old: &Path, new: &Path, items: &[&str]) {
 
 impl Paths {
     pub fn new() -> Result<Self> {
-        let local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Dawwin");
-        let roaming = dirs::data_dir().context("no APPDATA")?.join("Dawwin");
-        let old_roaming = dirs::data_dir().context("no APPDATA")?.join("Tafreegh");
-        adopt_old_data(&old_roaming, &roaming, &["history", "settings.json"]);
-        let p = Paths { local, roaming };
+        let p = if let Some(home) = std::env::var_os("DAWWIN_HOME").filter(|h| !h.is_empty()) {
+            // everything in one folder: for a USB stick, or for trying things out
+            let home = PathBuf::from(home);
+            Paths { local: home.clone(), roaming: home }
+        } else {
+            let local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Dawwin");
+            let roaming = dirs::data_dir().context("no APPDATA")?.join("Dawwin");
+            let old_roaming = dirs::data_dir().context("no APPDATA")?.join("Tafreegh");
+            adopt_old_data(&old_roaming, &roaming, &["history", "settings.json"]);
+            Paths { local, roaming }
+        };
         for d in [p.cache_dir(), p.logs_dir(), p.history_dir()] {
             std::fs::create_dir_all(&d).with_context(|| format!("cannot create {}", d.display()))?;
         }
@@ -115,10 +121,10 @@ impl Paths {
 
     /// What the Python engine of older versions left behind: unused now, and several gigabytes.
     pub fn old_engine_dirs(&self) -> Vec<PathBuf> {
+        // not `engine`: the installer puts the app in this same folder, and the engine next to it
         let mut dirs = vec![
             self.local.join("pyenv"),
             self.local.join("bin"),
-            self.local.join("engine"),
             self.local.join("models").join("cohere-transcribe-arabic-07-2026"),
         ];
         if let Some(old) = self.local.parent().map(|p| p.join("Tafreegh")) {
@@ -290,6 +296,27 @@ mod tests {
         assert!(s.check_updates);
         assert!(s.model_file.is_none(), "the old model cannot be used by this engine");
         assert_eq!(s.folder_formats(), ["txt"]);
+    }
+
+    #[test]
+    fn cleaning_up_the_old_engine_never_touches_the_new_one() {
+        let root = std::env::temp_dir().join(format!("dawwin-old-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let local = root.join("Dawwin");
+        for d in ["engine", "models", "pyenv", "cache", "logs"] {
+            std::fs::create_dir_all(local.join(d)).unwrap();
+        }
+        std::fs::create_dir_all(root.join("Tafreegh/pyenv")).unwrap();
+        std::fs::create_dir_all(root.join("Tafreegh/engine")).unwrap();
+        let paths = Paths { local: local.clone(), roaming: root.join("roaming") };
+        let old = paths.old_engine_dirs();
+        assert!(old.contains(&local.join("pyenv")));
+        assert!(old.contains(&root.join("Tafreegh/pyenv")));
+        assert!(old.contains(&root.join("Tafreegh/engine")));
+        for keep in ["engine", "models", "cache", "logs"] {
+            assert!(!old.contains(&local.join(keep)), "{keep} belongs to this version");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

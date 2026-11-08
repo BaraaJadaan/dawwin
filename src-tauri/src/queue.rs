@@ -379,8 +379,8 @@ impl Core {
                             d.retry_wait = Some(wait_s);
                             d.retry_attempt = Some(attempt);
                         }
-                        models::Event::Verifying { .. } => {
-                            d.done = v.size;
+                        models::Event::Verifying { done } => {
+                            d.done = done;
                             d.verifying = true;
                         }
                     }

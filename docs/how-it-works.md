@@ -4,63 +4,73 @@ Notes for contributors. The README covers installing and using the app.
 
 ## Layout
 
-The app is Rust ([Tauri 2](https://tauri.app)) with a plain HTML/CSS/JS interface in `ui/` (no
-bundler). Inference runs in a Python worker process that the app creates and manages, because the
-model has no Rust implementation yet.
+Two programs. The app is Rust ([Tauri 2](https://tauri.app)) with a plain HTML/CSS/JS interface in
+`ui/` (no bundler). The speech engine is a small Rust program around
+[transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), in a process of its own, so a crash
+in a GPU driver costs a retry on the CPU instead of the whole app.
 
 | Path | What it does |
 | --- | --- |
+| `engine/src/main.rs` | `dawwin-engine.exe`: loads the model, talks JSON lines over stdin/stdout. Picks a dedicated GPU first, and falls back on the CPU. `--cpu` keeps the GPU driver out of the process. |
+| `src-tauri/src/engine.rs` | The `Engine` interface, and `EngineProcess`, which runs the engine and notices when it dies. |
+| `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, save. |
 | `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when installed, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise). Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
-| `src-tauri/src/engine.rs` | The `Engine` interface, and `PythonWorker`, which runs `worker/worker.py` and talks JSON lines over stdin/stdout. A native engine (ONNX through `ort`, or a `candle` port) can replace it by implementing the same trait. |
-| `worker/worker.py` | Runs `CohereAsrForConditionalGeneration`: bf16 on CUDA, 4 chunks per batch; on the CPU it converts the linear layers to int8 (dynamic quantization), about 12× faster than bf16 on CPUs without native bf16. Also aligns words and downloads the model. |
-| `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, align words, save. |
-| `src-tauri/src/setup.rs` | Finds the model, keeps the settings, fetches uv and builds the Python env. |
+| `src-tauri/src/models.rs` | The two models, their pinned revision and checksums, and the download. |
+| `src-tauri/src/setup.rs` | Where things live, the settings, and which model is in use. |
 | `src-tauri/src/transcript.rs` | The transcript data and the exports (txt, md, srt, vtt, docx, csv, tsv, json). |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 
 ## Details worth knowing
 
-- **Loops.** The model sometimes repeats one word dozens of times ("ست ست ست …"). Six repeats in a
-  row, or a short phrase repeated, sends the chunk back through in two halves. A half that still
-  loops gets the repetition cut to two and a "check this line" mark.
-- **Word timings.** The model only times whole chunks. After a batch is transcribed, the worker
-  teacher-forces each line's text through the decoder and reads its cross-attention (all 64 heads
-  averaged, normalised per frame, median-filtered), then takes the monotonic path through it with DTW,
-  as Whisper does, minus a 0.2 s lag. It reuses the transcription's encoder output, so it adds little
-  time. On a Syrian-Arabic recording, against probed word onsets: median error 0.4 s, 81 % of words
-  within a second. Lines without word timings fall back to `audio::voice_profile` (where the speech is
-  in the line).
-- **Model download.** huggingface_hub 1.x starts an interrupted file over, which never finishes 4 GB
-  on a connection that drops. The worker keeps a `.part` file, asks for the rest with HTTP Range
-  requests, and checks each file's SHA-256.
-- **Python env.** Built with [uv](https://docs.astral.sh/uv/) from `worker/requirements.txt`; the
-  PyTorch build (CUDA 12.8 or CPU) is picked from the NVIDIA driver version.
+- **GPUs.** Vulkan covers every brand and needs nothing but the graphics driver. The engine uses shared
+  backends, so a machine without Vulkan simply has no GPU device, and the CPU code is chosen at run
+  time from `ggml-cpu-*.dll`. If the GPU fails in any way, the app stops using it until it restarts,
+  and runs the same recording again on the CPU.
+- **Loops.** The model sometimes repeats itself. transcribe.cpp stops it and returns the text so far,
+  which would lose the rest of the chunk, so such a chunk goes back through in two halves. A half that
+  still does it gets the repetition cut and a "check this line" mark.
+- **Cutting.** We tried speech detection (Silero and FireRed) and padding the chunks with silence.
+  Scored against the Quran text on a recitation, both were worse than cutting at the quietest moment:
+  11.2 % and 8.9 % word errors with speech detection, 6.5 % with padding, 5.2 % without either.
+- **One piece at a time.** Batches are 1.7 times faster on a GPU, but the padding of their shorter
+  pieces made the Q8 model invent English sentences past the end of the speech on a recitation.
+- **Word timings.** The engine gives none, so the word being said is estimated from
+  `audio::voice_profile` (where the speech is in the line). Transcripts from older versions keep the
+  timings they were saved with.
+- **Model download.** `<file>.part` holds the bytes, and `<file>.part.ok` how many of them are known to
+  be on the disk (synced every 8 MB). A restart asks for the rest with an HTTP range request. The file
+  takes its real name only after its SHA-256 matches, and a model in use is never rewritten in place,
+  because the engine memory-maps it. `HF_ENDPOINT` selects a mirror.
+- **`DAWWIN_HOME`** keeps all the app's data in one folder.
 
 ## Where the app keeps things
 
 | What | Where |
 | --- | --- |
-| Model (downloaded) | `%LOCALAPPDATA%\Dawwin\models\cohere-transcribe-arabic-07-2026`, or the folder chosen |
-| Python env and uv | `%LOCALAPPDATA%\Dawwin\pyenv`, `%LOCALAPPDATA%\Dawwin\bin` |
-| Engine log | `%LOCALAPPDATA%\Dawwin\logs\worker.log` |
+| Models | `%LOCALAPPDATA%\Dawwin\models`, or the folder chosen |
+| Engine log | `%LOCALAPPDATA%\Dawwin\logs\engine.log` |
 | Transcripts | `%APPDATA%\Dawwin\history\*.json` |
-| Settings, saved Hugging Face token | `%APPDATA%\Dawwin\settings.json`, `%APPDATA%\Dawwin\hf-token` |
+| Settings | `%APPDATA%\Dawwin\settings.json` |
 
 ## Adding a language
 
-Add its strings to `ui/i18n.js`, to `LANGUAGES` and a table in `src-tauri/src/i18n.rs`, and to the
-small table in `worker/worker.py`.
+Add its strings to `ui/i18n.js`, and to `LANGUAGES` and a table in `src-tauri/src/i18n.rs`.
 
 ## Building
 
 You need [Rust](https://rustup.rs) (stable, MSVC), the Visual Studio C++ Build Tools with a Windows
-SDK, and Node.js.
+SDK, CMake and Node.js.
 
 ```bash
 npm install
-npm run build        # the installer and a portable exe land in dist/
+npm run engine       # builds the engine into src-tauri/engine-bin
+npm run build        # the installer and a portable zip land in dist/
 ```
+
+`npm run engine` builds with GPU support when `VULKAN_SDK` is set (install the
+[Vulkan SDK](https://vulkan.lunarg.com)), and for the CPU otherwise. `npm run engine -- --from-ci`
+takes the newest engine GitHub Actions built instead (needs the `gh` command).
 
 `cargo test` in `src-tauri` runs the unit tests. If linking fails with
 `LNK1104: cannot open file 'msvcrt.lib'`, Rust picked a Visual Studio install without the C++ x64
@@ -69,18 +79,15 @@ complete install.
 
 ## Releasing
 
-Bump the version in `package.json`, `src-tauri/Cargo.toml` and `src-tauri/tauri.conf.json`, then push
-a tag such as `v0.2.0`. `.github/workflows/release.yml` builds the installer and a portable exe on
-GitHub Actions, signs them when SignPath is set up (see below), and attaches them with checksums to a
-draft release.
+Official builds embed the Thmanyah font, whose license allows that in a compiled product but forbids
+uploading the font files anywhere. So they never go near GitHub: `ui/fonts/` is git-ignored, and
+releases are built on the maintainer's PC, with the engine from GitHub Actions.
 
-### Code signing with SignPath
-
-Once SignPath Foundation accepts the project, set in the repository settings:
-
-- secret `SIGNPATH_API_TOKEN`
-- variable `SIGNPATH_ORGANIZATION_ID`
-- variables `SIGNPATH_PROJECT_SLUG` and `SIGNPATH_SIGNING_POLICY_SLUG` (from the SignPath project)
-
-The release workflow signs the files only when `SIGNPATH_ORGANIZATION_ID` is set. Check the signing
-step against SignPath's instructions when enabling it.
+1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and
+   `engine/Cargo.toml`.
+2. Put `thmanyahsans-Regular.otf`, `-Medium.otf` and `-Bold.otf` in `ui/fonts/`.
+3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads both real models
+   with a pause in the middle and loads them.
+4. `npm run engine -- --from-ci`, then `npm run build`. The last line it prints must say yes to both GPU
+   support and the font.
+5. `gh release create vX.Y.Z dist/* --title "Dawwin X.Y.Z" --notes-file notes.md`

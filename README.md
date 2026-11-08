@@ -19,40 +19,40 @@ Your recordings and transcripts never leave the computer.
   select text and right-click → **Play from here**, to hear it.
 - Correct lines in place, search (أ/إ/ا, ة/ه and ى/ي match), and export to Word, text, Markdown,
   subtitles (SRT, VTT) or data (CSV, TSV, JSON).
-- Runs on an NVIDIA GPU, or on the CPU when there is none.
+- Runs on the GPU of any brand (NVIDIA, AMD, Intel), or on the CPU when there is none.
 - English or Arabic interface.
 
 ## Getting started
 
-1. Download `Dawwin_x.y.z_x64-setup.exe` from [Releases](https://github.com/BaraaJadaan/dawwin/releases)
-   and run it (or use the portable `.exe`). Windows may say the app is unrecognised: choose
-   **More info → Run anyway** (see [Code signing](#code-signing-policy)).
-2. On first start, press **Set up engine**. Dawwin installs Python and PyTorch into its own folder
-   (about 3 GB to download with an NVIDIA GPU, less without one). If the connection drops, press it again.
-3. Get the model (about 4 GB, free but gated). Sign in to Hugging Face, accept the terms on the
-   [model page](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026), create a
-   [read token](https://huggingface.co/settings/tokens), paste it into Dawwin and press
-   **Download model**. The download resumes after interruptions. Already have the files?
-   Press **Import folder** instead.
-4. Drop a recording on the window.
+1. Download `Dawwin_x.y.z_x64-setup.exe` from
+   [Releases](https://github.com/BaraaJadaan/dawwin/releases) and run it. Windows may say the app is
+   unrecognised: choose **More info → Run anyway**. Or use the portable `.zip`: unpack it and run `dawwin.exe`.
+2. Choose a model. No account is needed.
 
-On an RTX 4060 laptop GPU, 24 minutes of audio take under a minute. On an 8-core laptop CPU, about
-3× faster than real time.
+   | | Download | GPU memory | |
+   | --- | --- | --- | --- |
+   | **Full quality** (Q8) | 2.4 GB | about 3 GB | Almost the same as the original model |
+   | **Smaller** (Q4) | 1.6 GB | about 2 GB | For weaker PCs and slow connections |
 
-**Requirements:** Windows 10 or 11 (64-bit), about 10 GB of free disk space, 8 GB of RAM. An NVIDIA
-GPU with 6 GB of memory or more is recommended. For WhatsApp voice notes (opus), install ffmpeg:
-`winget install Gyan.FFmpeg`.
+   The download can be paused. If the connection drops or Dawwin closes, it carries on from where it
+   stopped. Already have the file? Press **I have the file**.
+3. Drop a recording on the window.
+
+**Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM, and room for the model. For WhatsApp voice
+notes (opus), install ffmpeg: `winget install Gyan.FFmpeg`.
 
 ## Building from source
 
-You need [Rust](https://rustup.rs), the Visual Studio C++ Build Tools and Node.js.
+You need [Rust](https://rustup.rs), the Visual Studio C++ Build Tools, CMake and Node.js. For GPU
+support, also the [Vulkan SDK](https://vulkan.lunarg.com); without it the engine is built for the CPU.
 
 ```bash
 npm install
+npm run engine
 npm run build
 ```
 
-The installer and a portable exe of the current version land in `dist/`, with their checksums.
+The installer and a portable zip of the current version land in `dist/`, with their checksums.
 
 How the app is put together, and how to release it: [docs/how-it-works.md](docs/how-it-works.md).
 
@@ -63,33 +63,26 @@ before starting on something bigger, so we can agree on the approach: open an
 [issue](https://github.com/BaraaJadaan/dawwin/issues) or reach me on GitHub
 ([@BaraaJadaan](https://github.com/BaraaJadaan)). Then send a pull request.
 
-## Code signing policy
+## Privacy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/). *(Pending: until SignPath Foundation accepts the project,
-releases are unsigned and Windows SmartScreen shows a warning.)*
-
-Releases are built from this repository by GitHub Actions, and every signed release is approved by
-hand.
-
-- Committers and reviewers: [@BaraaJadaan](https://github.com/BaraaJadaan)
-- Approvers: [@BaraaJadaan](https://github.com/BaraaJadaan)
-
-**Privacy policy:** this program will not transfer any information to other networked systems
-unless specifically requested by the user or the person installing or operating it. It goes online
-only when you press **Set up engine** (downloads [uv](https://github.com/astral-sh/uv), Python
-packages from [PyPI](https://pypi.org) and [PyTorch](https://download.pytorch.org)) or
-**Download model** (downloads the model from [Hugging Face](https://huggingface.co) with your token),
-or **Check for updates** (asks GitHub for the latest version; also at startup if you turn that on in
-Settings). Those services' own privacy policies apply.
+Dawwin goes online only when you ask it to: to download a model (from
+[Hugging Face](https://huggingface.co)), and to check for updates (from GitHub; also at startup if you
+turn that on in Settings).
 
 ## Uninstall
 
-Uninstall Dawwin from Windows Settings → Apps. The engine, the model and your transcripts are kept
-in case you reinstall; to remove them too, delete the folders `%LOCALAPPDATA%\Dawwin` and
-`%APPDATA%\Dawwin` (and the model folder, if you chose another place for it).
+Uninstall Dawwin from Windows Settings → Apps. The models and your transcripts are kept in case you
+reinstall. To remove them too, delete the folders `%LOCALAPPDATA%\Dawwin` and `%APPDATA%\Dawwin` (and
+the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). The model is not part of this repository: Cohere publishes it under Apache-2.0 on
-Hugging Face, behind an access agreement each user accepts.
+[MIT](LICENSE). Three things are not part of this repository and have their own terms:
+
+- **The model**: Cohere publishes it under Apache-2.0. Dawwin downloads the
+  [GGUF conversion](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf) made by
+  the [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) project.
+- **The engine**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), under the MIT license.
+- **The font**: official builds embed [Thmanyah Sans](https://font.thmanyah.com), © Thmanyah Publishing
+  and Distribution. Its license does not allow sharing the font files, so builds from this repository
+  use the system font instead.

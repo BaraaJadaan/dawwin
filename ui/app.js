@@ -277,7 +277,6 @@ function renderSetup() {
     const pct = total ? (100 * doneBytes) / total : 0;
     $("download-title").textContent = t("dl.title", { name: modelName(dm), size: gb(dm.size) });
     $("download-bar").style.width = pct.toFixed(1) + "%";
-    $("download-progress").classList.toggle("indeterminate", !!d.verifying);
     let line = t("dl.progress", { done: (doneBytes / 1e9).toFixed(2), total: (total / 1e9).toFixed(2), pct: pct.toFixed(0) });
     if (d.verifying) line = t("dl.verifying");
     else if (d.retry_wait != null) line += " · " + t("dl.retry", { wait: d.retry_wait, n: d.retry_attempt });
@@ -1223,12 +1222,6 @@ function wire() {
 
 /** Strings with links or code inside, and the language menu. */
 function renderStatic() {
-  $("how1").innerHTML = tHtml("setup.how1", { link: raw(`<a href="#" data-link="model_url">${esc(t("setup.how1.link"))}</a>`) });
-  $("how2").innerHTML = tHtml("setup.how2", { link: raw(`<a href="#" data-link="tokens_url">${esc(t("setup.how2.link"))}</a>`) });
-  $("manual-text").innerHTML = tHtml("model.manual", { link: raw(`<a href="#" data-link="files_url">${esc(t("model.manual.link"))}</a>`) });
-  for (const a of document.querySelectorAll("a[data-link]")) {
-    a.onclick = (ev) => { ev.preventDefault(); invoke("open_url", { url: S.snap.setup[a.dataset.link] }); };
-  }
   const sel = $("ui-lang");
   sel.innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
   sel.value = UI_LANG;

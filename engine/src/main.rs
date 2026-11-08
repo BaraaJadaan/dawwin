@@ -24,6 +24,10 @@ use transcribe_cpp::{Backend, BackendMask, Device, DeviceType, Error, Model, Mod
 /// The model cannot read less than this; it could not hold speech anyway.
 const MIN_SAMPLES: usize = 160;
 const GB: u64 = 1 << 30;
+/// Pieces of audio read at once. Eight is about 1.7 times faster on a GPU, but the shorter pieces of
+/// a batch get padded, and on a recitation the 2.4 GB model then went on past the end of the speech
+/// and made up English sentences. One at a time gives the same words every time.
+const BATCH: u32 = 1;
 
 struct StderrLog;
 
@@ -97,7 +101,7 @@ impl Engine {
                             "device": "gpu",
                             "gpu": gpu.description,
                             "vram_total_gb": gigabytes(gpu.memory_total),
-                            "batch": gpu_batch(gpu.memory_total, model_bytes),
+                            "batch": BATCH,
                             "load_seconds": started.elapsed().as_secs_f32(),
                         });
                         log::info!("loaded on {status}");
@@ -114,7 +118,7 @@ impl Engine {
         let session = open(model_path, None)?;
         let status = json!({
             "device": "cpu",
-            "batch": 1,
+            "batch": BATCH,
             "fallback": fallback,
             "load_seconds": started.elapsed().as_secs_f32(),
         });
@@ -177,16 +181,6 @@ fn best_gpu() -> Option<Device> {
         .into_iter()
         .filter(|d| matches!(d.device_type, DeviceType::Gpu | DeviceType::Igpu))
         .max_by_key(|d| (matches!(d.device_type, DeviceType::Gpu), d.memory_total))
-}
-
-/// Pieces of audio read at once: more is faster, as long as they fit next to the model.
-fn gpu_batch(memory_total: u64, model_bytes: u64) -> u32 {
-    match memory_total.saturating_sub(model_bytes) {
-        0 => 4, // the driver did not say
-        free if free >= 2 * GB => 8,
-        free if free >= GB => 4,
-        _ => 2,
-    }
 }
 
 fn open(path: &str, gpu: Option<Device>) -> Result<Session, Error> {

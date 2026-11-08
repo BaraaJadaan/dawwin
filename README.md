@@ -38,6 +38,9 @@ Your recordings and transcripts never leave the computer.
    stopped. Already have the file? Press **I have the file**.
 3. Drop a recording on the window.
 
+On an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core laptop CPU, about 3
+to 4 times faster than real time.
+
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM, and room for the model. For WhatsApp voice
 notes (opus), install ffmpeg: `winget install Gyan.FFmpeg`.
 

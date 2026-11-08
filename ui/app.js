@@ -294,6 +294,7 @@ function renderSetup() {
   }
   $("download-error").hidden = !d.error;
   $("download-error").textContent = d.error || "";
+  $("download-box").hidden = !!d.error && !d.active && !(dm && dm.partial > 0);
 
   // 3. ready
   const device = e.device === "cpu" || st.run_on === "cpu" || !e.gpu ? t("ready.cpu") : t("ready.gpu", { gpu: shortGpu(e.gpu) });
@@ -442,7 +443,7 @@ async function deleteModel(id, button) {
 async function checkOldEngine() {
   let size = 0;
   try { size = await invoke("old_engine_size"); } catch { /* nothing to offer */ }
-  $("set-old-box").hidden = size < 1e6;
+  $("set-old-box").hidden = size < 5e7;
   $("set-old-text").textContent = t("set.oldText", { size: gb(size) });
 }
 

@@ -212,7 +212,9 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
             }
         }
     }
-    if !verify(d, stop, on_event)? {
+    // for trying the rest of the flow against a stand-in file; not there in release builds
+    let trusted = cfg!(debug_assertions) && std::env::var_os("DAWWIN_TEST_TRUST_DOWNLOAD").is_some();
+    if !trusted && !verify(d, stop, on_event)? {
         return if stop.load(Ordering::SeqCst) {
             Ok(Finished::Paused)
         } else {

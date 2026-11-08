@@ -74,6 +74,14 @@ impl std::fmt::Display for EngineFailed {
 }
 impl std::error::Error for EngineFailed {}
 
+/// On audio with no speech the model can write a marker such as "@@@ضوضاء" (noise).
+fn without_markers(text: &str) -> String {
+    if !text.contains("@@@") {
+        return text.trim().to_string();
+    }
+    text.split_whitespace().filter(|w| !w.contains("@@@")).collect::<Vec<_>>().join(" ")
+}
+
 pub struct EngineProcess {
     child: Child,
     stdin: ChildStdin,
@@ -276,7 +284,7 @@ impl Engine for EngineProcess {
             .iter()
             .enumerate()
             .map(|(i, t)| Recognized {
-                text: t.as_str().unwrap_or("").to_string(),
+                text: without_markers(t.as_str().unwrap_or("")),
                 stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
             })
             .collect())
@@ -291,5 +299,17 @@ impl Engine for EngineProcess {
                 true
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_noise_marker_is_not_text() {
+        assert_eq!(without_markers("@@@ضوضاء"), "");
+        assert_eq!(without_markers("طيب @@@ضوضاء تمام"), "طيب تمام");
+        assert_eq!(without_markers("  طيب  تمام "), "طيب  تمام");
     }
 }

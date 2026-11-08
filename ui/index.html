@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Tafreegh</title>
+  <title>Dawwin</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -35,7 +35,10 @@
       </button>
 
       <section id="queue-section" hidden>
-        <h3 data-i18n="side.queue"></h3>
+        <div class="queue-head">
+          <h3 data-i18n="side.queue"></h3>
+          <button class="linkbtn" id="queue-cancel-all" data-i18n="side.cancelAll" hidden></button>
+        </div>
         <ul id="queue" class="queue"></ul>
       </section>
 
@@ -66,7 +69,7 @@
             </svg>
           </div>
           <h1 data-i18n="home.drop"></h1>
-          <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span><span data-i18n="home.formats"></span></p>
+          <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
           <div class="lang" role="radiogroup" data-i18n-aria="home.spoken">
             <span class="muted small" data-i18n="home.spoken"></span>
             <div class="segmented">
@@ -237,6 +240,16 @@
           </section>
 
           <section class="card group">
+            <h2 data-i18n="set.folderJobs"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="set.folderFiles"></h3>
+                <div class="format-list" id="set-folder-formats"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card group">
             <h2 data-i18n="set.updates"></h2>
             <div class="setting">
               <div class="setting-text">
@@ -304,6 +317,9 @@
                 <button data-fmt="md" data-i18n="exp.md"></button>
                 <button data-fmt="srt" data-i18n="exp.srt"></button>
                 <button data-fmt="vtt" data-i18n="exp.vtt"></button>
+                <button data-fmt="csv" data-i18n="exp.csv"></button>
+                <button data-fmt="tsv" data-i18n="exp.tsv"></button>
+                <button data-fmt="json" data-i18n="exp.json"></button>
               </div>
             </div>
             <button class="icon-btn danger" id="btn-delete" data-i18n-aria="t.delete">

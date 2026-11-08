@@ -1,4 +1,5 @@
-"""Draw the app icon (a speech wave turning into lines of text) at every size Tauri needs."""
+"""Draw the app icon (an ink drop holding a sound wave) at every size Tauri needs."""
+import math
 import sys
 from pathlib import Path
 
@@ -6,32 +7,32 @@ from PIL import Image, ImageDraw
 
 out = Path(sys.argv[1])
 S = 1024
+K = S / 120  # the design is on a 120 x 120 grid
+NAVY = (30, 58, 95, 255)
+WHITE = (255, 255, 255, 255)
+
+
+def bezier(p0, p1, p2, p3, n=80):
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        u = 1 - t
+        pts.append(tuple(u**3 * a + 3 * u**2 * t * b + 3 * u * t**2 * c + t**3 * d for a, b, c, d in zip(p0, p1, p2, p3)))
+    return pts
 
 
 def draw():
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
-    # teal gradient tile
-    grad = Image.new("RGBA", (S, S))
-    gd = ImageDraw.Draw(grad)
-    for y in range(S):
-        t = y / S
-        c = (int(20 + 10 * t), int(150 - 40 * t), int(140 - 30 * t), 255)
-        gd.line([(0, y), (S, y)], fill=c)
-    mask = Image.new("L", (S, S), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([40, 40, S - 40, S - 40], radius=220, fill=255)
-    img.paste(grad, (0, 0), mask)
     d = ImageDraw.Draw(img)
-    white = (255, 255, 255, 255)
-    soft = (255, 255, 255, 170)
-    # wave bars on the right, text lines on the left (the transcript reads right to left)
-    bars = [120, 260, 400, 300, 180]
-    x = 610
-    for h in bars:
-        d.rounded_rectangle([x, 512 - h // 2, x + 52, 512 + h // 2], radius=26, fill=white)
-        x += 76
-    for i, w in enumerate([330, 250, 300]):
-        y = 372 + i * 110
-        d.rounded_rectangle([520 - w, y, 520, y + 52], radius=26, fill=soft if i else white)
+    d.rounded_rectangle([4 * K, 4 * K, 116 * K, 116 * K], radius=28 * K, fill=NAVY)
+    # the drop: two curves from the tip into a round belly
+    left = bezier((60, 16), (60, 16), (30, 52), (30, 72))
+    right = bezier((90, 72), (90, 52), (60, 16), (60, 16))
+    belly = [(60 - 30 * math.cos(i * math.pi / 80), 72 + 30 * math.sin(i * math.pi / 80)) for i in range(81)]
+    d.polygon([(x * K, y * K) for x, y in left + belly + right], fill=WHITE)
+    # the wave
+    for x, y0, y1 in [(46, 70, 80), (55, 62, 88), (64, 66, 84), (73, 70, 80)]:
+        d.rounded_rectangle([(x - 3) * K, (y0 - 3) * K, (x + 3) * K, (y1 + 3) * K], radius=3 * K, fill=NAVY)
     return img
 
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tafreegh",
+  "productName": "Dawwin",
   "version": "1.0.0",
-  "identifier": "app.tafreegh.desktop",
+  "identifier": "app.dawwin.desktop",
   "build": {
     "frontendDist": "../ui"
   },
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Tafreegh · Arabic transcription",
+        "title": "Dawwin · Arabic transcription",
         "width": 1200,
         "height": 800,
         "minWidth": 880,
@@ -40,7 +40,7 @@
     "shortDescription": "Local Arabic speech-to-text",
     "longDescription": "Transcribes Arabic and English recordings on this computer with Cohere Transcribe Arabic.",
     "publisher": "Baraa Jadaan",
-    "homepage": "https://github.com/BaraaJadaan/tafreegh",
+    "homepage": "https://github.com/BaraaJadaan/dawwin",
     "copyright": "© 2026 Baraa Jadaan, MIT License",
     "license": "MIT"
   }

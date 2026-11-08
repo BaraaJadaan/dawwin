@@ -31,16 +31,56 @@ pub fn no_window(_cmd: &mut Command) {}
 
 #[derive(Clone, Debug)]
 pub struct Paths {
-    /// %LOCALAPPDATA%\Tafreegh: the Python env, the worker script, uv, caches, logs, the model by default
+    /// %LOCALAPPDATA%\Dawwin: the Python env, the worker script, uv, caches, logs, the model by default
     pub local: PathBuf,
-    /// %APPDATA%\Tafreegh: transcripts (history), settings
+    /// %APPDATA%\Dawwin: transcripts (history), settings
     pub roaming: PathBuf,
+}
+
+/// The app used to be called Tafreegh. Move what it stored, item by item: the installer may
+/// already have made the new folder, and the old one also holds the old install.
+fn adopt_old_data(old: &Path, new: &Path, items: &[&str]) {
+    for item in items {
+        let (from, to) = (old.join(item), new.join(item));
+        if from.exists() && !to.exists() {
+            let _ = std::fs::create_dir_all(new);
+            let _ = std::fs::rename(from, to);
+        }
+    }
+}
+
+/// Settings saved by the old app can point at a model inside the folder that just moved.
+fn repoint_settings(file: &Path, old: &Path, new: &Path) {
+    let Ok(bytes) = std::fs::read(file) else { return };
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
+    let mut changed = false;
+    for key in ["model_dir", "download_dir"] {
+        let moved = v.get(key).and_then(|d| d.as_str()).and_then(|d| Path::new(d).strip_prefix(old).ok()).map(|rest| new.join(rest));
+        if let Some(moved) = moved {
+            v[key] = moved.display().to_string().into();
+            changed = true;
+        }
+    }
+    if changed {
+        if let Ok(text) = serde_json::to_vec_pretty(&v) {
+            let _ = std::fs::write(file, text);
+        }
+    }
 }
 
 impl Paths {
     pub fn new() -> Result<Self> {
-        let local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Tafreegh");
-        let roaming = dirs::data_dir().context("no APPDATA")?.join("Tafreegh");
+        let local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Dawwin");
+        let roaming = dirs::data_dir().context("no APPDATA")?.join("Dawwin");
+        let old_local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Tafreegh");
+        let old_roaming = dirs::data_dir().context("no APPDATA")?.join("Tafreegh");
+        adopt_old_data(&old_local, &local, &["pyenv", "models", "bin", "cache", "logs", "engine"]);
+        adopt_old_data(&old_roaming, &roaming, &["history", "settings.json", "hf-token"]);
+        let old_marker = local.join("pyenv").join("tafreegh-env.json");
+        if old_marker.is_file() {
+            let _ = std::fs::rename(&old_marker, local.join("pyenv").join("dawwin-env.json"));
+        }
+        repoint_settings(&roaming.join("settings.json"), &old_local, &local);
         let p = Paths { local, roaming };
         for d in [p.engine_dir(), p.cache_dir(), p.logs_dir(), p.history_dir()] {
             std::fs::create_dir_all(&d).with_context(|| format!("cannot create {}", d.display()))?;
@@ -84,7 +124,7 @@ impl Paths {
         self.roaming.join("hf-token")
     }
     fn env_marker(&self) -> PathBuf {
-        self.env_dir().join("tafreegh-env.json")
+        self.env_dir().join("dawwin-env.json")
     }
 
     /// Write the embedded worker script next to the env (it changes with app updates).
@@ -127,6 +167,9 @@ pub struct Settings {
     /// Ask GitHub for a newer version when the app starts (off unless the user turns it on)
     #[serde(default)]
     pub check_updates: bool,
+    /// What transcribing a folder writes next to each recording; unset means text only
+    #[serde(default)]
+    pub folder_formats: Option<Vec<String>>,
 }
 
 impl Settings {
@@ -136,6 +179,10 @@ impl Settings {
             Some("cpu-exact") => "cpu-exact",
             _ => "auto",
         }
+    }
+
+    pub fn folder_formats(&self) -> Vec<String> {
+        self.folder_formats.clone().unwrap_or_else(|| vec!["txt".to_string()])
     }
 }
 
@@ -181,7 +228,7 @@ pub fn forget_token(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-/// "app" (pasted in Tafreegh), "env" (HF_TOKEN), "hf-login" (hf auth login), or "" (none)
+/// "app" (pasted in Dawwin), "env" (HF_TOKEN), "hf-login" (hf auth login), or "" (none)
 pub fn token_source(paths: &Paths) -> &'static str {
     if app_token(paths).is_some() {
         "app"
@@ -203,7 +250,7 @@ pub fn find_exe(name: &str) -> Option<PathBuf> {
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     if let Some(l) = dirs::data_local_dir() {
-        dirs.push(l.join("Tafreegh").join("bin"));
+        dirs.push(l.join("Dawwin").join("bin"));
         dirs.push(l.join("Microsoft").join("WinGet").join("Links"));
     }
     if let Some(h) = dirs::home_dir() {
@@ -539,8 +586,43 @@ mod tests {
     }
 
     #[test]
+    fn old_data_moves_even_when_the_new_folder_exists() {
+        let root = std::env::temp_dir().join(format!("dawwin-adopt-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (old, new) = (root.join("Tafreegh"), root.join("Dawwin"));
+        std::fs::create_dir_all(old.join("pyenv")).unwrap();
+        std::fs::create_dir_all(old.join("logs")).unwrap();
+        std::fs::create_dir_all(new.join("logs")).unwrap();
+        std::fs::write(old.join("pyenv/python.exe"), b"x").unwrap();
+        std::fs::write(old.join("tafreegh.exe"), b"old app").unwrap();
+        std::fs::write(new.join("dawwin.exe"), b"new app").unwrap();
+        adopt_old_data(&old, &new, &["pyenv", "logs", "models"]);
+        assert!(new.join("pyenv/python.exe").is_file());
+        assert!(!old.join("pyenv").exists());
+        assert!(old.join("logs").exists(), "what the new folder already has is left alone");
+        assert!(old.join("tafreegh.exe").is_file(), "the old install is not touched");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn settings_follow_the_moved_folder() {
+        let root = std::env::temp_dir().join(format!("dawwin-repoint-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let (old, new) = (root.join("Tafreegh"), root.join("Dawwin"));
+        let file = root.join("settings.json");
+        let inside = old.join("models").join("m").display().to_string();
+        std::fs::write(&file, serde_json::json!({ "model_dir": inside, "download_dir": "D:\\elsewhere" }).to_string()).unwrap();
+        repoint_settings(&file, &old, &new);
+        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(v["model_dir"], new.join("models").join("m").display().to_string());
+        assert_eq!(v["download_dir"], "D:\\elsewhere");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn rejects_folders_without_the_model() {
-        let d = std::env::temp_dir().join(format!("tafreegh-test-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("dawwin-test-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("config.json"), "{\"model_type\": \"cohere_asr\"}").unwrap();
         let err = validate_model_dir(&d).unwrap_err().to_string();

@@ -8,8 +8,8 @@ const root = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "
 const { version } = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
 const release = join(root, "src-tauri", "target", "release");
 const files = [
-  [join(release, "bundle", "nsis", `Tafreegh_${version}_x64-setup.exe`), `Tafreegh_${version}_x64-setup.exe`],
-  [join(release, "tafreegh.exe"), `Tafreegh_${version}_x64-portable.exe`],
+  [join(release, "bundle", "nsis", `Dawwin_${version}_x64-setup.exe`), `Dawwin_${version}_x64-setup.exe`],
+  [join(release, "dawwin.exe"), `Dawwin_${version}_x64-portable.exe`],
 ];
 
 const dist = join(root, "dist");
@@ -23,4 +23,4 @@ for (const [from, name] of files) {
   sums.push(`${createHash("sha256").update(readFileSync(from)).digest("hex")}  ${name}`);
 }
 writeFileSync(join(dist, "SHA256SUMS.txt"), sums.join("\n") + "\n");
-console.log(`dist/ now holds Tafreegh ${version}:\n  ${files.map(([, n]) => n).join("\n  ")}\n  SHA256SUMS.txt`);
+console.log(`dist/ now holds Dawwin ${version}:\n  ${files.map(([, n]) => n).join("\n  ")}\n  SHA256SUMS.txt`);

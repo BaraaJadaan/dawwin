@@ -112,19 +112,19 @@ impl PythonWorker {
             cmd.env_remove("HF_HUB_OFFLINE").env_remove("TRANSFORMERS_OFFLINE");
         }
         match &opts.model_dir {
-            Some(d) => cmd.env("TAFREEGH_MODEL", d),
-            None => cmd.env_remove("TAFREEGH_MODEL"),
+            Some(d) => cmd.env("DAWWIN_MODEL", d),
+            None => cmd.env_remove("DAWWIN_MODEL"),
         };
         if let Some(t) = &opts.token {
             cmd.env("HF_TOKEN", t);
         }
-        cmd.env("TAFREEGH_LANG", crate::i18n::lang());
+        cmd.env("DAWWIN_LANG", crate::i18n::lang());
         // the worker exits by itself if the app goes away
-        cmd.env("TAFREEGH_PARENT_PID", std::process::id().to_string());
+        cmd.env("DAWWIN_PARENT_PID", std::process::id().to_string());
         match opts.run_on.as_str() {
-            "cpu-fast" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "int8"),
-            "cpu-exact" => cmd.env("TAFREEGH_DEVICE", "cpu").env("TAFREEGH_CPU_MODE", "bf16"),
-            _ => cmd.env_remove("TAFREEGH_DEVICE").env("TAFREEGH_CPU_MODE", "int8"),
+            "cpu-fast" => cmd.env("DAWWIN_DEVICE", "cpu").env("DAWWIN_CPU_MODE", "int8"),
+            "cpu-exact" => cmd.env("DAWWIN_DEVICE", "cpu").env("DAWWIN_CPU_MODE", "bf16"),
+            _ => cmd.env_remove("DAWWIN_DEVICE").env("DAWWIN_CPU_MODE", "int8"),
         };
         no_window(&mut cmd);
         let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", paths.python().display()))?;

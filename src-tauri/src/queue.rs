@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter};
 
 use crate::audio::{self, SR};
 use crate::engine::{Audio, Engine, EventSink, OutOfMemory, PythonWorker, WorkerOptions};
+use crate::folder;
 use crate::history;
 use crate::setup::{self, ModelStatus, Paths, Settings};
 use crate::transcript::{collapse_loops, find_loop, Segment, Transcript};
@@ -25,6 +26,7 @@ const BATCH: usize = 4;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 pub const MODEL_LABEL: &str = "Cohere Transcribe Arabic (07-2026)";
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing"];
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct JobView {
@@ -40,6 +42,17 @@ pub struct JobView {
     pub duration_s: f64,
     pub error: Option<String>,
     pub saved: bool,
+    /// Came from a folder: its transcript is also written next to the recording
+    pub folder: bool,
+}
+
+/// What transcribing a folder found.
+#[derive(Clone, Debug, Serialize)]
+pub struct FolderScan {
+    /// The jobs it started
+    pub added: Vec<String>,
+    /// Recordings with a finished transcript, or already in the queue
+    pub already: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -94,6 +107,8 @@ pub struct SetupView {
     pub repo_url: String,
     /// Check for a newer version at startup
     pub check_updates: bool,
+    /// What transcribing a folder writes next to each recording
+    pub folder_formats: Vec<String>,
     pub download: DownloadView,
     pub hf_home: String,
     pub data_dir: String,
@@ -197,9 +212,9 @@ impl Core {
         let env_ready = setup::env_ready(&self.paths);
         let env_backend = setup::env_backend(&self.paths);
         let model = self.model_status();
-        let (run_on, ui_lang, dl_total, check_updates) = {
+        let (run_on, ui_lang, dl_total, check_updates, folder_formats) = {
             let st = self.settings.lock().unwrap();
-            (st.run_on().to_string(), st.ui_lang.clone(), st.download_total, st.check_updates)
+            (st.run_on().to_string(), st.ui_lang.clone(), st.download_total, st.check_updates, st.folder_formats())
         };
         let on_disk = if model.found { 0 } else { setup::downloaded_bytes(std::path::Path::new(&model.download_dir)) };
         self.update(|s| {
@@ -217,6 +232,7 @@ impl Core {
             st.run_on = run_on;
             st.ui_lang = ui_lang;
             st.check_updates = check_updates;
+            st.folder_formats = folder_formats;
             st.app_version = crate::updates::VERSION.into();
             st.repo_url = format!("https://github.com/{}", crate::updates::REPO);
             // a paused or interrupted download: show how far it got, from the files on disk
@@ -335,6 +351,48 @@ impl Core {
     // ------------------------------------------------------------ queue
 
     pub fn enqueue(&self, paths: Vec<String>, language: String) -> Vec<String> {
+        self.add_jobs(paths, language, false)
+    }
+
+    /// Every recording under `dir` that has no finished transcript yet. One that has gets
+    /// any file it is missing next to it, without being transcribed again.
+    pub fn enqueue_folder(&self, dir: &std::path::Path, language: String) -> FolderScan {
+        let finished: std::collections::HashMap<String, String> = history::list(&self.paths.history_dir())
+            .into_iter()
+            .filter(|h| !h.partial)
+            .map(|h| (folder::same_file_key(&h.source_path), h.id))
+            .collect();
+        let active: std::collections::HashSet<String> = self
+            .snapshot()
+            .queue
+            .iter()
+            .filter(|j| ACTIVE_JOB.contains(&j.status.as_str()))
+            .map(|j| folder::same_file_key(&j.path))
+            .collect();
+        let formats = self.settings.lock().unwrap().folder_formats();
+        let mut todo = Vec::new();
+        let mut already = 0;
+        for rec in folder::recordings_in(dir) {
+            let path = rec.display().to_string();
+            let key = folder::same_file_key(&path);
+            if active.contains(&key) {
+                already += 1;
+            } else if let Some(id) = finished.get(&key) {
+                already += 1;
+                let missing = folder::missing_outputs(&rec, &formats);
+                if !missing.is_empty() {
+                    if let Ok(t) = self.transcript(id) {
+                        let _ = folder::write_outputs(&t, &missing);
+                    }
+                }
+            } else {
+                todo.push(path);
+            }
+        }
+        FolderScan { added: self.add_jobs(todo, language, true), already }
+    }
+
+    fn add_jobs(&self, paths: Vec<String>, language: String, from_folder: bool) -> Vec<String> {
         let mut ids = Vec::new();
         for p in paths {
             let path = PathBuf::from(&p);
@@ -351,6 +409,7 @@ impl Core {
                 path: p,
                 language: language.clone(),
                 status: "queued".into(),
+                folder: from_folder,
                 ..Default::default()
             };
             self.update(|s| s.queue.push(job));
@@ -369,6 +428,13 @@ impl Core {
                 j.status = "cancelled".into();
             }
         });
+    }
+
+    pub fn cancel_all(&self) {
+        let ids: Vec<String> = self.snapshot().queue.into_iter().filter(|j| ACTIVE_JOB.contains(&j.status.as_str())).map(|j| j.id).collect();
+        for id in ids {
+            self.cancel(&id);
+        }
     }
 
     pub fn dismiss(&self, id: &str) {
@@ -686,6 +752,13 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     if let Some(e) = failure {
         core.update_job(id, |j| j.saved = saved);
         return Err(e);
+    }
+    if job.folder && saved && !cancelled {
+        let formats = core.settings.lock().unwrap().folder_formats();
+        if let Err(e) = folder::write_outputs(&t, &formats) {
+            core.update_job(id, |j| j.saved = saved);
+            return Err(anyhow!(crate::tr!("Transcribed, but the files could not be saved next to the recording: {}", e)));
+        }
     }
     core.update_job(id, |j| {
         j.status = if cancelled { "cancelled".into() } else { "done".into() };

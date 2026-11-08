@@ -1,4 +1,4 @@
-// Tafreegh UI. Plain JS over Tauri's global API (no bundler).
+// Dawwin UI. Plain JS over Tauri's global API (no bundler).
 "use strict";
 
 const T = window.__TAURI__;
@@ -8,6 +8,7 @@ const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
 const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing"]);
+const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 const MEDIA_EXT = ["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
 
 const store = {
@@ -160,6 +161,7 @@ function renderQueue() {
   if (!S.snap) return;
   const jobs = S.snap.queue.filter((j) => j.status !== "done");
   $("queue-section").hidden = jobs.length === 0;
+  $("queue-cancel-all").hidden = jobs.filter((j) => ACTIVE.has(j.status)).length < 2;
   const ul = $("queue");
   ul.innerHTML = "";
   for (const j of jobs) {
@@ -341,6 +343,14 @@ function renderSettings() {
   // updates
   $("set-version").textContent = t("set.version", { v: st.app_version });
   $("set-auto-check").checked = !!st.check_updates;
+
+  // transcribing a folder
+  const formats = $("set-folder-formats");
+  if (formats.dataset.lang !== UI_LANG) {
+    formats.dataset.lang = UI_LANG;
+    formats.innerHTML = FOLDER_FORMATS.map((f) => `<label class="toggle"><input type="checkbox" value="${f}"> <span>${esc(t("exp." + f))}</span></label>`).join("");
+  }
+  for (const box of formats.querySelectorAll("input")) box.checked = st.folder_formats.includes(box.value);
   const u = S.update, status = $("set-update-status");
   $("set-check").disabled = !!u?.checking;
   if (!u) status.innerHTML = "";
@@ -841,8 +851,13 @@ async function addFiles(paths) {
   const isMedia = (p) => MEDIA_EXT.includes((p.split(".").pop() || "").toLowerCase());
   const ok = paths.filter(isMedia);
   let skipped = 0;
-  // a dropped folder may be the model: try to import it
   for (const p of paths.filter((p) => !isMedia(p))) {
+    // a dropped folder is recordings to transcribe, unless it is the model or the model is what is being asked for
+    const wantsModel = S.view === "setup" && !S.snap.setup.model.found;
+    if (!wantsModel && (await invoke("path_kind", { path: p })) === "folder") {
+      await addFolder(p);
+      continue;
+    }
     try {
       onState(await invoke("import_model_path", { path: p }));
       toast(t("toast.modelFound"));
@@ -869,6 +884,26 @@ async function addFiles(paths) {
 async function chooseFiles() {
   const paths = await invoke("pick_files");
   if (paths.length) addFiles(paths);
+}
+
+async function addFolder(path) {
+  if (!setupComplete(S.snap)) {
+    toast(t("toast.setupFirst"));
+    showView("setup");
+    return;
+  }
+  const { added, already } = await invoke("enqueue_folder", { path, language: S.spoken });
+  S.snap = await invoke("get_state");
+  renderQueue();
+  const parts = [];
+  if (added.length) parts.push(t("toast.folderAdded", { n: added.length }));
+  if (already) parts.push(t("toast.folderAlready", { n: already }));
+  toast(parts.join(" ") || t("toast.folderEmpty"));
+}
+
+async function chooseFolder() {
+  const path = await invoke("pick_folder");
+  if (path) addFolder(path);
 }
 
 async function exportAs(fmt) {
@@ -975,8 +1010,14 @@ function onSegment({ id, segment }) {
 function wire() {
   wireListen();
   $("btn-new").onclick = () => { showView("home"); };
-  $("dropzone").addEventListener("click", (ev) => { if (!ev.target.closest(".segmented")) chooseFiles(); });
-  $("dropzone").addEventListener("keydown", (ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); chooseFiles(); } });
+  $("dropzone").addEventListener("click", (ev) => {
+    if (ev.target.closest("#home-folder")) chooseFolder();
+    else if (!ev.target.closest(".segmented")) chooseFiles();
+  });
+  $("dropzone").addEventListener("keydown", (ev) => {
+    if (ev.target === $("dropzone") && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); chooseFiles(); }
+  });
+  $("queue-cancel-all").onclick = () => invoke("cancel_all_jobs");
   for (const b of document.querySelectorAll("#dropzone .segmented button")) {
     b.onclick = (ev) => { ev.stopPropagation(); S.spoken = b.dataset.lang; store.set("lang", S.spoken); paintLang(); };
   }
@@ -1001,6 +1042,10 @@ function wire() {
   $("set-model-folder").onclick = () => invoke("reveal", { path: S.snap.setup.model.dir });
   $("set-check").onclick = () => checkUpdates(false);
   $("set-auto-check").onchange = async () => onState(await invoke("set_check_updates", { on: $("set-auto-check").checked }));
+  $("set-folder-formats").onchange = async () => {
+    const formats = [...$("set-folder-formats").querySelectorAll("input:checked")].map((i) => i.value);
+    onState(await invoke("set_folder_formats", { formats }));
+  };
   $("set-github").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url });
   $("set-issue").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url + "/issues/new" });
   for (const b of document.querySelectorAll(".tabs button")) {

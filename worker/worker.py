@@ -1,4 +1,4 @@
-"""Tafreegh inference worker: Cohere Transcribe Arabic behind a JSON-lines protocol.
+"""Dawwin inference worker: Cohere Transcribe Arabic behind a JSON-lines protocol.
 
 The Rust app starts this script with the Python env it manages and talks to it over
 stdin/stdout, one JSON object per line. Everything that is not a protocol message
@@ -27,15 +27,15 @@ sys.stdout = sys.stderr  # libraries print; keep the protocol channel clean
 SR = 16000
 MODEL_ID = "CohereLabs/cohere-transcribe-arabic-07-2026"
 # The folder the app found or imported the model in (falls back to the Hugging Face cache)
-MODEL = os.environ.get("TAFREEGH_MODEL") or MODEL_ID
+MODEL = os.environ.get("DAWWIN_MODEL") or MODEL_ID
 # "cpu" runs on the processor even when a CUDA GPU is there (the app's "Run on" setting)
-FORCE_CPU = os.environ.get("TAFREEGH_DEVICE", "").lower() == "cpu"
+FORCE_CPU = os.environ.get("DAWWIN_DEVICE", "").lower() == "cpu"
 # What a model folder needs; the repo's audio examples and README are left out
 PATTERNS = ["*.json", "*.safetensors", "tokenizer.model", "*.py"]
 _lock = threading.Lock()
 
-# Messages the user sees, in the app's interface language (TAFREEGH_LANG)
-LANG = os.environ.get("TAFREEGH_LANG", "en")
+# Messages the user sees, in the app's interface language (DAWWIN_LANG)
+LANG = os.environ.get("DAWWIN_LANG", "en")
 _AR = {
     "Hugging Face did not accept the token. Check it, or make a new read token.":
         "لم يقبل Hugging Face الرمز. تحقّق منه أو أنشئ رمز قراءة جديدًا.",
@@ -129,7 +129,7 @@ class Engine:
                 self.model = CohereAsrForConditionalGeneration.from_pretrained(
                     MODEL, device_map=device, dtype=self.dtype
                 ).eval()
-                if device == "cpu" and os.environ.get("TAFREEGH_CPU_MODE", "int8") == "int8":
+                if device == "cpu" and os.environ.get("DAWWIN_CPU_MODE", "int8") == "int8":
                     send({"event": "loading", "device": device, "step": "optimizing for the CPU"})
                     self.model = quantize_for_cpu(self.model)
                     self.dtype = "int8"
@@ -458,7 +458,7 @@ except Exception:  # pragma: no cover
 def watch_parent():
     """Exit when the app is gone (closed or killed), even in the middle of a long download:
     otherwise an orphaned worker would keep downloading into the same .part file."""
-    ppid = int(os.environ.get("TAFREEGH_PARENT_PID", "0") or 0)
+    ppid = int(os.environ.get("DAWWIN_PARENT_PID", "0") or 0)
     if not ppid:
         return
     try:

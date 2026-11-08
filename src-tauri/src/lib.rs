@@ -1,7 +1,8 @@
-//! Tafreegh: local Arabic speech-to-text. The commands the UI calls.
+//! Dawwin: local Arabic speech-to-text. The commands the UI calls.
 
 mod audio;
 mod engine;
+mod folder;
 mod history;
 pub mod i18n;
 mod queue;
@@ -113,7 +114,7 @@ fn set_ui_language(app: AppHandle, lang: String) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>();
     core.set_ui_lang(&lang).map_err(e)?;
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_title(&crate::tr!("Tafreegh · Arabic transcription"));
+        let _ = w.set_title(&crate::tr!("Dawwin · Arabic transcription"));
     }
     Ok(core.snapshot())
 }
@@ -146,14 +147,13 @@ fn open_url(url: String) -> R<()> {
     Ok(())
 }
 
-const AUDIO_EXT: &[&str] = &["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
 
 #[tauri::command]
 async fn pick_files(app: AppHandle) -> Vec<String> {
     app.dialog()
         .file()
         .set_title(crate::tr!("Choose recordings to transcribe"))
-        .add_filter(crate::tr!("Audio and video"), AUDIO_EXT)
+        .add_filter(crate::tr!("Audio and video"), folder::MEDIA_EXT)
         .add_filter(crate::tr!("All files"), &["*"])
         .blocking_pick_files()
         .unwrap_or_default()
@@ -164,9 +164,52 @@ async fn pick_files(app: AppHandle) -> Vec<String> {
 }
 
 #[tauri::command]
+async fn pick_folder(app: AppHandle) -> Option<String> {
+    app.dialog()
+        .file()
+        .set_title(crate::tr!("Choose a folder to transcribe"))
+        .blocking_pick_folder()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.display().to_string())
+}
+
+fn spoken(language: &str) -> String {
+    if language == "en" { "en" } else { "ar" }.to_string()
+}
+
+#[tauri::command]
 fn enqueue(core: C, paths: Vec<String>, language: String) -> Vec<String> {
-    let lang = if language == "en" { "en" } else { "ar" };
-    core.enqueue(paths, lang.to_string())
+    core.enqueue(paths, spoken(&language))
+}
+
+#[tauri::command]
+fn enqueue_folder(core: C, path: String, language: String) -> queue::FolderScan {
+    core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language))
+}
+
+/// What a dropped path is: a model folder to import, a folder to transcribe, or something else.
+#[tauri::command]
+fn path_kind(path: String) -> &'static str {
+    let p = PathBuf::from(path.replace('/', "\\"));
+    if !p.is_dir() {
+        "other"
+    } else if setup::validate_model_dir(&p).is_ok() {
+        "model"
+    } else {
+        "folder"
+    }
+}
+
+#[tauri::command]
+fn set_folder_formats(core: C, formats: Vec<String>) -> R<Snapshot> {
+    let formats = formats.into_iter().filter(|f| folder::FORMATS.contains(&f.as_str())).collect();
+    core.change_settings(|s| s.folder_formats = Some(formats)).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+#[tauri::command]
+fn cancel_all_jobs(core: C) {
+    core.cancel_all();
 }
 
 #[tauri::command]
@@ -257,6 +300,9 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
         "srt" => ("srt", crate::tr!("SubRip subtitles")),
         "vtt" => ("vtt", crate::tr!("WebVTT subtitles")),
         "docx" => ("docx", crate::tr!("Word document")),
+        "csv" => ("csv", "CSV".to_string()),
+        "tsv" => ("tsv", "TSV".to_string()),
+        "json" => ("json", "JSON".to_string()),
         _ => return Err(format!("unknown format {format}")),
     };
     let mut dlg = app
@@ -285,14 +331,7 @@ fn export_to_path(core: C, id: String, path: String, stamps: bool) -> R<String> 
 }
 
 fn write_export(t: &Transcript, ext: &str, stamps: bool, dest: &std::path::Path) -> R<()> {
-    let bytes: Vec<u8> = match ext {
-        "txt" => transcript::to_txt(t, stamps).into_bytes(),
-        "md" => transcript::to_md(t, stamps).into_bytes(),
-        "srt" => transcript::to_srt(t).into_bytes(),
-        "vtt" => transcript::to_vtt(t).into_bytes(),
-        "docx" => transcript::to_docx(t, stamps).map_err(e)?,
-        _ => return Err(format!("unknown format .{ext}")),
-    };
+    let bytes = transcript::export_bytes(t, ext, stamps).map_err(e)?;
     std::fs::write(dest, bytes).map_err(|x| x.to_string())
 }
 
@@ -367,6 +406,11 @@ pub fn run() {
             check_updates,
             set_check_updates,
             export_to_path,
+            pick_folder,
+            enqueue_folder,
+            path_kind,
+            set_folder_formats,
+            cancel_all_jobs,
             open_url,
             pick_files,
             enqueue,
@@ -385,5 +429,5 @@ pub fn run() {
             open_log,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Tafreegh");
+        .expect("error while running Dawwin");
 }

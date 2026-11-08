@@ -1,5 +1,5 @@
 {
-  "name": "tafreegh",
+  "name": "dawwin",
   "private": true,
   "version": "1.0.0",
   "description": "Local Arabic speech-to-text (Cohere Transcribe Arabic), a Tauri desktop app",
@@ -11,6 +11,6 @@
   "devDependencies": {
     "@tauri-apps/cli": "^2"
   },
-  "repository": "github:BaraaJadaan/tafreegh",
+  "repository": "github:BaraaJadaan/dawwin",
   "license": "MIT"
 }

@@ -1,33 +1,37 @@
-# Tafreegh · تفريغ
+# Dawwin · دَوِّن
 
-Turn Arabic recordings into text on your own Windows PC. Tafreegh runs the open
+*Dawwin* means "write it down" in Arabic.
+
+Turn Arabic recordings into text on your own Windows PC. Dawwin runs the open
 [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) model
 locally. It handles dialects (Syrian, Gulf, Egyptian, …) and Arabic mixed with English terms.
 Your recordings and transcripts never leave the computer.
 
-**[Download the latest release](https://github.com/BaraaJadaan/tafreegh/releases/latest)**
+**[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)**
 
 ## Features
 
 - Drop recordings on the window: m4a, mp3, wav, WhatsApp voice notes, flac, mp4 video. Several files queue up.
+- Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
+  recordings that are already done are skipped, so a stopped run picks up where it left off.
 - The transcript appears line by line, right to left, with timestamps.
 - **Follow words**: the word being said is highlighted as the recording plays. Ctrl+click a word, or
   select text and right-click → **Play from here**, to hear it.
-- Correct lines in place, search (أ/إ/ا, ة/ه and ى/ي match), and export to Word, text, Markdown or
-  subtitles (SRT, VTT).
+- Correct lines in place, search (أ/إ/ا, ة/ه and ى/ي match), and export to Word, text, Markdown,
+  subtitles (SRT, VTT) or data (CSV, TSV, JSON).
 - Runs on an NVIDIA GPU, or on the CPU when there is none.
 - English or Arabic interface.
 
 ## Getting started
 
-1. Download `Tafreegh_x.y.z_x64-setup.exe` from [Releases](https://github.com/BaraaJadaan/tafreegh/releases)
+1. Download `Dawwin_x.y.z_x64-setup.exe` from [Releases](https://github.com/BaraaJadaan/dawwin/releases)
    and run it (or use the portable `.exe`). Windows may say the app is unrecognised: choose
    **More info → Run anyway** (see [Code signing](#code-signing-policy)).
-2. On first start, press **Set up engine**. Tafreegh installs Python and PyTorch into its own folder
+2. On first start, press **Set up engine**. Dawwin installs Python and PyTorch into its own folder
    (about 3 GB to download with an NVIDIA GPU, less without one). If the connection drops, press it again.
 3. Get the model (about 4 GB, free but gated). Sign in to Hugging Face, accept the terms on the
    [model page](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026), create a
-   [read token](https://huggingface.co/settings/tokens), paste it into Tafreegh and press
+   [read token](https://huggingface.co/settings/tokens), paste it into Dawwin and press
    **Download model**. The download resumes after interruptions. Already have the files?
    Press **Import folder** instead.
 4. Drop a recording on the window.
@@ -56,7 +60,7 @@ How the app is put together, and how to release it: [docs/how-it-works.md](docs/
 
 Contributions are welcome: bug reports, fixes, translations and new features. Please contact me
 before starting on something bigger, so we can agree on the approach: open an
-[issue](https://github.com/BaraaJadaan/tafreegh/issues) or reach me on GitHub
+[issue](https://github.com/BaraaJadaan/dawwin/issues) or reach me on GitHub
 ([@BaraaJadaan](https://github.com/BaraaJadaan)). Then send a pull request.
 
 ## Code signing policy
@@ -81,9 +85,9 @@ Settings). Those services' own privacy policies apply.
 
 ## Uninstall
 
-Uninstall Tafreegh from Windows Settings → Apps. The engine, the model and your transcripts are kept
-in case you reinstall; to remove them too, delete the folders `%LOCALAPPDATA%\Tafreegh` and
-`%APPDATA%\Tafreegh` (and the model folder, if you chose another place for it).
+Uninstall Dawwin from Windows Settings → Apps. The engine, the model and your transcripts are kept
+in case you reinstall; to remove them too, delete the folders `%LOCALAPPDATA%\Dawwin` and
+`%APPDATA%\Dawwin` (and the model folder, if you chose another place for it).
 
 ## License
 

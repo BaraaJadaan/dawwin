@@ -287,6 +287,9 @@ code { font: 12px Consolas, "Cascadia Mono", monospace; background: var(--bg); b
 .search .icon-btn { width: 24px; height: 24px; }
 .toggle { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); cursor: pointer; user-select: none; }
 .toggle input { accent-color: var(--accent); }
+.format-list { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 10px; }
+.queue-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.queue-head .linkbtn { font-size: 12px; margin-inline-end: 4px; }
 .menu-wrap { position: relative; }
 .menu {
   position: absolute; inset-inline-end: 0; top: calc(100% + 6px); z-index: 20; min-width: 180px; padding: 5px;

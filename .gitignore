@@ -5,3 +5,4 @@
 *.f32
 __pycache__/
 /dist/
+/prototypes/

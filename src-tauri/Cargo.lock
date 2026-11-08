@@ -510,6 +510,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "dawwin"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "dirs 6.0.0",
+ "rubato",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symphonia",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "zip",
+]
+
+[[package]]
 name = "dbus"
 version = "0.9.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3293,23 +3310,6 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
-]
-
-[[package]]
-name = "tafreegh"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "dirs 6.0.0",
- "rubato",
- "serde",
- "serde_json",
- "sha2",
- "symphonia",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "zip",
 ]
 
 [[package]]

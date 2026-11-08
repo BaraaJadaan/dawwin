@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::setup::no_window;
 
-pub const REPO: &str = "BaraaJadaan/tafreegh";
+pub const REPO: &str = "BaraaJadaan/dawwin";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Debug, Serialize)]
@@ -36,7 +36,7 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 pub fn check() -> Result<UpdateInfo> {
     let mut cmd = Command::new("curl.exe");
     cmd.args(["-sS", "-L", "-m", "30", "--retry", "2", "-w", "\n%{http_code}"])
-        .args(["-H", "Accept: application/vnd.github+json", "-H", "User-Agent: Tafreegh"])
+        .args(["-H", "Accept: application/vnd.github+json", "-H", "User-Agent: Dawwin"])
         .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
         .stdin(Stdio::null());
     no_window(&mut cmd);

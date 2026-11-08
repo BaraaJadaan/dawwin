@@ -180,6 +180,83 @@ pub fn to_vtt(t: &Transcript) -> String {
     out
 }
 
+/// A transcript in one of the export formats, by file extension.
+pub fn export_bytes(t: &Transcript, ext: &str, stamps: bool) -> Result<Vec<u8>> {
+    Ok(match ext {
+        "txt" => to_txt(t, stamps).into_bytes(),
+        "md" => to_md(t, stamps).into_bytes(),
+        "srt" => to_srt(t).into_bytes(),
+        "vtt" => to_vtt(t).into_bytes(),
+        "docx" => to_docx(t, stamps)?,
+        "csv" => to_csv(t).into_bytes(),
+        "tsv" => to_tsv(t).into_bytes(),
+        "json" => to_json(t).into_bytes(),
+        _ => anyhow::bail!("unknown format .{ext}"),
+    })
+}
+
+/// Seconds with three decimals, for the formats programs read.
+fn secs(sec: f64) -> String {
+    format!("{:.3}", sec.max(0.0))
+}
+
+/// Opens in Excel with the Arabic intact: UTF-8 with a BOM, quoted where needed.
+pub fn to_csv(t: &Transcript) -> String {
+    let mut out = String::from("\u{feff}start,end,text\r\n");
+    for s in visible(t) {
+        let text = s.text.trim().replace('"', "\"\"");
+        out.push_str(&format!("{},{},\"{}\"\r\n", secs(s.start), secs(s.end), text));
+    }
+    out
+}
+
+pub fn to_tsv(t: &Transcript) -> String {
+    let mut out = String::from("start\tend\ttext\n");
+    for s in visible(t) {
+        let text = s.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        out.push_str(&format!("{}\t{}\t{}\n", secs(s.start), secs(s.end), text));
+    }
+    out
+}
+
+/// The words of a line with their start times: `words` holds character offsets into the text.
+fn timed_words(s: &Segment) -> Vec<serde_json::Value> {
+    let chars: Vec<char> = s.text.chars().collect();
+    let mut out = Vec::with_capacity(s.words.len());
+    for (i, &(at, start)) in s.words.iter().enumerate() {
+        let from = (at as usize).min(chars.len());
+        let to = s.words.get(i + 1).map_or(chars.len(), |w| (w.0 as usize).min(chars.len())).max(from);
+        let word: String = chars[from..to].iter().collect();
+        let word = word.trim();
+        if !word.is_empty() {
+            out.push(serde_json::json!({ "start": (start as f64 * 1000.0).round() / 1000.0, "word": word }));
+        }
+    }
+    out
+}
+
+pub fn to_json(t: &Transcript) -> String {
+    let round = |x: f64| (x * 1000.0).round() / 1000.0;
+    let segments: Vec<serde_json::Value> = visible(t)
+        .map(|s| {
+            let mut v = serde_json::json!({ "start": round(s.start), "end": round(s.end), "text": s.text.trim() });
+            let words = timed_words(s);
+            if !words.is_empty() {
+                v["words"] = words.into();
+            }
+            v
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "title": t.title,
+        "language": t.language,
+        "duration": round(t.duration_s),
+        "model": t.model,
+        "segments": segments,
+    });
+    serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"
+}
+
 fn xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -327,5 +404,41 @@ mod tests {
         assert!(to_vtt(&t).starts_with("WEBVTT"));
         let docx = to_docx(&t, true).unwrap();
         assert_eq!(&docx[..2], b"PK");
+    }
+
+    #[test]
+    fn csv_quotes_and_opens_in_excel() {
+        let mut t = sample();
+        t.segments[0].text = "قال \"نعم\", ثم مشى".into();
+        let csv = to_csv(&t);
+        assert!(csv.starts_with("\u{feff}start,end,text\r\n"));
+        assert_eq!(csv.lines().nth(1).unwrap(), "0.000,22.000,\"قال \"\"نعم\"\", ثم مشى\"");
+        assert_eq!(csv.lines().count(), 2);
+    }
+
+    #[test]
+    fn tsv_keeps_one_row_per_line() {
+        let mut t = sample();
+        t.segments[0].text = "سطر\tفيه\nفواصل".into();
+        assert_eq!(to_tsv(&t), "start\tend\ttext\n0.000\t22.000\tسطر فيه فواصل\n");
+    }
+
+    #[test]
+    fn json_has_the_lines_and_their_words() {
+        let mut t = sample();
+        t.segments[0].text = "ثلاث زرار".into();
+        t.segments[0].words = vec![(0, 1.5), (5, 2.25)];
+        let doc: serde_json::Value = serde_json::from_str(&to_json(&t)).unwrap();
+        assert_eq!(doc["segments"].as_array().unwrap().len(), 1);
+        assert_eq!(doc["segments"][0]["text"], "ثلاث زرار");
+        assert_eq!(doc["segments"][0]["words"][0]["word"], "ثلاث");
+        assert_eq!(doc["segments"][0]["words"][1]["word"], "زرار");
+        assert_eq!(doc["segments"][0]["words"][1]["start"], 2.25);
+    }
+
+    #[test]
+    fn json_leaves_out_words_it_does_not_have() {
+        let doc: serde_json::Value = serde_json::from_str(&to_json(&sample())).unwrap();
+        assert!(doc["segments"][0].get("words").is_none());
     }
 }

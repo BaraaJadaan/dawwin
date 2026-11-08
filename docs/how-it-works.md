@@ -1,4 +1,4 @@
-# How Tafreegh works
+# How Dawwin works
 
 Notes for contributors. The README covers installing and using the app.
 
@@ -15,7 +15,8 @@ model has no Rust implementation yet.
 | `worker/worker.py` | Runs `CohereAsrForConditionalGeneration`: bf16 on CUDA, 4 chunks per batch; on the CPU it converts the linear layers to int8 (dynamic quantization), about 12× faster than bf16 on CPUs without native bf16. Also aligns words and downloads the model. |
 | `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, align words, save. |
 | `src-tauri/src/setup.rs` | Finds the model, keeps the settings, fetches uv and builds the Python env. |
-| `src-tauri/src/transcript.rs` | The transcript data and the exports (txt, md, srt, vtt, docx). |
+| `src-tauri/src/transcript.rs` | The transcript data and the exports (txt, md, srt, vtt, docx, csv, tsv, json). |
+| `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 
 ## Details worth knowing
@@ -40,11 +41,11 @@ model has no Rust implementation yet.
 
 | What | Where |
 | --- | --- |
-| Model (downloaded) | `%LOCALAPPDATA%\Tafreegh\models\cohere-transcribe-arabic-07-2026`, or the folder chosen |
-| Python env and uv | `%LOCALAPPDATA%\Tafreegh\pyenv`, `%LOCALAPPDATA%\Tafreegh\bin` |
-| Engine log | `%LOCALAPPDATA%\Tafreegh\logs\worker.log` |
-| Transcripts | `%APPDATA%\Tafreegh\history\*.json` |
-| Settings, saved Hugging Face token | `%APPDATA%\Tafreegh\settings.json`, `%APPDATA%\Tafreegh\hf-token` |
+| Model (downloaded) | `%LOCALAPPDATA%\Dawwin\models\cohere-transcribe-arabic-07-2026`, or the folder chosen |
+| Python env and uv | `%LOCALAPPDATA%\Dawwin\pyenv`, `%LOCALAPPDATA%\Dawwin\bin` |
+| Engine log | `%LOCALAPPDATA%\Dawwin\logs\worker.log` |
+| Transcripts | `%APPDATA%\Dawwin\history\*.json` |
+| Settings, saved Hugging Face token | `%APPDATA%\Dawwin\settings.json`, `%APPDATA%\Dawwin\hf-token` |
 
 ## Adding a language
 

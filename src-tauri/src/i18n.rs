@@ -71,6 +71,8 @@ static AR: &[(&str, &str)] = &[
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),
     ("Audio and video", "صوت وفيديو"),
+    ("Choose a folder to transcribe", "اختر مجلدًا لتفريغه"),
+    ("Transcribed, but the files could not be saved next to the recording: {}", "تم التفريغ، لكن تعذّر حفظ الملفات بجانب التسجيل: {}"),
     ("All files", "كل الملفات"),
     ("This transcript is still being written. Edit it when it is done.", "ما زال هذا التفريغ قيد الكتابة. عدّله بعد اكتماله."),
     ("A title cannot be empty.", "لا يمكن أن يكون العنوان فارغًا."),
@@ -81,7 +83,7 @@ static AR: &[(&str, &str)] = &[
     ("Word document", "مستند Word"),
     ("Where should the model (about 4 GB) be saved?", "أين يُحفظ النموذج (نحو 4 غيغابايت)؟"),
     ("Choose the folder with the model files (config.json, model.safetensors, tokenizer…)", "اختر مجلد ملفات النموذج (config.json وmodel.safetensors والمُرمِّز…)"),
-    ("Tafreegh · Arabic transcription", "تفريغ · تحويل الكلام العربي إلى نص"),
+    ("Dawwin · Arabic transcription", "دَوِّن · تحويل الكلام العربي إلى نص"),
     // audio
     ("ffmpeg could not read the file: {}", "تعذّر على ffmpeg قراءة الملف: {}"),
     ("unsupported format ({}); install ffmpeg for this file type", "صيغة غير مدعومة ({})؛ ثبّت ffmpeg لهذا النوع من الملفات"),

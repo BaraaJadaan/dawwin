@@ -1,4 +1,4 @@
-//! Past transcripts, one JSON file each in %APPDATA%\Tafreegh\history.
+//! Past transcripts, one JSON file each in %APPDATA%\Dawwin\history.
 
 use std::path::{Path, PathBuf};
 
@@ -15,6 +15,7 @@ pub struct Summary {
     pub duration_s: f64,
     pub partial: bool,
     pub preview: String,
+    pub source_path: String,
 }
 
 fn file(dir: &Path, id: &str) -> Result<PathBuf> {
@@ -70,6 +71,7 @@ pub fn list(dir: &Path) -> Vec<Summary> {
                 duration_s: t.duration_s,
                 partial: t.partial,
                 preview,
+                source_path: t.source_path,
             }
         })
         .collect();

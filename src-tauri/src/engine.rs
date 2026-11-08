@@ -1,15 +1,14 @@
 //! The speech-to-text engine, behind one interface.
 //!
-//! Today the only engine is [`PythonWorker`]: Cohere Transcribe Arabic running in
-//! Transformers/PyTorch in a child process. A native engine (ONNX via `ort`, or a
-//! `candle` port) can replace it by implementing [`Engine`]; nothing else changes.
+//! [`EngineProcess`] runs `dawwin-engine.exe` (Cohere Transcribe Arabic through transcribe.cpp) in
+//! a child process and talks JSON lines with it. A crash in there, in a GPU driver say, ends that
+//! process and not the app.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -26,13 +25,22 @@ pub struct Audio {
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct EngineInfo {
+    /// "gpu" | "cpu"
     pub device: String,
     pub gpu: Option<String>,
-    pub vram_used_gb: Option<f64>,
-    /// "bfloat16" | "int8"
-    pub dtype: Option<String>,
-    /// Why it runs on the CPU although a GPU was wanted
+    pub vram_total_gb: Option<f64>,
+    /// How many pieces of audio to send at once
+    pub batch: usize,
+    /// Why it runs on the CPU although a GPU was wanted: "gpu-too-small" | "gpu-failed"
     pub fallback: Option<String>,
+}
+
+/// What the engine made of one piece of audio.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Recognized {
+    pub text: String,
+    /// The model looped or ran out of tokens: the text ends before the audio does
+    pub stopped: bool,
 }
 
 pub trait Engine: Send {
@@ -40,18 +48,13 @@ pub trait Engine: Send {
     fn start_loading(&mut self) -> Result<()>;
     /// Load the model if needed and say where it runs.
     fn ensure_loaded(&mut self) -> Result<EngineInfo>;
-    /// Transcribe the sample ranges `[start, end)` of `audio` as one batch: one text per range.
-    fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<String>>;
+    /// Transcribe the sample ranges `[start, end)` of `audio` as one batch: one result per range.
+    fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>>;
     /// Let the audio's cached data go.
     fn forget(&mut self, audio_id: &str);
-    /// When each word of `texts` (spoken in `ranges`) starts: per text, (character offset, seconds
-    /// from the start of `audio`). An engine that cannot align returns empty lists.
-    fn align(&mut self, _audio: &Audio, ranges: &[(usize, usize)], _texts: &[String], _language: &str) -> Result<Vec<Vec<(u32, f32)>>> {
-        Ok(vec![Vec::new(); ranges.len()])
-    }
 }
 
-/// Errors that mean "try again with a smaller batch".
+/// "Try again with a smaller batch."
 #[derive(Debug)]
 pub struct OutOfMemory(pub String);
 impl std::fmt::Display for OutOfMemory {
@@ -61,73 +64,39 @@ impl std::fmt::Display for OutOfMemory {
 }
 impl std::error::Error for OutOfMemory {}
 
-pub type EventSink = Arc<dyn Fn(&Value) + Send + Sync>;
-
-#[derive(Default)]
-pub struct WorkerOptions {
-    /// No network: set when the model is on disk
-    pub offline: bool,
-    /// The folder the model loads from
-    pub model_dir: Option<PathBuf>,
-    /// A Hugging Face token the user gave the app (only needed to download)
-    pub token: Option<String>,
-    /// "auto" | "cpu-fast" | "cpu-exact"
-    pub run_on: String,
+/// The engine itself failed, as opposed to the recording it was given.
+#[derive(Debug)]
+pub struct EngineFailed(pub String);
+impl std::fmt::Display for EngineFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
+impl std::error::Error for EngineFailed {}
 
-pub struct PythonWorker {
+pub struct EngineProcess {
     child: Child,
     stdin: ChildStdin,
     replies: Receiver<Value>,
     next_id: u64,
+    model: String,
     pending_load: Option<u64>,
     loaded: Option<EngineInfo>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     cache_dir: PathBuf,
     raw_files: Vec<(String, PathBuf)>,
-    /// When set, a request being waited on is abandoned and the process killed.
-    pub abort: Option<Arc<AtomicBool>>,
 }
 
-impl PythonWorker {
-    /// Start the worker. `offline` stops Hugging Face from touching the network
-    /// (set it once the model is in the cache).
-    pub fn spawn(paths: &Paths, opts: WorkerOptions, on_event: EventSink) -> Result<Self> {
-        paths.install_worker_files()?;
-        let mut cmd = Command::new(paths.python());
-        cmd.arg("-u")
-            .arg(paths.worker_py())
-            .env("PYTHONUTF8", "1")
-            .env("PYTHONIOENCODING", "utf-8")
-            .env("TOKENIZERS_PARALLELISM", "false")
-            .env("HF_HUB_DISABLE_TELEMETRY", "1")
-            // plain HTTP downloads resume from their .incomplete files after a dropped connection
-            .env("HF_HUB_DISABLE_XET", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        if opts.offline {
-            cmd.env("HF_HUB_OFFLINE", "1").env("TRANSFORMERS_OFFLINE", "1");
-        } else {
-            cmd.env_remove("HF_HUB_OFFLINE").env_remove("TRANSFORMERS_OFFLINE");
+impl EngineProcess {
+    /// Start the engine. `cpu_only` keeps the GPU driver out of it altogether.
+    pub fn spawn(exe: &Path, paths: &Paths, model: &str, cpu_only: bool) -> Result<Self> {
+        let mut cmd = Command::new(exe);
+        if cpu_only {
+            cmd.arg("--cpu");
         }
-        match &opts.model_dir {
-            Some(d) => cmd.env("DAWWIN_MODEL", d),
-            None => cmd.env_remove("DAWWIN_MODEL"),
-        };
-        if let Some(t) = &opts.token {
-            cmd.env("HF_TOKEN", t);
-        }
-        cmd.env("DAWWIN_LANG", crate::i18n::lang());
-        // the worker exits by itself if the app goes away
-        cmd.env("DAWWIN_PARENT_PID", std::process::id().to_string());
-        match opts.run_on.as_str() {
-            "cpu-fast" => cmd.env("DAWWIN_DEVICE", "cpu").env("DAWWIN_CPU_MODE", "int8"),
-            "cpu-exact" => cmd.env("DAWWIN_DEVICE", "cpu").env("DAWWIN_CPU_MODE", "bf16"),
-            _ => cmd.env_remove("DAWWIN_DEVICE").env("DAWWIN_CPU_MODE", "int8"),
-        };
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         no_window(&mut cmd);
-        let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", paths.python().display()))?;
+        let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", exe.display()))?;
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let stderr = child.stderr.take().unwrap();
@@ -136,9 +105,7 @@ impl PythonWorker {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(|l| l.ok()) {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-                if v.get("event").is_some() {
-                    on_event(&v);
-                } else if tx.send(v).is_err() {
+                if tx.send(v).is_err() {
                     break;
                 }
             }
@@ -146,37 +113,32 @@ impl PythonWorker {
 
         let stderr_tail = Arc::new(Mutex::new(VecDeque::with_capacity(64)));
         let tail = stderr_tail.clone();
-        let log_path = paths.logs_dir().join("worker.log");
+        let log_path = paths.logs_dir().join("engine.log");
         std::thread::spawn(move || {
             let mut log = std::fs::File::create(log_path).ok();
             for line in BufReader::new(stderr).lines().map_while(|l| l.ok()) {
                 if let Some(f) = log.as_mut() {
                     let _ = writeln!(f, "{line}");
                 }
-                // tqdm redraws with \r; keep only what a human would see last
-                let shown = line.rsplit('\r').next().unwrap_or("").trim().to_string();
-                if shown.is_empty() {
-                    continue;
-                }
                 let mut t = tail.lock().unwrap();
                 if t.len() == 60 {
                     t.pop_front();
                 }
-                t.push_back(shown);
+                t.push_back(line);
             }
         });
 
-        Ok(PythonWorker {
+        Ok(EngineProcess {
             child,
             stdin,
             replies,
             next_id: 1,
+            model: model.to_string(),
             pending_load: None,
             loaded: None,
             stderr_tail,
             cache_dir: paths.cache_dir(),
             raw_files: Vec::new(),
-            abort: None,
         })
     }
 
@@ -190,10 +152,9 @@ impl PythonWorker {
         self.next_id += 1;
         req["id"] = json!(id);
         let line = serde_json::to_string(&req)? + "\n";
-        self.stdin
-            .write_all(line.as_bytes())
-            .and_then(|_| self.stdin.flush())
-            .map_err(|e| anyhow!(crate::tr!("the engine stopped ({}). Last output:\n{}", e, self.tail())))?;
+        self.stdin.write_all(line.as_bytes()).and_then(|_| self.stdin.flush()).map_err(|e| {
+            anyhow!(EngineFailed(crate::tr!("the engine stopped ({}). Last output:\n{}", e, self.tail())))
+        })?;
         Ok(id)
     }
 
@@ -203,10 +164,6 @@ impl PythonWorker {
 
     fn wait(&mut self, id: u64) -> Result<Value> {
         loop {
-            if self.abort.as_ref().is_some_and(|a| a.load(Ordering::SeqCst)) {
-                let _ = self.child.kill();
-                bail!("stopped");
-            }
             match self.replies.recv_timeout(Duration::from_secs(1)) {
                 Ok(v) => {
                     if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
@@ -219,32 +176,25 @@ impl PythonWorker {
                     if v.get("oom").and_then(|o| o.as_bool()) == Some(true) {
                         return Err(OutOfMemory(err).into());
                     }
-                    bail!("{err}");
+                    return Err(EngineFailed(err).into());
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if let Ok(Some(status)) = self.child.try_wait() {
-                        bail!(crate::tr!("the engine exited ({}). Last output:\n{}", status, self.tail()));
+                        return Err(EngineFailed(crate::tr!("the engine exited ({}). Last output:\n{}", status, self.tail())).into());
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     let _ = self.child.wait();
-                    bail!(crate::tr!("the engine exited. Last output:\n{}", self.tail()));
+                    return Err(EngineFailed(crate::tr!("the engine exited. Last output:\n{}", self.tail())).into());
                 }
             }
         }
     }
 
-    pub fn call(&mut self, req: Value) -> Result<Value> {
-        let id = self.send(req)?;
-        self.wait(id)
-    }
-
+    /// What this computer has to run on.
     pub fn probe(&mut self) -> Result<Value> {
-        self.call(json!({"cmd": "probe"}))
-    }
-
-    pub fn download(&mut self, dest: &std::path::Path) -> Result<Value> {
-        self.call(json!({"cmd": "download", "local_dir": dest}))
+        let id = self.send(json!({"cmd": "probe"}))?;
+        self.wait(id)
     }
 
     fn raw_file(&mut self, audio: &Audio) -> Result<PathBuf> {
@@ -269,7 +219,7 @@ impl PythonWorker {
     }
 }
 
-impl Drop for PythonWorker {
+impl Drop for EngineProcess {
     fn drop(&mut self) {
         for (_, p) in self.raw_files.drain(..) {
             let _ = std::fs::remove_file(p);
@@ -280,20 +230,11 @@ impl Drop for PythonWorker {
     }
 }
 
-fn info_from(v: &Value) -> EngineInfo {
-    EngineInfo {
-        device: v.get("device").and_then(|d| d.as_str()).unwrap_or("?").to_string(),
-        gpu: v.get("gpu").and_then(|d| d.as_str()).map(String::from),
-        vram_used_gb: v.get("vram_used_gb").and_then(|d| d.as_f64()),
-        dtype: v.get("dtype").and_then(|d| d.as_str()).map(String::from),
-        fallback: v.get("fallback").and_then(|d| d.as_str()).map(String::from),
-    }
-}
-
-impl Engine for PythonWorker {
+impl Engine for EngineProcess {
     fn start_loading(&mut self) -> Result<()> {
         if self.loaded.is_none() && self.pending_load.is_none() {
-            self.pending_load = Some(self.send(json!({"cmd": "load"}))?);
+            let model = self.model.clone();
+            self.pending_load = Some(self.send(json!({"cmd": "load", "model": model}))?);
         }
         Ok(())
     }
@@ -305,54 +246,38 @@ impl Engine for PythonWorker {
         self.start_loading()?;
         let id = self.pending_load.take().unwrap();
         let v = self.wait(id)?;
-        let info = info_from(&v);
+        let info = EngineInfo {
+            device: v.get("device").and_then(|d| d.as_str()).unwrap_or("cpu").to_string(),
+            gpu: v.get("gpu").and_then(|d| d.as_str()).map(String::from),
+            vram_total_gb: v.get("vram_total_gb").and_then(|d| d.as_f64()),
+            batch: v.get("batch").and_then(|d| d.as_u64()).unwrap_or(1).max(1) as usize,
+            fallback: v.get("fallback").and_then(|d| d.as_str()).map(String::from),
+        };
         self.loaded = Some(info.clone());
         Ok(info)
     }
 
-    fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<String>> {
+    fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>> {
         self.ensure_loaded()?;
         let path = self.raw_file(audio)?;
-        let v = self.call(json!({
+        let id = self.send(json!({
             "cmd": "transcribe",
             "path": path,
             "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
             "language": language,
         }))?;
-        let texts: Vec<String> = v
-            .get("texts")
-            .and_then(|t| t.as_array())
-            .ok_or_else(|| anyhow!("engine reply has no texts"))?
-            .iter()
-            .map(|t| t.as_str().unwrap_or("").to_string())
-            .collect();
+        let v = self.wait(id)?;
+        let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
+        let stopped = v.get("stopped").and_then(|t| t.as_array());
         if texts.len() != ranges.len() {
             bail!("engine returned {} texts for {} chunks", texts.len(), ranges.len());
         }
-        Ok(texts)
-    }
-
-    fn align(&mut self, audio: &Audio, ranges: &[(usize, usize)], texts: &[String], language: &str) -> Result<Vec<Vec<(u32, f32)>>> {
-        self.ensure_loaded()?;
-        let path = self.raw_file(audio)?;
-        let v = self.call(json!({
-            "cmd": "align",
-            "path": path,
-            "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
-            "texts": texts,
-            "language": language,
-        }))?;
-        let lists = v.get("words").and_then(|w| w.as_array()).ok_or_else(|| anyhow!("engine reply has no words"))?;
-        Ok(lists
+        Ok(texts
             .iter()
-            .map(|l| {
-                l.as_array()
-                    .map(|ws| {
-                        ws.iter()
-                            .filter_map(|w| Some((w.get(0)?.as_u64()? as u32, w.get(1)?.as_f64()? as f32)))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+            .enumerate()
+            .map(|(i, t)| Recognized {
+                text: t.as_str().unwrap_or("").to_string(),
+                stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
             })
             .collect())
     }

@@ -6,3 +6,8 @@
 __pycache__/
 /dist/
 /prototypes/
+/engine/target/
+/src-tauri/engine-bin/*
+!/src-tauri/engine-bin/README.md
+# The Thamanya font's license forbids uploading the font files: they stay out of the repository
+/ui/fonts/

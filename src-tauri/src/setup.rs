@@ -1,22 +1,12 @@
-//! Where things live, which tools are installed, where the model is, and the one-time
-//! setup of the Python env the inference worker runs in.
+//! Where things live, the settings, which tools are installed, and where the model is.
 
-use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-pub const MODEL_ID: &str = "CohereLabs/cohere-transcribe-arabic-07-2026";
-pub const MODEL_URL: &str = "https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026";
-pub const TOKENS_URL: &str = "https://huggingface.co/settings/tokens";
-pub const FILES_URL: &str = "https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026/tree/main";
-pub const WORKER_PY: &str = include_str!("../../worker/worker.py");
-pub const REQUIREMENTS: &str = include_str!("../../worker/requirements.txt");
-const PYTHON_VERSION: &str = "3.12";
-const UV_VERSION: &str = "0.11.25";
+use crate::models;
 
 #[cfg(windows)]
 pub fn no_window(cmd: &mut Command) {
@@ -27,11 +17,46 @@ pub fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub fn no_window(_cmd: &mut Command) {}
 
+/// While one of these lives, the computer does not go to sleep by itself: a long download or
+/// transcription should still be running when the user comes back.
+pub struct KeepAwake;
+
+impl KeepAwake {
+    pub fn new() -> Self {
+        set_awake(true);
+        KeepAwake
+    }
+}
+
+impl Drop for KeepAwake {
+    fn drop(&mut self) {
+        set_awake(false);
+    }
+}
+
+#[cfg(windows)]
+fn set_awake(on: bool) {
+    const ES_CONTINUOUS: u32 = 0x8000_0000;
+    const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn SetThreadExecutionState(flags: u32) -> u32;
+    }
+    let flags = if on { ES_CONTINUOUS | ES_SYSTEM_REQUIRED } else { ES_CONTINUOUS };
+    // SAFETY: takes flags by value and has no other effect than the power request.
+    unsafe {
+        SetThreadExecutionState(flags);
+    }
+}
+
+#[cfg(not(windows))]
+fn set_awake(_on: bool) {}
+
 // ---------------------------------------------------------------- paths
 
 #[derive(Clone, Debug)]
 pub struct Paths {
-    /// %LOCALAPPDATA%\Dawwin: the Python env, the worker script, uv, caches, logs, the model by default
+    /// %LOCALAPPDATA%\Dawwin: caches, logs, the models by default
     pub local: PathBuf,
     /// %APPDATA%\Dawwin: transcripts (history), settings
     pub roaming: PathBuf,
@@ -49,62 +74,29 @@ fn adopt_old_data(old: &Path, new: &Path, items: &[&str]) {
     }
 }
 
-/// Settings saved by the old app can point at a model inside the folder that just moved.
-fn repoint_settings(file: &Path, old: &Path, new: &Path) {
-    let Ok(bytes) = std::fs::read(file) else { return };
-    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) else { return };
-    let mut changed = false;
-    for key in ["model_dir", "download_dir"] {
-        let moved = v.get(key).and_then(|d| d.as_str()).and_then(|d| Path::new(d).strip_prefix(old).ok()).map(|rest| new.join(rest));
-        if let Some(moved) = moved {
-            v[key] = moved.display().to_string().into();
-            changed = true;
-        }
-    }
-    if changed {
-        if let Ok(text) = serde_json::to_vec_pretty(&v) {
-            let _ = std::fs::write(file, text);
-        }
-    }
-}
-
 impl Paths {
     pub fn new() -> Result<Self> {
         let local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Dawwin");
         let roaming = dirs::data_dir().context("no APPDATA")?.join("Dawwin");
-        let old_local = dirs::data_local_dir().context("no LOCALAPPDATA")?.join("Tafreegh");
         let old_roaming = dirs::data_dir().context("no APPDATA")?.join("Tafreegh");
-        adopt_old_data(&old_local, &local, &["pyenv", "models", "bin", "cache", "logs", "engine"]);
-        adopt_old_data(&old_roaming, &roaming, &["history", "settings.json", "hf-token"]);
-        let old_marker = local.join("pyenv").join("tafreegh-env.json");
-        if old_marker.is_file() {
-            let _ = std::fs::rename(&old_marker, local.join("pyenv").join("dawwin-env.json"));
-        }
-        repoint_settings(&roaming.join("settings.json"), &old_local, &local);
+        adopt_old_data(&old_roaming, &roaming, &["history", "settings.json"]);
         let p = Paths { local, roaming };
-        for d in [p.engine_dir(), p.cache_dir(), p.logs_dir(), p.history_dir()] {
+        for d in [p.cache_dir(), p.logs_dir(), p.history_dir()] {
             std::fs::create_dir_all(&d).with_context(|| format!("cannot create {}", d.display()))?;
         }
+        p.clear_leftover_audio();
         Ok(p)
     }
-    pub fn env_dir(&self) -> PathBuf {
-        self.local.join("pyenv")
+
+    /// Audio handed to the engine is deleted after each job; a crash can leave some behind.
+    fn clear_leftover_audio(&self) {
+        for entry in std::fs::read_dir(self.cache_dir()).into_iter().flatten().flatten() {
+            if entry.path().extension().is_some_and(|x| x == "f32") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
-    pub fn python(&self) -> PathBuf {
-        self.env_dir().join("Scripts").join("python.exe")
-    }
-    pub fn engine_dir(&self) -> PathBuf {
-        self.local.join("engine")
-    }
-    pub fn worker_py(&self) -> PathBuf {
-        self.engine_dir().join("worker.py")
-    }
-    pub fn requirements(&self) -> PathBuf {
-        self.engine_dir().join("requirements.txt")
-    }
-    pub fn bin_dir(&self) -> PathBuf {
-        self.local.join("bin")
-    }
+
     pub fn cache_dir(&self) -> PathBuf {
         self.local.join("cache")
     }
@@ -115,55 +107,71 @@ impl Paths {
         self.roaming.join("history")
     }
     pub fn default_model_dir(&self) -> PathBuf {
-        self.local.join("models").join("cohere-transcribe-arabic-07-2026")
+        self.local.join("models")
     }
     fn settings_file(&self) -> PathBuf {
         self.roaming.join("settings.json")
     }
-    fn token_file(&self) -> PathBuf {
-        self.roaming.join("hf-token")
-    }
-    fn env_marker(&self) -> PathBuf {
-        self.env_dir().join("dawwin-env.json")
-    }
 
-    /// Write the embedded worker script next to the env (it changes with app updates).
-    pub fn install_worker_files(&self) -> Result<()> {
-        write_if_changed(&self.worker_py(), WORKER_PY)?;
-        write_if_changed(&self.requirements(), REQUIREMENTS)?;
-        Ok(())
+    /// What the Python engine of older versions left behind: unused now, and several gigabytes.
+    pub fn old_engine_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs = vec![
+            self.local.join("pyenv"),
+            self.local.join("bin"),
+            self.local.join("engine"),
+            self.local.join("models").join("cohere-transcribe-arabic-07-2026"),
+        ];
+        if let Some(old) = self.local.parent().map(|p| p.join("Tafreegh")) {
+            for name in ["pyenv", "bin", "engine", "cache", "logs", "models"] {
+                dirs.push(old.join(name));
+            }
+        }
+        dirs.retain(|d| d.is_dir());
+        dirs
     }
 }
 
-fn write_if_changed(path: &Path, text: &str) -> Result<()> {
-    if std::fs::read_to_string(path).ok().as_deref() != Some(text) {
-        std::fs::write(path, text)?;
+pub fn folder_size(dir: &Path) -> u64 {
+    let mut total = 0;
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                todo.push(entry.path());
+            } else if kind.is_file() {
+                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
     }
-    Ok(())
+    total
+}
+
+/// The speech engine ships in a folder next to the app.
+pub fn engine_exe() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("dawwin-engine.exe");
+    exe.is_file().then_some(exe)
 }
 
 // ---------------------------------------------------------------- settings
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Settings {
-    /// A model folder the user imported or downloaded into
+    /// The model file in use
     #[serde(default)]
-    pub model_dir: Option<String>,
-    /// Where "Download model" saves the files
+    pub model_file: Option<String>,
+    /// Where downloaded models are saved
     #[serde(default)]
     pub download_dir: Option<String>,
-    /// "auto" (GPU when there is one) | "cpu-fast" (int8) | "cpu-exact" (bf16, much slower)
+    /// "auto" (GPU when there is one) | "cpu"
     #[serde(default)]
     pub run_on: Option<String>,
     /// The interface language ("en", "ar"); unset until the UI picks one
     #[serde(default)]
     pub ui_lang: Option<String>,
-    /// A model download was started and neither finished nor paused: continue it on the next start
+    /// A model download that was running and not paused: it continues on the next start
     #[serde(default)]
-    pub download_wanted: bool,
-    /// The model download's size, once known
-    #[serde(default)]
-    pub download_total: u64,
+    pub resume_model: Option<String>,
     /// Ask GitHub for a newer version when the app starts (off unless the user turns it on)
     #[serde(default)]
     pub check_updates: bool,
@@ -173,10 +181,26 @@ pub struct Settings {
 }
 
 impl Settings {
+    pub fn load(paths: &Paths) -> Settings {
+        std::fs::read(paths.settings_file())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, paths: &Paths) -> Result<()> {
+        std::fs::create_dir_all(&paths.roaming)?;
+        // replaced in one step, so a crash cannot leave half a settings file
+        let tmp = paths.settings_file().with_extension("json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
+        std::fs::rename(&tmp, paths.settings_file())?;
+        Ok(())
+    }
+
     pub fn run_on(&self) -> &str {
         match self.run_on.as_deref() {
-            Some("cpu-fast") => "cpu-fast",
-            Some("cpu-exact") => "cpu-exact",
+            // the last two are what older versions saved
+            Some("cpu") | Some("cpu-fast") | Some("cpu-exact") => "cpu",
             _ => "auto",
         }
     }
@@ -184,393 +208,54 @@ impl Settings {
     pub fn folder_formats(&self) -> Vec<String> {
         self.folder_formats.clone().unwrap_or_else(|| vec!["txt".to_string()])
     }
-}
 
-impl Settings {
-    pub fn load(paths: &Paths) -> Settings {
-        std::fs::read(paths.settings_file())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
-    }
-    pub fn save(&self, paths: &Paths) -> Result<()> {
-        std::fs::create_dir_all(&paths.roaming)?;
-        std::fs::write(paths.settings_file(), serde_json::to_vec_pretty(self)?)?;
-        Ok(())
-    }
-}
-
-// ---------------------------------------------------------------- Hugging Face token
-
-/// The token the app was given, if any. Hugging Face's own login (`hf auth login`) or
-/// HF_TOKEN are used by the worker without the app reading them.
-pub fn app_token(paths: &Paths) -> Option<String> {
-    let t = std::fs::read_to_string(paths.token_file()).ok()?;
-    let t = t.trim().to_string();
-    (!t.is_empty()).then_some(t)
-}
-
-pub fn save_token(paths: &Paths, token: &str) -> Result<()> {
-    let t = token.trim();
-    if !t.starts_with("hf_") || t.len() < 20 || t.chars().any(char::is_whitespace) {
-        bail!(crate::tr!("That does not look like a Hugging Face token (they start with “hf_”)."));
-    }
-    std::fs::create_dir_all(&paths.roaming)?;
-    std::fs::write(paths.token_file(), t)?;
-    Ok(())
-}
-
-pub fn forget_token(paths: &Paths) -> Result<()> {
-    let f = paths.token_file();
-    if f.exists() {
-        std::fs::remove_file(f)?;
-    }
-    Ok(())
-}
-
-/// "app" (pasted in Dawwin), "env" (HF_TOKEN), "hf-login" (hf auth login), or "" (none)
-pub fn token_source(paths: &Paths) -> &'static str {
-    if app_token(paths).is_some() {
-        "app"
-    } else if std::env::var_os("HF_TOKEN").is_some_and(|v| !v.is_empty()) {
-        "env"
-    } else if hf_home().join("token").is_file() {
-        "hf-login"
-    } else {
-        ""
+    pub fn download_dir(&self, paths: &Paths) -> PathBuf {
+        self.download_dir.as_ref().map(PathBuf::from).unwrap_or_else(|| paths.default_model_dir())
     }
 }
 
 // ---------------------------------------------------------------- tools
 
-/// Find an executable on PATH, in the app's own bin folder, then where winget, uv and cargo install to.
+/// Find an executable on PATH, then where winget installs to.
 pub fn find_exe(name: &str) -> Option<PathBuf> {
     let file = format!("{name}.exe");
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
     if let Some(l) = dirs::data_local_dir() {
-        dirs.push(l.join("Dawwin").join("bin"));
         dirs.push(l.join("Microsoft").join("WinGet").join("Links"));
-    }
-    if let Some(h) = dirs::home_dir() {
-        dirs.push(h.join(".local").join("bin"));
-        dirs.push(h.join(".cargo").join("bin"));
     }
     dirs.into_iter().map(|d| d.join(&file)).find(|p| p.is_file())
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
-pub struct Tools {
-    pub uv: Option<String>,
-    pub ffmpeg: Option<String>,
-    /// NVIDIA driver version, when there is an NVIDIA GPU
-    pub nvidia_driver: Option<String>,
-}
-
-pub fn tools() -> Tools {
-    Tools {
-        uv: find_exe("uv").map(|p| p.display().to_string()),
-        ffmpeg: find_exe("ffmpeg").map(|p| p.display().to_string()),
-        nvidia_driver: nvidia_driver(),
-    }
-}
-
-fn nvidia_driver() -> Option<String> {
-    let exe = find_exe("nvidia-smi").or_else(|| {
-        let p = PathBuf::from(r"C:\Windows\System32\nvidia-smi.exe");
-        p.is_file().then_some(p)
-    })?;
-    let mut cmd = Command::new(exe);
-    cmd.args(["--query-gpu=driver_version", "--format=csv,noheader"]);
-    no_window(&mut cmd);
-    let out = cmd.output().ok()?;
-    let v = String::from_utf8_lossy(&out.stdout).lines().next()?.trim().to_string();
-    (out.status.success() && !v.is_empty()).then_some(v)
-}
-
-/// Which PyTorch build to install: CUDA 12.8 needs NVIDIA driver 572 or newer on Windows.
-fn torch_backend(driver: Option<&str>) -> &'static str {
-    match driver.and_then(|d| d.split('.').next()?.parse::<u32>().ok()) {
-        Some(major) if major >= 572 => "cu128",
-        Some(_) => "auto", // older NVIDIA driver: let uv pick the CUDA build it supports
-        None => "cpu",
-    }
-}
-
-/// uv makes the Python env. Use an installed one, else fetch the official build into the app's folder.
-fn ensure_uv(paths: &Paths, log: &dyn Fn(String)) -> Result<PathBuf> {
-    if let Some(uv) = find_exe("uv") {
-        return Ok(uv);
-    }
-    let bin = paths.bin_dir();
-    std::fs::create_dir_all(&bin)?;
-    let url = format!("https://github.com/astral-sh/uv/releases/download/{UV_VERSION}/uv-x86_64-pc-windows-msvc.zip");
-    let zip_path = bin.join("uv.zip");
-    log(crate::tr!("Downloading uv {} (the tool that builds the Python environment)…", UV_VERSION));
-    curl_download(&url, &zip_path, log)?;
-    let sums = bin.join("uv.zip.sha256");
-    curl_download(&format!("{url}.sha256"), &sums, log)?;
-    let want = std::fs::read_to_string(&sums)?.split_whitespace().next().unwrap_or("").to_lowercase();
-    let got = format!("{:x}", Sha256::digest(std::fs::read(&zip_path)?));
-    if want.len() != 64 || want != got {
-        let _ = std::fs::remove_file(&zip_path);
-        bail!(crate::tr!("The uv download is damaged (checksum mismatch). Press Set up again."));
-    }
-    let mut archive = zip::ZipArchive::new(std::fs::File::open(&zip_path)?)?;
-    for i in 0..archive.len() {
-        let mut f = archive.by_index(i)?;
-        let name = f.name().rsplit(['/', '\\']).next().unwrap_or("").to_string();
-        if name == "uv.exe" {
-            let mut bytes = Vec::new();
-            f.read_to_end(&mut bytes)?;
-            std::fs::write(bin.join("uv.exe"), bytes)?;
-        }
-    }
-    let _ = std::fs::remove_file(&zip_path);
-    let _ = std::fs::remove_file(&sums);
-    let uv = bin.join("uv.exe");
-    if !uv.is_file() {
-        bail!(crate::tr!("uv.exe was not in the downloaded archive"));
-    }
-    Ok(uv)
-}
-
-/// Download with Windows' own curl.exe: retries and resumes on a flaky connection.
-fn curl_download(url: &str, dest: &Path, log: &dyn Fn(String)) -> Result<()> {
-    let mut cmd = Command::new("curl.exe");
-    cmd.args(["-L", "--fail", "-sS", "--retry", "20", "--retry-all-errors", "--retry-delay", "3", "--connect-timeout", "30", "-C", "-", "-o"])
-        .arg(dest)
-        .arg(url);
-    run_logged(cmd, log).with_context(|| crate::tr!("download failed: {}", url))
-}
-
-// ---------------------------------------------------------------- Python env
-
-fn requirements_hash() -> String {
-    let mut h = Sha256::new();
-    h.update(REQUIREMENTS.as_bytes());
-    h.update(PYTHON_VERSION.as_bytes());
-    format!("{:x}", h.finalize())
-}
-
-/// Is the Python env there and built from the requirements this app ships?
-pub fn env_ready(paths: &Paths) -> bool {
-    env_marker(paths).is_some_and(|m| m.get("requirements").and_then(|r| r.as_str()) == Some(&requirements_hash()))
-}
-
-/// What the env was built with ("cu128", "cpu", …), if it is ready.
-pub fn env_backend(paths: &Paths) -> Option<String> {
-    env_marker(paths)?.get("torch_backend")?.as_str().map(String::from)
-}
-
-fn env_marker(paths: &Paths) -> Option<serde_json::Value> {
-    if !paths.python().is_file() {
-        return None;
-    }
-    serde_json::from_slice(&std::fs::read(paths.env_marker()).ok()?).ok()
-}
-
-/// Create (or update) the env with uv. `log` gets each line uv prints.
-pub fn setup_env(paths: &Paths, log: &dyn Fn(String)) -> Result<()> {
-    let uv = ensure_uv(paths, log)?;
-    paths.install_worker_files()?;
-    let env = paths.env_dir();
-    let driver = nvidia_driver();
-    let backend = torch_backend(driver.as_deref());
-    match &driver {
-        Some(d) => log(crate::tr!("NVIDIA driver {}: installing PyTorch for the GPU ({}).", d, backend)),
-        None => log(crate::tr!("No NVIDIA GPU found: installing the CPU build of PyTorch. Transcription will be slower.")),
-    }
-    if !paths.python().is_file() {
-        log(crate::tr!("Creating a Python {} environment in {}", PYTHON_VERSION, env.display()));
-        let mut cmd = Command::new(&uv);
-        cmd.arg("venv").arg(&env).args(["--python", PYTHON_VERSION, "--clear"]);
-        run_logged(cmd, log).with_context(|| crate::tr!("uv venv failed"))?;
-    }
-    log(if backend == "cpu" {
-        crate::tr!("Installing PyTorch and Transformers (about 1 GB the first time)…")
-    } else {
-        crate::tr!("Installing PyTorch with CUDA and Transformers (about 3 GB the first time)…")
-    });
-    let mut cmd = Command::new(&uv);
-    cmd.args(["pip", "install", "--python"])
-        .arg(paths.python())
-        .arg("-r")
-        .arg(paths.requirements())
-        .args(["--torch-backend", backend])
-        .env("UV_HTTP_TIMEOUT", "600")
-        .env("UV_HTTP_RETRIES", "10");
-    run_logged(cmd, log).with_context(|| crate::tr!("installing packages failed (press Set up again to continue)"))?;
-
-    log(crate::tr!("Checking the environment…"));
-    let mut cmd = Command::new(paths.python());
-    cmd.args([
-        "-c",
-        "import torch, transformers; print('torch', torch.__version__, '| CUDA', torch.cuda.is_available(), '| transformers', transformers.__version__)",
-    ]);
-    run_logged(cmd, log).with_context(|| crate::tr!("the new environment does not import torch"))?;
-    let marker = serde_json::json!({
-        "requirements": requirements_hash(),
-        "python": PYTHON_VERSION,
-        "torch_backend": backend,
-        "nvidia_driver": driver,
-    });
-    std::fs::write(paths.env_marker(), serde_json::to_string_pretty(&marker)?)?;
-    log(crate::tr!("Engine ready."));
-    Ok(())
-}
-
-fn run_logged(mut cmd: Command, log: &dyn Fn(String)) -> Result<()> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    cmd.env("NO_COLOR", "1").env("PYTHONUTF8", "1");
-    no_window(&mut cmd);
-    let mut child = cmd.spawn()?;
-    let out = child.stdout.take().unwrap();
-    let err = child.stderr.take().unwrap();
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
-    let tx2 = tx.clone();
-    let t1 = std::thread::spawn(move || {
-        for l in BufReader::new(out).lines().map_while(|l| l.ok()) {
-            let _ = tx.send(l);
-        }
-    });
-    let t2 = std::thread::spawn(move || {
-        for l in BufReader::new(err).lines().map_while(|l| l.ok()) {
-            let _ = tx2.send(l);
-        }
-    });
-    for line in rx {
-        let line = line.trim_end().to_string();
-        if !line.is_empty() {
-            log(line);
-        }
-    }
-    let _ = t1.join();
-    let _ = t2.join();
-    let status = child.wait()?;
-    if !status.success() {
-        bail!("exit code {:?}", status.code());
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------- model
-
-pub fn hf_home() -> PathBuf {
-    if let Some(h) = std::env::var_os("HF_HOME").filter(|v| !v.is_empty()) {
-        return PathBuf::from(h);
-    }
-    dirs::home_dir().unwrap_or_default().join(".cache").join("huggingface")
-}
-
-pub fn hub_cache() -> PathBuf {
-    if let Some(h) = std::env::var_os("HF_HUB_CACHE").filter(|v| !v.is_empty()) {
-        return PathBuf::from(h);
-    }
-    hf_home().join("hub")
-}
-
-/// How much of the model is already in the download folder (whole files and `.part` files).
-pub fn downloaded_bytes(dir: &Path) -> u64 {
-    std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .filter_map(|e| e.ok())
-        .filter_map(|e| e.metadata().ok())
-        .filter(|m| m.is_file())
-        .map(|m| m.len())
-        .sum()
-}
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct ModelStatus {
     pub found: bool,
-    /// The folder the model loads from
-    pub dir: String,
+    /// The file the model loads from
+    pub path: String,
     pub bytes: u64,
-    /// "folder" (imported or downloaded by the app) | "hf-cache" | ""
-    pub source: String,
-    /// Where "Download model" saves to
+    /// "q8" | "q4", or empty for a model file of the user's own
+    pub variant: String,
+    /// Where downloads are saved
     pub download_dir: String,
-    /// "app" | "env" | "hf-login" | ""
-    pub token: String,
-}
-
-/// Check that `dir` holds the model. A Hugging Face cache folder (`models--…`) resolves to
-/// its snapshot. Returns the folder to load from and the size of the weights.
-pub fn validate_model_dir(dir: &Path) -> Result<(PathBuf, u64)> {
-    let dir = resolve_cache_repo(dir).unwrap_or_else(|| dir.to_path_buf());
-    let need = |f: &str| -> Result<std::fs::Metadata> {
-        std::fs::metadata(dir.join(f)).map_err(|_| anyhow!(crate::tr!("{} is missing", f)))
-    };
-    let weights = need("model.safetensors")?.len();
-    let config = std::fs::read_to_string(dir.join("config.json")).map_err(|_| anyhow!(crate::tr!("{} is missing", "config.json")))?;
-    need("tokenizer_config.json")?;
-    if need("tokenizer.json").is_err() && need("tokenizer.model").is_err() {
-        bail!(crate::tr!("{} is missing", "tokenizer.json"));
-    }
-    if !config.contains("\"cohere_asr\"") {
-        bail!(crate::tr!("config.json is not a Cohere Transcribe model"));
-    }
-    if weights < 1_000_000_000 {
-        bail!(crate::tr!("model.safetensors is incomplete ({} GB)", format!("{:.1}", weights as f64 / 1e9)));
-    }
-    Ok((dir, weights))
-}
-
-/// `…/models--CohereLabs--…` (or its `snapshots` folder) → the newest complete snapshot.
-fn resolve_cache_repo(dir: &Path) -> Option<PathBuf> {
-    let repo = if dir.join("snapshots").is_dir() {
-        dir.to_path_buf()
-    } else if dir.file_name()? == "snapshots" {
-        dir.parent()?.to_path_buf()
-    } else {
-        return None;
-    };
-    if let Ok(h) = std::fs::read_to_string(repo.join("refs").join("main")) {
-        let s = repo.join("snapshots").join(h.trim());
-        if s.is_dir() {
-            return Some(s);
-        }
-    }
-    std::fs::read_dir(repo.join("snapshots"))
-        .ok()?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .find(|p| p.join("model.safetensors").exists())
 }
 
 pub fn model_status(paths: &Paths, settings: &Settings) -> ModelStatus {
-    let download_dir = settings
-        .download_dir
-        .clone()
-        .unwrap_or_else(|| paths.default_model_dir().display().to_string());
-    let token = token_source(paths).to_string();
-    let found = |dir: PathBuf, bytes: u64, source: &str| ModelStatus {
-        found: true,
-        dir: dir.display().to_string(),
-        bytes,
-        source: source.into(),
-        download_dir: download_dir.clone(),
-        token: token.clone(),
-    };
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    if let Some(d) = &settings.model_dir {
-        candidates.push(PathBuf::from(d));
+    let download_dir = settings.download_dir(paths);
+    let chosen = settings.model_file.as_ref().map(PathBuf::from).filter(|p| models::check_file(p).is_ok());
+    let found = chosen.or_else(|| models::find_in_folder(&download_dir)).or_else(|| models::find_in_folder(&paths.default_model_dir()));
+    match found {
+        Some(path) => ModelStatus {
+            found: true,
+            bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+            variant: models::variant_of(&path).map(|v| v.id.to_string()).unwrap_or_default(),
+            path: path.display().to_string(),
+            download_dir: download_dir.display().to_string(),
+        },
+        None => ModelStatus { download_dir: download_dir.display().to_string(), ..Default::default() },
     }
-    candidates.push(PathBuf::from(&download_dir));
-    candidates.push(paths.default_model_dir());
-    for c in candidates {
-        if let Ok((dir, bytes)) = validate_model_dir(&c) {
-            return found(dir, bytes, "folder");
-        }
-    }
-    let repo = hub_cache().join(format!("models--{}", MODEL_ID.replace('/', "--")));
-    if let Ok((dir, bytes)) = validate_model_dir(&repo) {
-        return found(dir, bytes, "hf-cache");
-    }
-    ModelStatus { found: false, dir: String::new(), bytes: 0, source: String::new(), download_dir, token }
 }
 
 #[cfg(test)]
@@ -578,55 +263,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn picks_the_torch_build_for_the_driver() {
-        assert_eq!(torch_backend(Some("596.36")), "cu128");
-        assert_eq!(torch_backend(Some("572.16")), "cu128");
-        assert_eq!(torch_backend(Some("551.86")), "auto");
-        assert_eq!(torch_backend(None), "cpu");
-    }
-
-    #[test]
     fn old_data_moves_even_when_the_new_folder_exists() {
         let root = std::env::temp_dir().join(format!("dawwin-adopt-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let (old, new) = (root.join("Tafreegh"), root.join("Dawwin"));
-        std::fs::create_dir_all(old.join("pyenv")).unwrap();
-        std::fs::create_dir_all(old.join("logs")).unwrap();
+        std::fs::create_dir_all(old.join("history")).unwrap();
         std::fs::create_dir_all(new.join("logs")).unwrap();
-        std::fs::write(old.join("pyenv/python.exe"), b"x").unwrap();
+        std::fs::write(old.join("history/a.json"), b"x").unwrap();
+        std::fs::write(old.join("settings.json"), b"{}").unwrap();
+        std::fs::write(new.join("settings.json"), b"{\"new\":1}").unwrap();
         std::fs::write(old.join("tafreegh.exe"), b"old app").unwrap();
-        std::fs::write(new.join("dawwin.exe"), b"new app").unwrap();
-        adopt_old_data(&old, &new, &["pyenv", "logs", "models"]);
-        assert!(new.join("pyenv/python.exe").is_file());
-        assert!(!old.join("pyenv").exists());
-        assert!(old.join("logs").exists(), "what the new folder already has is left alone");
+        adopt_old_data(&old, &new, &["history", "settings.json", "models"]);
+        assert!(new.join("history/a.json").is_file());
+        assert!(!old.join("history").exists());
+        assert_eq!(std::fs::read_to_string(new.join("settings.json")).unwrap(), "{\"new\":1}", "what is already there is kept");
         assert!(old.join("tafreegh.exe").is_file(), "the old install is not touched");
         let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
-    fn settings_follow_the_moved_folder() {
-        let root = std::env::temp_dir().join(format!("dawwin-repoint-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        let (old, new) = (root.join("Tafreegh"), root.join("Dawwin"));
-        let file = root.join("settings.json");
-        let inside = old.join("models").join("m").display().to_string();
-        std::fs::write(&file, serde_json::json!({ "model_dir": inside, "download_dir": "D:\\elsewhere" }).to_string()).unwrap();
-        repoint_settings(&file, &old, &new);
-        let v: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
-        assert_eq!(v["model_dir"], new.join("models").join("m").display().to_string());
-        assert_eq!(v["download_dir"], "D:\\elsewhere");
-        let _ = std::fs::remove_dir_all(&root);
+    fn settings_saved_by_older_versions_still_load() {
+        let old = r#"{"model_dir":"D:\\m","download_dir":"D:\\d","run_on":"cpu-fast","ui_lang":"ar","download_wanted":true,"download_total":5,"check_updates":true}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.run_on(), "cpu");
+        assert_eq!(s.ui_lang.as_deref(), Some("ar"));
+        assert!(s.check_updates);
+        assert!(s.model_file.is_none(), "the old model cannot be used by this engine");
+        assert_eq!(s.folder_formats(), ["txt"]);
     }
 
     #[test]
-    fn rejects_folders_without_the_model() {
-        let d = std::env::temp_dir().join(format!("dawwin-test-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
-        std::fs::write(d.join("config.json"), "{\"model_type\": \"cohere_asr\"}").unwrap();
-        let err = validate_model_dir(&d).unwrap_err().to_string();
-        assert!(err.contains("model.safetensors"), "{err}");
-        std::fs::remove_dir_all(&d).unwrap();
+    fn the_folder_size_adds_up_subfolders() {
+        let root = std::env::temp_dir().join(format!("dawwin-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/b")).unwrap();
+        std::fs::write(root.join("one"), vec![0u8; 100]).unwrap();
+        std::fs::write(root.join("a/b/two"), vec![0u8; 50]).unwrap();
+        assert_eq!(folder_size(&root), 150);
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -25,7 +25,7 @@ const S = {
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
   setupStep: null,     // the setup step the user opened; null = the first one not done
-  modelTab: "download", // how to get the model: "download" | "files"
+  pick: null,          // the model chosen on the setup page
   update: null,        // the last update check: {checking} | {info} | {error}
   hits: [],
   hit: -1,
@@ -99,14 +99,14 @@ function showView(v) {
   S.view = v;
   for (const id of ["home", "setup", "settings", "transcript"]) $("view-" + id).hidden = id !== v;
   $("btn-settings").classList.toggle("active", v === "settings");
-  if (v === "settings") renderSettings();
+  if (v === "settings") { renderSettings(); checkOldEngine(); }
   renderHistory();
   renderQueue();
   if (v !== "transcript") stopAudio();
 }
 
 function setupComplete(snap) {
-  return snap && snap.setup.env_ready && snap.setup.model.found;
+  return snap && snap.setup.engine_found && snap.setup.model.found;
 }
 
 // ------------------------------------------------------------------ status chips
@@ -119,14 +119,11 @@ function setChip(el, cls, text) {
 function renderChips() {
   const { engine: e, setup: st } = S.snap;
   const ce = $("chip-engine"), cm = $("chip-model");
-  if (st.env_busy) setChip(ce, "busy", t("chip.settingUp"));
-  else if (!st.env_ready) setChip(ce, "bad", t("chip.noEngine"));
+  if (e.state === "missing") setChip(ce, "bad", t("chip.noEngine"));
   else if (e.state === "starting") setChip(ce, "busy", t("chip.starting"));
   else if (e.state === "error") setChip(ce, "bad", t("chip.error"));
-  else if (st.run_on !== "auto" || e.device === "cpu" || e.cuda === false) {
-    setChip(ce, "warn", t(st.run_on === "cpu-exact" ? "chip.cpu-exact" : "chip.cpu-fast"));
-  }
-  else if (e.cuda === true) setChip(ce, "ok", t("chip.gpu", { gpu: shortGpu(e.gpu) }));
+  else if (st.run_on === "cpu" || e.device === "cpu") setChip(ce, "warn", t("chip.cpu"));
+  else if (e.gpu) setChip(ce, "ok", t("chip.gpu", { gpu: shortGpu(e.gpu) }));
   else setChip(ce, "", t("chip.engineReady"));
 
   if (st.download.active) {
@@ -210,9 +207,23 @@ function renderHistory() {
 
 // ------------------------------------------------------------------ setup view
 
-const STEPS = ["engine", "model", "ready"];
+const STEPS = ["choose", "download", "ready"];
 function firstOpenStep(st) {
-  return !st.env_ready ? "engine" : !st.model.found ? "model" : "ready";
+  if (st.model.found) return "ready";
+  return st.download.active || st.models.some((m) => m.partial > 0) ? "download" : "choose";
+}
+
+/** The model the download step is about: the one downloading, one left paused, or the one picked. */
+function downloadingModel(st) {
+  const id = st.download.active ? st.download.model : st.models.find((m) => m.partial > 0 && !m.on_disk)?.id;
+  return st.models.find((m) => m.id === (id || S.pick)) || st.models[0];
+}
+
+function modelName(m) {
+  return t(`model.${m.id}.name`);
+}
+function gb(bytes) {
+  return (bytes / 1e9).toFixed(1);
 }
 
 /** Download speed over the last half minute, in bytes per second (null until it is known). */
@@ -235,8 +246,9 @@ function rateText(r) {
 function renderSetup() {
   const { setup: st, engine: e } = S.snap;
   const m = st.model, d = st.download;
-  const done = { engine: st.env_ready, model: m.found, ready: st.env_ready && m.found };
-  const busy = { engine: st.env_busy, model: d.active, ready: false };
+  const started = d.active || st.models.some((x) => x.partial > 0);
+  const done = { choose: m.found || started, download: m.found, ready: m.found && st.engine_found };
+  const busy = { choose: false, download: d.active, ready: false };
   const step = S.setupStep || firstOpenStep(st);
 
   for (const li of document.querySelectorAll(".stepper li")) {
@@ -248,67 +260,70 @@ function renderSetup() {
   }
   for (const k of STEPS) $("panel-" + k).hidden = k !== step;
 
-  // 1. engine
-  const torch = e.torch ? ` (torch ${e.torch})` : "";
-  $("engine-detail").innerHTML = st.env_ready
-    ? tHtml(st.env_backend === "cpu" ? "setup.ready.cpu" : "setup.ready.cuda", { torch, dir: ltr(st.env_dir) })
-    : tHtml(st.nvidia_driver ? "setup.todo.gpu" : "setup.todo.cpu", { dir: ltr(st.env_dir) }) + (st.uv ? "" : tHtml("setup.uv"));
-  const bs = $("btn-setup");
-  bs.textContent = t(st.env_busy ? "setup.settingUp" : st.env_ready ? "setup.reinstall" : "setup.setUp");
-  bs.className = "btn " + (st.env_ready ? "btn-ghost" : "btn-primary");
-  bs.disabled = st.env_busy;
-  $("engine-busy").hidden = !st.env_busy;
-  $("engine-status").textContent = st.log[st.log.length - 1] || "";
-  $("btn-engine-next").hidden = !st.env_ready;
-  $("btn-engine-next").className = "btn " + (st.env_ready ? "btn-primary" : "");
-  $("setup-log-box").hidden = !st.log.length;
-  const log = $("setup-log");
-  if (log.dataset.n !== String(st.log.length)) {
-    log.textContent = st.log.join("\n");
-    log.dataset.n = String(st.log.length);
-    log.scrollTop = log.scrollHeight;
-  }
-  $("setup-error").hidden = !st.env_error;
-  $("setup-error").textContent = st.env_error || "";
-
-  // 2. model
-  $("model-done").hidden = !m.found;
-  $("model-get").hidden = m.found;
-  if (m.found) {
-    $("model-detail").innerHTML = tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) });
-  }
-  for (const b of document.querySelectorAll(".tabs button")) b.setAttribute("aria-checked", String(b.dataset.tab === S.modelTab));
-  $("tab-download").hidden = S.modelTab !== "download";
-  $("tab-files").hidden = S.modelTab !== "files";
-  $("token-state").textContent = t(m.token ? `token.${m.token}` : "token.none");
-  $("btn-forget-token").hidden = m.token !== "app";
+  // 1. choose
+  if (!S.pick) S.pick = (downloadingModel(st) || {}).id || "q8";
+  renderModelCards(st);
+  const picked = st.models.find((x) => x.id === S.pick);
   $("download-dir").textContent = m.download_dir;
-  const bd = $("btn-download");
-  bd.textContent = t(d.active ? "dl.pause" : d.done > 0 ? "dl.resume" : "dl.download");
-  bd.className = "btn " + (d.active ? "" : "btn-primary");
-  bd.disabled = !st.env_ready || (!m.token && !d.active);
-  $("download-hint").textContent = !st.env_ready ? t("dl.needEngine") : !m.token ? t("dl.needToken") : "";
   $("btn-download-dir").disabled = d.active;
-  $("download-box").hidden = !(d.active || d.done > 0);
-  const pct = d.total ? (100 * d.done) / d.total : 0;
-  $("download-bar").style.width = pct.toFixed(1) + "%";
-  let dl = "";
-  if (d.total) {
-    dl = t("dl.progress", { done: (d.done / 1e9).toFixed(2), total: (d.total / 1e9).toFixed(2), pct: pct.toFixed(0) });
-    const rate = downloadRate(d);
-    if (d.retry_wait != null) dl += " · " + t("dl.retry", { wait: d.retry_wait, n: d.retry_attempt });
-    else if (!d.active) dl += " · " + t("dl.paused");
-    else if (rate > 0) dl += ` · ${rateText(rate)} · ` + t("dl.left", { dur: dur((d.total - d.done) / rate) });
-  } else if (d.active) dl = t("dl.connecting");
-  $("download-text").textContent = dl;
-  $("download-error").hidden = !d.error || d.error === "stopped";
+  $("btn-choose-go").disabled = d.active;
+  $("btn-choose-go").textContent = t(picked?.on_disk ? "choose.use" : picked?.partial > 0 ? "dl.resume" : "dl.download");
+
+  // 2. download
+  const dm = downloadingModel(st);
+  if (dm) {
+    const doneBytes = d.active ? d.done : dm.partial;
+    const total = dm.size;
+    const pct = total ? (100 * doneBytes) / total : 0;
+    $("download-title").textContent = t("dl.title", { name: modelName(dm), size: gb(dm.size) });
+    $("download-bar").style.width = pct.toFixed(1) + "%";
+    $("download-progress").classList.toggle("indeterminate", !!d.verifying);
+    let line = t("dl.progress", { done: (doneBytes / 1e9).toFixed(2), total: (total / 1e9).toFixed(2), pct: pct.toFixed(0) });
+    if (d.verifying) line = t("dl.verifying");
+    else if (d.retry_wait != null) line += " · " + t("dl.retry", { wait: d.retry_wait, n: d.retry_attempt });
+    else if (!d.active) line += " · " + t("dl.paused");
+    else {
+      const rate = downloadRate(d);
+      if (rate > 0) line += ` · ${rateText(rate)} · ` + t("dl.left", { dur: dur((total - doneBytes) / rate) });
+    }
+    $("download-text").textContent = line;
+    const bd = $("btn-download");
+    bd.textContent = t(d.active ? "dl.pause" : "dl.resume");
+    bd.className = "btn " + (d.active ? "" : "btn-primary");
+    bd.dataset.model = dm.id;
+    $("btn-download-back").hidden = d.active;
+  }
+  $("download-error").hidden = !d.error;
   $("download-error").textContent = d.error || "";
 
   // 3. ready
-  const device = e.device === "cpu" || st.run_on !== "auto" || (st.env_backend === "cpu")
-    ? t("ready.cpu")
-    : t("ready.gpu", { gpu: shortGpu(e.gpu) || "CUDA" });
+  const device = e.device === "cpu" || st.run_on === "cpu" || !e.gpu ? t("ready.cpu") : t("ready.gpu", { gpu: shortGpu(e.gpu) });
   $("ready-text").textContent = t("ready.text", { device });
+}
+
+function renderModelCards(st) {
+  const box = $("model-cards");
+  if (box.dataset.lang !== UI_LANG || box.children.length !== st.models.length) {
+    box.dataset.lang = UI_LANG;
+    box.innerHTML = st.models.map((m) => `
+      <button type="button" class="model-card" role="radio" data-id="${m.id}">
+        <h3>${esc(modelName(m))}</h3>
+        <p class="muted small">${esc(t(`model.${m.id}.detail`, { size: gb(m.size) }))}</p>
+        <p class="status small"></p>
+      </button>`).join("");
+    for (const b of box.children) {
+      b.onclick = () => { S.pick = b.dataset.id; renderSetup(); };
+    }
+  }
+  for (const b of box.children) {
+    const m = st.models.find((x) => x.id === b.dataset.id);
+    const on = S.pick === m.id;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+    b.querySelector(".status").textContent = m.on_disk
+      ? t("set.modelOnDisk")
+      : m.partial > 0 ? t("set.modelPaused", { pct: Math.floor((100 * m.partial) / m.size) }) : "";
+  }
 }
 
 // ------------------------------------------------------------------ settings view
@@ -321,24 +336,21 @@ function renderSettings() {
   $("set-lang").value = UI_LANG;
 
   // engine
-  const torch = e.torch ? ` (torch ${e.torch})` : "";
-  $("set-engine").innerHTML = st.env_ready
-    ? tHtml(st.env_backend === "cpu" ? "setup.ready.cpu" : "setup.ready.cuda", { torch, dir: ltr(st.env_dir) })
-    : esc(t("set.engineMissing"));
-  $("set-reinstall").textContent = t(st.env_busy ? "setup.settingUp" : st.env_ready ? "setup.reinstall" : "setup.setUp");
-  $("set-reinstall").disabled = st.env_busy;
-  const runOn = st.run_on || "auto";
-  $("run-on").value = runOn;
-  const key = runOn === "auto" ? (st.nvidia_driver ? "runon.d.auto.gpu" : "runon.d.auto.cpu") : `runon.d.${runOn}`;
-  $("runon-detail").textContent = t(key) + (e.note ? " " + e.note : "");
+  $("run-on").value = st.run_on || "auto";
+  let detail = st.run_on === "cpu" ? t("runon.d.cpu") : e.gpu ? t("runon.d.gpu", { gpu: shortGpu(e.gpu) }) : t("runon.d.nogpu");
+  if (e.note) detail += " " + t(`note.${e.note}`);
+  $("runon-detail").textContent = detail;
   $("ffmpeg-detail").innerHTML = st.ffmpeg ? tHtml("ffmpeg.yes", { path: ltr(st.ffmpeg) }) : tHtml("ffmpeg.no");
 
   // model
-  $("set-model").innerHTML = m.found
-    ? tHtml("setup.modelReady", { size: (m.bytes / 1e9).toFixed(1), where: m.source === "hf-cache" ? t("setup.fromCache") : "", dir: ltr(m.dir) })
-    : esc(t("set.noModel"));
-  $("set-download").hidden = m.found;
-  $("set-model-folder").hidden = !m.found;
+  renderModelRows(st);
+  $("set-custom").hidden = !(m.found && !m.variant);
+  if (m.found && !m.variant) $("set-custom-text").innerHTML = tHtml("set.customModel", { path: ltr(m.path) });
+  if (st.download.error) {
+    $("set-import-error").textContent = st.download.error;
+    $("set-import-error").hidden = false;
+  }
+  $("set-download-dir").disabled = st.download.active;
 
   // updates
   $("set-version").textContent = t("set.version", { v: st.app_version });
@@ -365,6 +377,74 @@ function renderSettings() {
   } else status.textContent = t("set.latest");
 
   $("set-about").textContent = t("set.aboutText", { v: st.app_version });
+}
+
+function renderModelRows(st) {
+  const box = $("set-models"), d = st.download;
+  if (box.dataset.lang !== UI_LANG || box.children.length !== st.models.length) {
+    box.dataset.lang = UI_LANG;
+    box.innerHTML = st.models.map((m) => `
+      <div class="setting" data-id="${m.id}">
+        <div class="setting-text">
+          <h3>${esc(modelName(m))} <span class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))}</span></h3>
+          <p class="muted small status"></p>
+        </div>
+        <button class="btn btn-sm use" >${esc(t("set.modelUse"))}</button>
+        <button class="btn btn-sm get"></button>
+        <button class="btn btn-sm btn-ghost del"></button>
+      </div>`).join("");
+    for (const row of box.children) {
+      const id = row.dataset.id;
+      row.querySelector(".use").onclick = async () => {
+        try { onState(await invoke("use_model", { id })); } catch (err) { toast(String(err)); }
+      };
+      row.querySelector(".get").onclick = () => {
+        const dl = S.snap.setup.download;
+        invoke(dl.active && dl.model === id ? "stop_download" : "download_model", { id });
+      };
+      row.querySelector(".del").onclick = () => deleteModel(id, row.querySelector(".del"));
+    }
+  }
+  for (const row of box.children) {
+    const m = st.models.find((x) => x.id === row.dataset.id);
+    const going = d.active && d.model === m.id;
+    const pctOf = (n) => Math.floor((100 * n) / m.size);
+    row.querySelector(".status").textContent = going
+      ? (d.verifying ? t("dl.verifying") : t("set.modelGoing", { pct: pctOf(d.done) }))
+      : m.active ? t("set.modelInUse")
+      : m.on_disk ? t("set.modelOnDisk")
+      : m.partial > 0 ? t("set.modelPaused", { pct: pctOf(m.partial) })
+      : t("set.modelNone");
+    row.querySelector(".use").hidden = !m.on_disk || m.active;
+    const get = row.querySelector(".get");
+    get.hidden = m.on_disk;
+    get.disabled = d.active && !going;
+    get.textContent = t(going ? "dl.pause" : m.partial > 0 ? "dl.resume" : "dl.download");
+    const del = row.querySelector(".del");
+    del.hidden = m.active || going || !(m.on_disk || m.partial > 0);
+    if (armedDelete !== m.id) del.textContent = t("set.modelDelete");
+  }
+}
+
+/** Downloading a model can take hours: deleting one takes two presses. */
+let armedDelete = null;
+async function deleteModel(id, button) {
+  if (armedDelete !== id) {
+    armedDelete = id;
+    button.textContent = t("set.modelDeleteSure");
+    setTimeout(() => { if (armedDelete === id) { armedDelete = null; if (S.view === "settings") renderSettings(); } }, 4000);
+    return;
+  }
+  armedDelete = null;
+  try { onState(await invoke("delete_model", { id })); } catch (err) { toast(String(err)); }
+}
+
+/** What the engine of older versions left behind, offered for removal once per visit to Settings. */
+async function checkOldEngine() {
+  let size = 0;
+  try { size = await invoke("old_engine_size"); } catch { /* nothing to offer */ }
+  $("set-old-box").hidden = size < 1e6;
+  $("set-old-text").textContent = t("set.oldText", { size: gb(size) });
 }
 
 async function checkUpdates(quiet) {
@@ -397,6 +477,7 @@ async function importModel(errorEl) {
 function renderHomeNote() {
   const el = $("home-note");
   if (setupComplete(S.snap)) { el.innerHTML = ""; return; }
+  if (!S.snap.setup.engine_found) { el.innerHTML = `<div class="notice"><span>${esc(t("home.engineMissing"))}</span></div>`; return; }
   el.innerHTML = `<div class="notice"><span>${esc(t("home.setupNeeded"))}</span><button class="btn btn-sm btn-primary">${esc(t("home.openSetup"))}</button></div>`;
   el.querySelector("button").onclick = () => showView("setup");
 }
@@ -464,7 +545,6 @@ function renderTranscript() {
   if (!cur.segments.length) box.append(emptyLive());
   runSearch(false);
   setupAudio(live);
-  maybeAlign(cur);
 }
 
 function renderMeta() {
@@ -736,15 +816,6 @@ function startFollow() {
   if (S.follow && !followRaf) followRaf = requestAnimationFrame(followTick);
 }
 
-/** Saved transcripts from before word timing get their word times once, in the background. */
-const aligning = new Set();
-function maybeAlign(cur) {
-  if (!cur || isLive(cur.id) || aligning.has(cur.id) || !setupComplete(S.snap)) return;
-  if (!cur.segments.some((s) => !(s.words && s.words.length) && s.text.trim())) return;
-  aligning.add(cur.id);
-  invoke("align_transcript", { id: cur.id }).catch(() => {});
-}
-
 function charOffset(textEl, node, offset) {
   const r = document.createRange();
   r.selectNodeContents(textEl);
@@ -854,8 +925,13 @@ async function addFiles(paths) {
   for (const p of paths.filter((p) => !isMedia(p))) {
     // a dropped folder is recordings to transcribe, unless it is the model or the model is what is being asked for
     const wantsModel = S.view === "setup" && !S.snap.setup.model.found;
-    if (!wantsModel && (await invoke("path_kind", { path: p })) === "folder") {
+    const kind = await invoke("path_kind", { path: p });
+    if (kind === "folder" && !wantsModel) {
       await addFolder(p);
+      continue;
+    }
+    if (kind === "other" && !wantsModel) {
+      skipped++;
       continue;
     }
     try {
@@ -969,6 +1045,7 @@ async function renameCurrent() {
 function onState(snap) {
   const prev = S.snap;
   S.snap = snap;
+  if (!prev?.setup.model.found && snap.setup.model.found) S.setupStep = null;
   renderChips();
   renderQueue();
   renderHomeNote();
@@ -1031,15 +1108,22 @@ function wire() {
   for (const li of document.querySelectorAll(".stepper li")) {
     li.querySelector("button").onclick = () => { S.setupStep = li.dataset.step; renderSetup(); };
   }
-  $("btn-engine-next").onclick = () => { S.setupStep = "model"; renderSetup(); };
-  $("btn-model-next").onclick = () => { S.setupStep = "ready"; renderSetup(); };
   $("btn-start").onclick = () => showView("home");
   $("btn-settings").onclick = () => showView("settings");
   $("set-lang").onchange = () => setUiLang($("set-lang").value);
-  $("set-reinstall").onclick = () => { invoke("setup_engine"); S.setupStep = "engine"; showView("setup"); renderSetup(); };
+
   $("set-import").onclick = () => importModel($("set-import-error"));
-  $("set-download").onclick = () => { S.setupStep = "model"; S.modelTab = "download"; showView("setup"); renderSetup(); };
-  $("set-model-folder").onclick = () => invoke("reveal", { path: S.snap.setup.model.dir });
+  $("set-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
+  $("set-model-folder").onclick = () => {
+    const m = S.snap.setup.model;
+    invoke("reveal", { path: m.found ? m.path : m.download_dir });
+  };
+  $("set-old-remove").onclick = async () => {
+    $("set-old-remove").disabled = true;
+    try { await invoke("remove_old_engine"); $("set-old-box").hidden = true; toast(t("toast.oldRemoved")); }
+    catch (err) { toast(String(err)); }
+    $("set-old-remove").disabled = false;
+  };
   $("set-check").onclick = () => checkUpdates(false);
   $("set-auto-check").onchange = async () => onState(await invoke("set_check_updates", { on: $("set-auto-check").checked }));
   $("set-folder-formats").onchange = async () => {
@@ -1048,31 +1132,31 @@ function wire() {
   };
   $("set-github").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url });
   $("set-issue").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url + "/issues/new" });
-  for (const b of document.querySelectorAll(".tabs button")) {
-    b.onclick = () => { S.modelTab = b.dataset.tab; renderSetup(); };
-  }
-
-  $("btn-setup").onclick = () => invoke("setup_engine");
   $("btn-import").onclick = () => importModel($("import-error"));
   $("run-on").onchange = async () => {
     try { onState(await invoke("set_run_on", { value: $("run-on").value })); toast(t("toast.runOn")); }
     catch (err) { toast(String(err)); }
   };
-  $("btn-import-other").onclick = () => importModel($("import-other-error"));
   $("btn-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
-  $("btn-token").onclick = async () => {
-    const token = $("hf-token").value.trim();
-    if (!token) { $("hf-token").focus(); return; }
-    try {
-      onState(await invoke("set_hf_token", { token }));
-      $("hf-token").value = "";
-      toast(t("toast.tokenSaved"));
-    } catch (err) { toast(String(err)); }
-  };
-  $("hf-token").addEventListener("keydown", (ev) => { if (ev.key === "Enter") $("btn-token").click(); });
-  $("btn-forget-token").onclick = async () => { onState(await invoke("forget_hf_token")); toast(t("toast.tokenRemoved")); };
   $("ui-lang").onchange = () => setUiLang($("ui-lang").value);
-  $("btn-download").onclick = () => invoke(S.snap.setup.download.active ? "stop_download" : "download_model");
+  $("btn-download").onclick = () => {
+    if (S.snap.setup.download.active) invoke("stop_download");
+    else invoke("download_model", { id: $("btn-download").dataset.model });
+  };
+  $("btn-download-back").onclick = () => { S.setupStep = "choose"; renderSetup(); };
+  $("btn-choose-go").onclick = async () => {
+    const m = S.snap.setup.models.find((x) => x.id === S.pick);
+    if (!m) return;
+    if (m.on_disk) {
+      try { onState(await invoke("use_model", { id: m.id })); S.setupStep = "ready"; renderSetup(); }
+      catch (err) { $("import-error").textContent = String(err); $("import-error").hidden = false; }
+      return;
+    }
+    S.setupStep = "download";
+    invoke("download_model", { id: m.id });
+    renderSetup();
+  };
+  $("btn-manual").onclick = () => invoke("open_url", { url: S.snap.setup.files_url });
   $("btn-recheck").onclick = async () => { onState(await invoke("refresh_setup")); toast(t("toast.checked")); };
   $("btn-log").onclick = () => invoke("open_log");
   $("btn-data").onclick = () => invoke("reveal", { path: S.snap.setup.data_dir + "\\history" });
@@ -1132,18 +1216,8 @@ function wire() {
   listen("state", (e) => onState(e.payload));
   listen("segment", (e) => onSegment(e.payload));
   listen("history-changed", () => loadHistory());
-  listen("words-ready", async (e) => {
-    if (S.current?.id !== e.payload) return;
-    try {
-      const fresh = await invoke("get_transcript", { id: e.payload });
-      fresh.segments.forEach((s, i) => { if (S.current.segments[i]?.text === s.text) S.current.segments[i].words = s.words; });
-      wordCache.clear();
-    } catch { /* deleted meanwhile */ }
-  });
-  listen("setup-log", (e) => {
-    if (!S.snap) return;
-    S.snap.setup.log.push(e.payload);
-    if (S.view === "setup") renderSetup();
+  listen("transcript-started", (e) => {
+    if (S.current?.id === e.payload) openTranscript(e.payload);
   });
 }
 

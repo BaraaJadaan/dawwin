@@ -1,0 +1,83 @@
+name: Engine
+
+# Builds the speech engine with GPU support, using the official Vulkan SDK. Official releases take
+# their engine from here (see docs/how-it-works.md). It also downloads the real models over the
+# real network, with a pause in the middle, and checks them.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, engine-check]
+    paths:
+      - "engine/**"
+      - "src-tauri/src/models.rs"
+      - ".github/workflows/engine.yml"
+
+env:
+  VULKAN_VERSION: "1.4.335.0"
+
+jobs:
+  engine:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the Vulkan SDK
+        shell: pwsh
+        run: |
+          curl.exe -L --fail --retry 5 -o vulkan-sdk.exe "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
+          $root = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          $p = Start-Process -Wait -PassThru -FilePath .\vulkan-sdk.exe -ArgumentList "--root",$root,"--accept-licenses","--default-answer","--confirm-command","install"
+          if ($p.ExitCode -ne 0) { exit $p.ExitCode }
+          "VULKAN_SDK=$root" >> $env:GITHUB_ENV
+          "$root\Bin" >> $env:GITHUB_PATH
+      - name: Build
+        run: cargo build --release --locked --features vulkan --manifest-path engine/Cargo.toml
+      - name: Collect
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory engine-out | Out-Null
+          Copy-Item engine/target/release/dawwin-engine.exe engine-out/
+          Copy-Item engine/target/release/*.dll engine-out/
+          if (-not (Test-Path engine-out/ggml-vulkan.dll)) { throw "no Vulkan backend in the build" }
+          Get-ChildItem engine-out | Format-Table Name, Length
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dawwin-engine-windows-x64
+          path: engine-out/
+          if-no-files-found: error
+
+  models:
+    # A machine without a GPU, on a fast connection: the whole first-run path for both models.
+    needs: engine
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [q4, q8]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: dawwin-engine-windows-x64
+          path: engine-out
+      - name: Download the model, pause, resume, check
+        env:
+          DAWWIN_TEST_MODEL: ${{ matrix.model }}
+          DAWWIN_TEST_DIR: ${{ runner.temp }}\models
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked real_download -- --ignored --nocapture
+      - name: The engine loads it and reads a second of silence
+        shell: pwsh
+        run: |
+          $model = Get-ChildItem "${{ runner.temp }}\models\*.gguf" | Select-Object -First 1
+          $raw = Join-Path $env:RUNNER_TEMP "silence.f32"
+          [IO.File]::WriteAllBytes($raw, (New-Object byte[] 64000))
+          $requests = @(
+            (@{ id = 1; cmd = "probe" } | ConvertTo-Json -Compress),
+            (@{ id = 2; cmd = "load"; model = $model.FullName } | ConvertTo-Json -Compress),
+            (@{ id = 3; cmd = "transcribe"; path = $raw; ranges = ,@(0, 16000); language = "ar" } | ConvertTo-Json -Compress -Depth 4),
+            (@{ id = 4; cmd = "quit" } | ConvertTo-Json -Compress)
+          )
+          $output = $requests | & .\engine-out\dawwin-engine.exe
+          $output | ForEach-Object { Write-Host $_ }
+          if (@($output | Where-Object { $_ -match '"ok":true' }).Count -ne 4) { throw "the engine failed" }

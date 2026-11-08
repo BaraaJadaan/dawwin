@@ -42,6 +42,9 @@
     "publisher": "Baraa Jadaan",
     "homepage": "https://github.com/BaraaJadaan/dawwin",
     "copyright": "© 2026 Baraa Jadaan, MIT License",
-    "license": "MIT"
+    "license": "MIT",
+    "resources": {
+      "engine-bin/*": "engine/"
+    }
   }
 }

@@ -1,8 +1,8 @@
-//! The app's state and the one thread that owns the engine: it runs the queue,
-//! the model download, and unloads the model when the app sits idle.
+//! The app's state and the one thread that owns the engine: it runs the queue and unloads the
+//! model when the app sits idle. A model download runs on a thread of its own.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -10,19 +10,18 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};
 use serde::Serialize;
-use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 
 use crate::audio::{self, SR};
-use crate::engine::{Audio, Engine, EventSink, OutOfMemory, PythonWorker, WorkerOptions};
+use crate::engine::{Audio, Engine, EngineFailed, EngineInfo, EngineProcess, OutOfMemory, Recognized};
 use crate::folder;
 use crate::history;
-use crate::setup::{self, ModelStatus, Paths, Settings};
+use crate::models;
+use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
 use crate::transcript::{collapse_loops, find_loop, Segment, Transcript};
 
 const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
-const BATCH: usize = 4;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 pub const MODEL_LABEL: &str = "Cohere Transcribe Arabic (07-2026)";
@@ -57,49 +56,54 @@ pub struct FolderScan {
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct EngineView {
-    /// missing (no env) | off | starting | ready (model not loaded) | loading | loaded | error
+    /// missing (not installed) | off | starting | ready (model not loaded) | loading | loaded | error
     pub state: String,
+    /// "gpu" | "cpu"
     pub device: Option<String>,
     pub gpu: Option<String>,
-    pub cuda: Option<bool>,
-    pub torch: Option<String>,
     pub vram_total_gb: Option<f64>,
-    pub vram_used_gb: Option<f64>,
     pub error: Option<String>,
-    /// "bfloat16" | "int8", once loaded
-    pub dtype: Option<String>,
-    /// e.g. the GPU had too little memory, so it runs on the CPU
+    /// Why it runs on the CPU although a GPU was wanted: "gpu-too-small" | "gpu-failed"
     pub note: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct DownloadView {
     pub active: bool,
+    /// Which model, while it downloads
+    pub model: Option<String>,
     pub done: u64,
     pub total: u64,
     /// after a dropped connection: seconds until it resumes, and the attempt number
     pub retry_wait: Option<u64>,
     pub retry_attempt: Option<u64>,
+    /// All of it arrived, and it is being read back to check it
+    pub verifying: bool,
     pub error: Option<String>,
+}
+
+/// One of the models the app can download.
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct ModelView {
+    pub id: String,
+    pub file: String,
+    pub size: u64,
+    pub url: String,
+    /// The whole file is there
+    pub on_disk: bool,
+    /// How much of a download that is not finished is there
+    pub partial: u64,
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct SetupView {
-    pub env_ready: bool,
-    pub env_busy: bool,
-    pub env_error: Option<String>,
-    pub log: Vec<String>,
-    pub uv: Option<String>,
+    pub engine_found: bool,
     pub ffmpeg: Option<String>,
     pub model: ModelStatus,
-    pub model_id: String,
-    pub model_url: String,
-    pub tokens_url: String,
+    pub models: Vec<ModelView>,
     pub files_url: String,
-    pub nvidia_driver: Option<String>,
-    /// The PyTorch build the env has: "cu128", "cpu", …
-    pub env_backend: Option<String>,
-    /// "auto" | "cpu-fast" | "cpu-exact"
+    /// "auto" | "cpu"
     pub run_on: String,
     /// The interface language, when one was picked
     pub ui_lang: Option<String>,
@@ -110,9 +114,7 @@ pub struct SetupView {
     /// What transcribing a folder writes next to each recording
     pub folder_formats: Vec<String>,
     pub download: DownloadView,
-    pub hf_home: String,
     pub data_dir: String,
-    pub env_dir: String,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -125,11 +127,10 @@ pub struct Snapshot {
 enum Msg {
     Job(String),
     Probe,
-    Download,
-    /// Stop the worker so the next one starts with new settings (another model folder)
+    /// Stop the engine so the next one starts with new settings (another model, GPU or CPU)
     Restart,
-    /// Find word times for a saved transcript: all its lines, or the ones listed
-    Align { id: String, lines: Option<Vec<usize>> },
+    /// Stop the engine, which may be using this file, and delete it
+    DeleteFile(PathBuf),
 }
 
 pub struct Core {
@@ -138,7 +139,9 @@ pub struct Core {
     snap: Mutex<Snapshot>,
     live: Mutex<HashMap<String, Transcript>>,
     cancels: Mutex<HashMap<String, Arc<AtomicBool>>>,
-    download_abort: Arc<AtomicBool>,
+    download_stop: Arc<AtomicBool>,
+    /// The GPU crashed or failed in this session: stay on the CPU until the app restarts
+    gpu_failed: AtomicBool,
     pub settings: Mutex<Settings>,
     tx: Mutex<Sender<Msg>>,
     counter: AtomicU64,
@@ -151,7 +154,6 @@ pub fn now_ms() -> u64 {
 impl Core {
     pub fn start(app: AppHandle) -> Result<Arc<Core>> {
         let paths = Paths::new()?;
-        paths.install_worker_files()?;
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
         crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));
@@ -161,7 +163,8 @@ impl Core {
             snap: Mutex::new(Snapshot::default()),
             live: Mutex::new(HashMap::new()),
             cancels: Mutex::new(HashMap::new()),
-            download_abort: Arc::new(AtomicBool::new(false)),
+            download_stop: Arc::new(AtomicBool::new(false)),
+            gpu_failed: AtomicBool::new(false),
             settings: Mutex::new(settings),
             tx: Mutex::new(tx),
             counter: AtomicU64::new(0),
@@ -169,13 +172,13 @@ impl Core {
         core.refresh_setup();
         let c = core.clone();
         std::thread::Builder::new().name("engine".into()).spawn(move || engine_loop(c, rx))?;
-        let snap = core.snapshot();
-        if snap.setup.env_ready {
+        if core.snapshot().setup.engine_found {
             core.send(Msg::Probe);
-            // a model download that was running when the app closed carries on
-            if core.settings.lock().unwrap().download_wanted && !snap.setup.model.found {
-                core.download_model();
-            }
+        }
+        // a model download that was running when the app closed carries on
+        let resume = core.settings.lock().unwrap().resume_model.clone();
+        if let Some(id) = resume {
+            core.download_model(&id);
         }
         Ok(core)
     }
@@ -206,46 +209,47 @@ impl Core {
         });
     }
 
-    /// Re-read what is installed (env, tools, model) and tell the UI.
+    /// Re-read what is installed (engine, tools, models) and tell the UI.
     pub fn refresh_setup(&self) {
-        let tools = setup::tools();
-        let env_ready = setup::env_ready(&self.paths);
-        let env_backend = setup::env_backend(&self.paths);
+        let engine_found = setup::engine_exe().is_some();
+        let ffmpeg = setup::find_exe("ffmpeg").map(|p| p.display().to_string());
         let model = self.model_status();
-        let (run_on, ui_lang, dl_total, check_updates, folder_formats) = {
+        let (run_on, ui_lang, check_updates, folder_formats, dir) = {
             let st = self.settings.lock().unwrap();
-            (st.run_on().to_string(), st.ui_lang.clone(), st.download_total, st.check_updates, st.folder_formats())
+            (st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths))
         };
-        let on_disk = if model.found { 0 } else { setup::downloaded_bytes(std::path::Path::new(&model.download_dir)) };
+        let models = models::VARIANTS
+            .iter()
+            .map(|v| {
+                let dest = dir.join(v.file);
+                ModelView {
+                    id: v.id.into(),
+                    file: v.file.into(),
+                    size: v.size,
+                    url: models::url(*v),
+                    on_disk: models::check_file(&dest).is_ok() || model.variant == v.id,
+                    partial: models::downloaded(&dest),
+                    active: model.variant == v.id,
+                }
+            })
+            .collect();
         self.update(|s| {
             let st = &mut s.setup;
-            st.env_ready = env_ready;
-            st.uv = tools.uv;
-            st.ffmpeg = tools.ffmpeg;
+            st.engine_found = engine_found;
+            st.ffmpeg = ffmpeg;
             st.model = model;
-            st.model_id = setup::MODEL_ID.into();
-            st.model_url = setup::MODEL_URL.into();
-            st.tokens_url = setup::TOKENS_URL.into();
-            st.files_url = setup::FILES_URL.into();
-            st.nvidia_driver = tools.nvidia_driver;
-            st.env_backend = env_backend;
+            st.models = models;
+            st.files_url = models::files_page();
             st.run_on = run_on;
             st.ui_lang = ui_lang;
             st.check_updates = check_updates;
             st.folder_formats = folder_formats;
             st.app_version = crate::updates::VERSION.into();
             st.repo_url = format!("https://github.com/{}", crate::updates::REPO);
-            // a paused or interrupted download: show how far it got, from the files on disk
-            if !st.download.active && !st.model.found {
-                st.download.done = on_disk;
-                st.download.total = dl_total.max(on_disk);
-            }
-            st.hf_home = setup::hf_home().display().to_string();
             st.data_dir = self.paths.roaming.display().to_string();
-            st.env_dir = self.paths.env_dir().display().to_string();
-            if !env_ready && s.engine.state.is_empty() {
+            if !engine_found {
                 s.engine.state = "missing".into();
-            } else if env_ready && (s.engine.state == "missing" || s.engine.state.is_empty()) {
+            } else if s.engine.state == "missing" || s.engine.state.is_empty() {
                 s.engine.state = "off".into();
             }
         });
@@ -266,13 +270,55 @@ impl Core {
         Ok(())
     }
 
-    /// Use the model in `dir` (a folder with the model files, or a Hugging Face cache folder).
-    pub fn import_model(&self, dir: &std::path::Path) -> Result<ModelStatus> {
-        let (resolved, _) = setup::validate_model_dir(dir)
-            .map_err(|e| anyhow!(crate::tr!("That folder does not hold the model: {}.", e)))?;
-        self.change_settings(|s| s.model_dir = Some(resolved.display().to_string()))?;
+    /// Use a model file the user already has, or one in the folder they point at.
+    pub fn import_model(&self, path: &Path) -> Result<ModelStatus> {
+        let file = if path.is_dir() {
+            models::find_in_folder(path).ok_or_else(|| anyhow!(crate::tr!("That folder does not hold a model file (.gguf).")))?
+        } else {
+            models::check_file(path)?;
+            path.to_path_buf()
+        };
+        self.change_settings(|s| s.model_file = Some(file.display().to_string()))?;
         self.send(Msg::Restart);
         Ok(self.model_status())
+    }
+
+    /// Switch to a model that is already on the disk.
+    pub fn use_model(&self, id: &str) -> Result<()> {
+        let v = models::variant(id).ok_or_else(|| anyhow!("unknown model {id}"))?;
+        let file = self.settings.lock().unwrap().download_dir(&self.paths).join(v.file);
+        models::check_file(&file)?;
+        self.change_settings(|s| s.model_file = Some(file.display().to_string()))?;
+        self.send(Msg::Restart);
+        Ok(())
+    }
+
+    /// Delete a downloaded model, and what is there of an unfinished download of it.
+    pub fn delete_model(&self, id: &str) -> Result<()> {
+        let v = models::variant(id).ok_or_else(|| anyhow!("unknown model {id}"))?;
+        let dir = self.settings.lock().unwrap().download_dir(&self.paths);
+        let file = dir.join(v.file);
+        models::discard(&file);
+        if file.exists() {
+            let in_use = self.settings.lock().unwrap().model_file.as_deref().map(PathBuf::from) == Some(file.clone());
+            if in_use {
+                self.change_settings(|s| s.model_file = None)?;
+            }
+            self.send(Msg::DeleteFile(file));
+        } else {
+            self.refresh_setup();
+        }
+        Ok(())
+    }
+
+    /// Change where downloads are saved. What is there of a paused download comes along, if it can.
+    pub fn set_download_dir(&self, dir: &Path) -> Result<()> {
+        let old = self.settings.lock().unwrap().download_dir(&self.paths);
+        std::fs::create_dir_all(dir)?;
+        for v in models::VARIANTS {
+            models::move_unfinished(&old.join(v.file), &dir.join(v.file));
+        }
+        self.change_settings(|s| s.download_dir = Some(dir.display().to_string()))
     }
 
     /// The interface language, for the messages Rust and the worker show.
@@ -283,69 +329,92 @@ impl Core {
         Ok(())
     }
 
-    /// Ask for word times of a saved transcript (all lines, or some after an edit).
-    pub fn request_align(&self, id: &str, lines: Option<Vec<usize>>) {
-        self.send(Msg::Align { id: id.to_string(), lines });
-    }
-
-    /// GPU or CPU: takes effect with a fresh worker.
+    /// GPU or CPU: takes effect with a fresh engine.
     pub fn set_run_on(&self, value: &str) -> Result<()> {
-        if !matches!(value, "auto" | "cpu-fast" | "cpu-exact") {
+        if !matches!(value, "auto" | "cpu") {
             return Err(anyhow!("unknown setting {value}"));
         }
+        self.gpu_failed.store(false, Ordering::SeqCst); // the user asks for it: try the GPU again
         self.change_settings(|s| s.run_on = Some(value.to_string()))?;
         self.send(Msg::Restart);
         Ok(())
     }
 
-    // ------------------------------------------------------------ setup
+    // ------------------------------------------------------------ model download
 
-    pub fn setup_engine(self: &Arc<Self>) {
-        if self.snapshot().setup.env_busy {
+    /// Start or continue downloading a model. It stays wanted until it finishes or is paused,
+    /// so closing the app does not stop it for good.
+    pub fn download_model(self: &Arc<Self>, id: &str) {
+        let Some(v) = models::variant(id) else { return };
+        if self.snapshot().setup.download.active {
             return;
         }
+        let dest = self.settings.lock().unwrap().download_dir(&self.paths).join(v.file);
+        let _ = self.change_settings(|s| s.resume_model = Some(id.to_string()));
+        self.download_stop.store(false, Ordering::SeqCst);
         self.update(|s| {
-            s.setup.env_busy = true;
-            s.setup.env_error = None;
-            s.setup.log.clear();
+            s.setup.download = DownloadView {
+                active: true,
+                model: Some(id.to_string()),
+                done: models::downloaded(&dest),
+                total: v.size,
+                ..Default::default()
+            };
         });
         let core = self.clone();
         std::thread::spawn(move || {
-            let log = |line: String| {
-                let _ = core.app.emit("setup-log", &line);
-                let mut s = core.snap.lock().unwrap();
-                s.setup.log.push(line);
-                let n = s.setup.log.len();
-                if n > 300 {
-                    s.setup.log.drain(..n - 300);
-                }
-            };
-            let res = setup::setup_env(&core.paths, &log);
+            let _awake = KeepAwake::new();
+            let job = models::Download { url: models::url(v), dest: dest.clone(), size: v.size, sha256: v.sha256.to_string() };
+            let stop = core.download_stop.clone();
+            let result = models::download(&job, &stop, &mut |event| {
+                core.update(|s| {
+                    let d = &mut s.setup.download;
+                    match event {
+                        models::Event::Progress { done } => {
+                            d.done = done;
+                            d.retry_wait = None;
+                            d.retry_attempt = None;
+                        }
+                        models::Event::Retrying { wait_s, attempt } => {
+                            d.retry_wait = Some(wait_s);
+                            d.retry_attempt = Some(attempt);
+                        }
+                        models::Event::Verifying { .. } => {
+                            d.done = v.size;
+                            d.verifying = true;
+                        }
+                    }
+                });
+            });
+            let finished = matches!(result, Ok(models::Finished::Complete));
+            let error = result.err().map(|e| format!("{e:#}"));
+            if finished {
+                let _ = core.change_settings(|s| {
+                    s.model_file = Some(dest.display().to_string());
+                    s.resume_model = None;
+                });
+            } else if error.is_some() {
+                let _ = core.change_settings(|s| s.resume_model = None);
+            }
             core.update(|s| {
-                s.setup.env_busy = false;
-                s.setup.env_error = res.as_ref().err().map(|e| format!("{e:#}"));
+                let d = &mut s.setup.download;
+                d.active = false;
+                d.verifying = false;
+                d.retry_wait = None;
+                d.retry_attempt = None;
+                d.error = error;
             });
             core.refresh_setup();
-            if res.is_ok() {
-                core.send(Msg::Probe);
+            if finished {
+                core.send(Msg::Restart);
             }
         });
     }
 
-    pub fn download_model(&self) {
-        let _ = self.change_settings(|s| s.download_wanted = true);
-        self.download_abort.store(false, Ordering::SeqCst);
-        // start from what is already on disk, so a resumed download shows its progress at once
-        let (done, total) = (self.snapshot().setup.download.done, self.settings.lock().unwrap().download_total);
-        self.update(|s| {
-            s.setup.download = DownloadView { active: true, done, total: total.max(done), ..Default::default() };
-        });
-        self.send(Msg::Download);
-    }
-
+    /// Pause: what arrived stays on the disk, and nothing resumes by itself.
     pub fn stop_download(&self) {
-        let _ = self.change_settings(|s| s.download_wanted = false);
-        self.download_abort.store(true, Ordering::SeqCst);
+        let _ = self.change_settings(|s| s.resume_model = None);
+        self.download_stop.store(true, Ordering::SeqCst);
     }
 
     // ------------------------------------------------------------ queue
@@ -456,69 +525,43 @@ impl Core {
 
 // ---------------------------------------------------------------- engine thread
 
-fn sink(core: &Arc<Core>) -> EventSink {
-    let c = core.clone();
-    Arc::new(move |v: &Value| match v.get("event").and_then(|e| e.as_str()) {
-        Some("loading") => c.update(|s| s.engine.state = "loading".into()),
-        Some("download") => {
-            let done = v.get("done").and_then(|x| x.as_u64()).unwrap_or(0);
-            let total = v.get("total").and_then(|x| x.as_u64()).unwrap_or(0);
-            if total > 0 && c.settings.lock().unwrap().download_total != total {
-                let _ = c.change_settings(|s| s.download_total = total);
-            }
-            c.update(|s| {
-                s.setup.download.done = done;
-                s.setup.download.total = total;
-                s.setup.download.retry_wait = None;
-                s.setup.download.retry_attempt = None;
-            });
-        }
-        Some("download_retry") => {
-            let wait = v.get("wait").and_then(|x| x.as_u64());
-            let attempt = v.get("attempt").and_then(|x| x.as_u64());
-            c.update(|s| {
-                s.setup.download.retry_wait = wait;
-                s.setup.download.retry_attempt = attempt;
-            });
-        }
-        _ => {}
-    })
-}
-
-fn ensure_worker<'a>(core: &Arc<Core>, worker: &'a mut Option<PythonWorker>) -> Result<&'a mut PythonWorker> {
-    if worker.is_none() {
-        if !setup::env_ready(&core.paths) {
-            return Err(anyhow!(crate::tr!("The engine is not set up yet. Press “Set up engine” first.")));
-        }
+fn ensure_engine<'a>(core: &Arc<Core>, engine: &'a mut Option<EngineProcess>) -> Result<&'a mut EngineProcess> {
+    if engine.is_none() {
+        let exe = setup::engine_exe().ok_or_else(|| anyhow!(crate::tr!("The speech engine is missing. Please install Dawwin again.")))?;
         let model = core.model_status();
+        let cpu_only = core.settings.lock().unwrap().run_on() == "cpu" || core.gpu_failed.load(Ordering::SeqCst);
         core.update(|s| {
             s.engine.state = "starting".into();
             s.engine.error = None;
         });
-        let opts = WorkerOptions {
-            offline: model.found,
-            model_dir: model.found.then(|| PathBuf::from(&model.dir)),
-            token: None,
-            run_on: core.settings.lock().unwrap().run_on().to_string(),
-        };
-        *worker = Some(PythonWorker::spawn(&core.paths, opts, sink(core))?);
+        *engine = Some(EngineProcess::spawn(&exe, &core.paths, &model.path, cpu_only)?);
     }
-    Ok(worker.as_mut().unwrap())
+    Ok(engine.as_mut().unwrap())
+}
+
+/// The GPU let us down: from now on the engine stays off it, until the app restarts.
+fn give_up_on_gpu(core: &Arc<Core>, engine: &mut Option<EngineProcess>) {
+    core.gpu_failed.store(true, Ordering::SeqCst);
+    if let Some(e) = engine.take() {
+        e.shutdown();
+    }
+    core.update(|s| {
+        s.engine.state = "off".into();
+        s.engine.device = Some("cpu".into());
+        s.engine.note = Some("gpu-failed".into());
+    });
 }
 
 fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
-    let mut worker: Option<PythonWorker> = None;
+    let mut engine: Option<EngineProcess> = None;
     let mut last_used = Instant::now();
     loop {
         let msg = match rx.recv_timeout(Duration::from_secs(20)) {
             Ok(m) => m,
             Err(RecvTimeoutError::Timeout) => {
-                if worker.is_some() && last_used.elapsed() > IDLE_UNLOAD {
-                    worker.take().unwrap().shutdown();
-                    core.update(|s| {
-                        s.engine.state = "off".into();
-                        s.engine.vram_used_gb = None;
-                    });
+                if engine.is_some() && last_used.elapsed() > IDLE_UNLOAD {
+                    engine.take().unwrap().shutdown();
+                    core.update(|s| s.engine.state = "off".into());
                 }
                 continue;
             }
@@ -526,98 +569,77 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
         };
         last_used = Instant::now();
         match msg {
-            Msg::Probe => {
-                let res = ensure_worker(&core, &mut worker).and_then(|w| w.probe());
-                match res {
-                    Ok(v) => core.update(|s| {
-                        let e = &mut s.engine;
-                        if e.state == "starting" || e.state == "off" {
-                            e.state = "ready".into();
-                        }
-                        e.cuda = v.get("cuda").and_then(|x| x.as_bool());
-                        e.gpu = v.get("gpu").and_then(|x| x.as_str()).map(String::from);
-                        e.torch = v.get("torch").and_then(|x| x.as_str()).map(String::from);
-                        e.vram_total_gb = v.get("vram_total_gb").and_then(|x| x.as_f64());
-                        let forced_cpu = v.get("force_cpu").and_then(|x| x.as_bool()) == Some(true);
-                        e.device = Some(if e.cuda == Some(true) && !forced_cpu { "cuda".into() } else { "cpu".into() });
-                    }),
-                    Err(e) => {
-                        worker = None;
-                        core.update(|s| {
-                            s.engine.state = "error".into();
-                            s.engine.error = Some(format!("{e:#}"));
-                        });
+            Msg::Probe => match ensure_engine(&core, &mut engine).and_then(|e| e.probe()) {
+                Ok(v) => core.update(|s| {
+                    let e = &mut s.engine;
+                    if e.state == "starting" || e.state == "off" {
+                        e.state = "ready".into();
                     }
-                }
-            }
-            Msg::Download => {
-                // the running worker is offline; download in a fresh, online one
-                if let Some(w) = worker.take() {
-                    w.shutdown();
-                }
-                let res = (|| -> Result<()> {
-                    if !setup::env_ready(&core.paths) {
-                        return Err(anyhow!(crate::tr!("Set up the engine first.")));
-                    }
-                    let dest = PathBuf::from(core.model_status().download_dir);
-                    let opts = WorkerOptions { offline: false, token: setup::app_token(&core.paths), ..Default::default() };
-                    let mut w = PythonWorker::spawn(&core.paths, opts, sink(&core))?;
-                    w.abort = Some(core.download_abort.clone());
-                    let r = w.download(&dest);
-                    w.shutdown();
-                    r?;
-                    setup::validate_model_dir(&dest).map_err(|e| anyhow!(crate::tr!("The download finished but the folder is not complete: {}", e)))?;
-                    core.change_settings(|s| {
-                        s.model_dir = Some(dest.display().to_string());
-                        s.download_wanted = false;
-                    })?;
-                    Ok(())
-                })();
-                core.update(|s| {
-                    s.setup.download.active = false;
-                    s.setup.download.retry_wait = None;
-                    s.setup.download.retry_attempt = None;
-                    s.setup.download.error = res.as_ref().err().map(|e| format!("{e:#}"));
-                    s.engine.state = "off".into();
-                });
-                core.refresh_setup();
-                if res.is_ok() {
+                    e.gpu = v.get("gpu").and_then(|x| x.as_str()).map(String::from);
+                    e.vram_total_gb = v.get("vram_total_gb").and_then(|x| x.as_f64());
+                    e.device = Some(if e.gpu.is_some() { "gpu".into() } else { "cpu".into() });
+                }),
+                Err(err) if err.is::<EngineFailed>() && !core.gpu_failed.load(Ordering::SeqCst) => {
+                    // perhaps the GPU driver took it down: the engine can do without it
+                    give_up_on_gpu(&core, &mut engine);
                     core.send(Msg::Probe);
                 }
-            }
-            Msg::Restart => {
-                if let Some(w) = worker.take() {
-                    w.shutdown();
+                Err(err) => {
+                    engine = None;
+                    core.update(|s| {
+                        s.engine.state = "error".into();
+                        s.engine.error = Some(format!("{err:#}"));
+                    });
+                }
+            },
+            Msg::Restart | Msg::DeleteFile(_) => {
+                if let Some(e) = engine.take() {
+                    e.shutdown();
                 }
                 core.update(|s| {
                     s.engine.state = "off".into();
-                    s.engine.vram_used_gb = None;
-                    s.engine.dtype = None;
                     s.engine.note = None;
                     s.engine.device = None;
                 });
-                if setup::env_ready(&core.paths) {
+                if let Msg::DeleteFile(file) = &msg {
+                    if let Err(err) = std::fs::remove_file(file) {
+                        core.update(|s| s.setup.download.error = Some(format!("{}: {err}", file.display())));
+                    }
+                    core.refresh_setup();
+                }
+                if setup::engine_exe().is_some() {
                     core.send(Msg::Probe);
                 }
             }
-            Msg::Align { id, lines } => {
-                if let Err(e) = align_saved(&core, &mut worker, &id, lines) {
-                    eprintln!("word times for {id}: {e:#}");
-                }
-            }
             Msg::Job(id) => {
-                let res = run_job(&core, &mut worker, &id);
-                if let Err(e) = res {
-                    let msg = format!("{e:#}");
+                let res = run_job(&core, &mut engine, &id);
+                if let Err(err) = res {
+                    let engine_at_fault = err.is::<EngineFailed>() || err.is::<OutOfMemory>();
+                    let on_gpu = core.snapshot().engine.device.as_deref() == Some("gpu");
+                    let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
+                    if engine_at_fault && on_gpu && !cancelled && !core.gpu_failed.load(Ordering::SeqCst) {
+                        // the same recording again, on the CPU: slower, but it gets done
+                        give_up_on_gpu(&core, &mut engine);
+                        core.update_job(&id, |j| {
+                            j.status = "queued".into();
+                            j.progress = 0.0;
+                            j.eta_s = None;
+                            j.saved = false;
+                        });
+                        let _ = core.app.emit("transcript-started", &id);
+                        core.send(Msg::Job(id));
+                        continue;
+                    }
+                    let msg = format!("{err:#}");
                     core.update_job(&id, |j| {
                         j.status = "failed".into();
                         j.error = Some(msg);
                         j.eta_s = None;
                     });
-                    // a dead worker is restarted for the next job
-                    if let Some(w) = worker.as_mut() {
-                        if !w.alive() {
-                            worker = None;
+                    // a dead engine is restarted for the next job
+                    if let Some(e) = engine.as_mut() {
+                        if !e.alive() {
+                            engine = None;
                             core.update(|s| s.engine.state = "off".into());
                         }
                     }
@@ -626,24 +648,25 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
             }
         }
     }
-    if let Some(w) = worker.take() {
-        w.shutdown();
+    if let Some(e) = engine.take() {
+        e.shutdown();
     }
 }
-
-fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Result<()> {
+fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Result<()> {
     let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
     if job.status != "queued" {
         return Ok(());
     }
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
     let started = Instant::now();
+    let _awake = KeepAwake::new();
     core.update_job(id, |j| j.status = "decoding".into());
 
-    if !core.model_status().found {
-        return Err(anyhow!(crate::tr!("The model is not set up yet. Download or import it on the Engine and model page.")));
+    let model = core.model_status();
+    if !model.found {
+        return Err(anyhow!(crate::tr!("There is no model yet. Choose one in Settings.")));
     }
-    let w = ensure_worker(core, worker)?;
+    let w = ensure_engine(core, engine)?;
     w.start_loading()?; // the model loads while the audio decodes
 
     let ffmpeg = setup::find_exe("ffmpeg");
@@ -660,8 +683,7 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
     let device = match &info.gpu {
-        Some(g) if info.device.starts_with("cuda") => format!("GPU · {g}"),
-        _ if info.dtype.as_deref() == Some("int8") => "CPU (int8)".into(),
+        Some(g) if info.device == "gpu" => format!("GPU · {g}"),
         _ => "CPU".into(),
     };
 
@@ -674,7 +696,10 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
         language: job.language.clone(),
         elapsed_s: 0.0,
         device,
-        model: MODEL_LABEL.into(),
+        model: match model.variant.as_str() {
+            "" => MODEL_LABEL.to_string(),
+            v => format!("{MODEL_LABEL} · {}", v.to_uppercase()),
+        },
         partial: false,
         segments: Vec::new(),
     };
@@ -683,7 +708,8 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
     let _ = core.app.emit("transcript-started", id);
 
     let t_start = Instant::now();
-    let mut batch = BATCH;
+    let mut batch = info.batch;
+    let mut last_saved = Instant::now();
     let mut i = 0;
     let mut failure: Option<anyhow::Error> = None;
     while i < chunks.len() {
@@ -696,8 +722,8 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
         match texts {
             Ok(texts) => {
                 let mut lines: Vec<Segment> = Vec::new();
-                for (r, text) in ranges.iter().zip(texts) {
-                    match fix_loops(w, &audio, *r, text, &job.language, 0) {
+                for (r, got) in ranges.iter().zip(texts) {
+                    match fix_loops(w, &audio, *r, got, &job.language, 0) {
                         Ok(s) => lines.extend(s.into_iter().filter(|s| !s.text.trim().is_empty())),
                         Err(e) => {
                             failure = Some(e);
@@ -705,7 +731,6 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
                         }
                     };
                 }
-                attach_words(w, &audio, &mut lines, &job.language);
                 {
                     for s in lines {
                         let _ = core.app.emit("segment", serde_json::json!({ "id": id, "segment": &s }));
@@ -728,6 +753,13 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
                     j.eta_s = eta;
                     j.elapsed_s = started.elapsed().as_secs_f64();
                 });
+                // closing the app in the middle of a long recording keeps what is written so far
+                if last_saved.elapsed() > Duration::from_secs(20) && !t.segments.is_empty() {
+                    t.partial = true;
+                    t.elapsed_s = t_start.elapsed().as_secs_f64();
+                    let _ = history::save(&core.paths.history_dir(), &t);
+                    last_saved = Instant::now();
+                }
             }
             Err(e) if e.is::<OutOfMemory>() && batch > 1 => {
                 batch = 1; // retry the same chunks one at a time
@@ -773,81 +805,22 @@ fn run_job(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str) -> Res
 }
 
 /// Tell the UI the model is in memory, and where.
-fn show_loaded(core: &Arc<Core>, info: &crate::engine::EngineInfo) {
+fn show_loaded(core: &Arc<Core>, info: &EngineInfo) {
     core.update(|s| {
         s.engine.state = "loaded".into();
-        s.engine.device = Some(if info.device.starts_with("cuda") { "cuda".into() } else { "cpu".into() });
+        s.engine.device = Some(info.device.clone());
         if info.gpu.is_some() {
             s.engine.gpu = info.gpu.clone();
+            s.engine.vram_total_gb = info.vram_total_gb;
         }
-        s.engine.vram_used_gb = info.vram_used_gb;
-        s.engine.dtype = info.dtype.clone();
-        s.engine.note = info.fallback.clone();
+        s.engine.note = info.fallback.clone().or_else(|| s.engine.note.take());
     });
 }
 
-/// Word start times for `lines`, from the engine. A failure only costs the word times.
-fn attach_words(w: &mut dyn Engine, audio: &Audio, lines: &mut [Segment], lang: &str) {
-    if lines.is_empty() {
-        return;
-    }
-    let n = audio.samples.len();
-    let ranges: Vec<(usize, usize)> = lines
-        .iter()
-        .map(|s| (((s.start * SR as f64) as usize).min(n), ((s.end * SR as f64).round() as usize).min(n)))
-        .collect();
-    let texts: Vec<String> = lines.iter().map(|s| s.text.clone()).collect();
-    match w.align(audio, &ranges, &texts, lang) {
-        Ok(words) => {
-            for (s, ws) in lines.iter_mut().zip(words) {
-                s.words = ws;
-            }
-        }
-        Err(e) => eprintln!("word times: {e:#}"),
-    }
-}
-
-/// Word times for a transcript saved without them (from before word timing) or after an edit.
-fn align_saved(core: &Arc<Core>, worker: &mut Option<PythonWorker>, id: &str, lines: Option<Vec<usize>>) -> Result<()> {
-    let dir = core.paths.history_dir();
-    let t = history::load(&dir, id)?;
-    if !core.model_status().found || !setup::env_ready(&core.paths) || !PathBuf::from(&t.source_path).is_file() {
-        return Ok(());
-    }
-    let wanted: Vec<usize> = lines.unwrap_or_else(|| (0..t.segments.len()).collect());
-    let ffmpeg = setup::find_exe("ffmpeg");
-    let stop = AtomicBool::new(false);
-    let samples = audio::decode(PathBuf::from(&t.source_path).as_path(), ffmpeg.as_ref(), &stop)?;
-    let audio = Audio { id: format!("align-{id}"), samples };
-    let w = ensure_worker(core, worker)?;
-    let info = w.ensure_loaded()?;
-    show_loaded(core, &info);
-    let mut found: Vec<(usize, String, Vec<(u32, f32)>)> = Vec::new();
-    for part in wanted.chunks(8) {
-        let mut segs: Vec<Segment> = part.iter().filter_map(|&i| t.segments.get(i).cloned()).collect();
-        attach_words(w, &audio, &mut segs, &t.language);
-        for (&i, s) in part.iter().zip(segs) {
-            found.push((i, s.text, s.words));
-        }
-    }
-    w.forget(&audio.id);
-    // reload: keep edits made meanwhile, and only use times for text that did not change
-    let mut cur = history::load(&dir, id)?;
-    for (i, text, words) in found {
-        if let Some(s) = cur.segments.get_mut(i) {
-            if s.text == text {
-                s.words = words;
-            }
-        }
-    }
-    history::save(&dir, &cur)?;
-    let _ = core.app.emit("words-ready", id);
-    Ok(())
-}
-
-/// The model sometimes repeats one word dozens of times. Transcribe such a chunk again in
-/// two halves; a half that still loops gets the repetition cut and a "repeat" flag.
-fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: String, lang: &str, depth: u32) -> Result<Vec<Segment>> {
+/// The model sometimes repeats itself, or stops because of it, and the rest of the audio goes
+/// unread. Transcribe such a chunk again in two halves; a half that still does it gets the
+/// repetition cut and a "repeat" flag.
+fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Recognized, lang: &str, depth: u32) -> Result<Vec<Segment>> {
     let seg = |a: usize, b: usize, text: String, flag: Option<&str>| Segment {
         start: a as f64 / SR as f64,
         end: b as f64 / SR as f64,
@@ -857,17 +830,17 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: St
         voice: audio::voice_profile(&audio.samples, a, b, 20),
         words: Vec::new(),
     };
-    if find_loop(&text).is_none() {
-        return Ok(vec![seg(a, b, text, None)]);
+    if !got.stopped && find_loop(&got.text).is_none() {
+        return Ok(vec![seg(a, b, got.text, None)]);
     }
     if depth >= 2 || b - a < 4 * SR {
-        return Ok(vec![seg(a, b, collapse_loops(&text), Some("repeat"))]);
+        return Ok(vec![seg(a, b, collapse_loops(&got.text), Some("repeat"))]);
     }
     let m = audio::split_middle(&audio.samples, a, b);
-    let texts = w.transcribe(audio, &[(a, m), (m, b)], lang)?;
+    let parts = w.transcribe(audio, &[(a, m), (m, b)], lang)?;
     let mut out = Vec::new();
-    for (r, t) in [(a, m), (m, b)].into_iter().zip(texts) {
-        out.extend(fix_loops(w, audio, r, t, lang, depth + 1)?);
+    for (r, part) in [(a, m), (m, b)].into_iter().zip(parts) {
+        out.extend(fix_loops(w, audio, r, part, lang, depth + 1)?);
     }
     Ok(out)
 }
@@ -875,13 +848,16 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), text: St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::EngineInfo;
     use std::collections::VecDeque;
 
     /// Replays canned transcripts and records what it was asked.
     struct Fake {
         calls: Vec<Vec<(usize, usize)>>,
-        replies: VecDeque<Vec<String>>,
+        replies: VecDeque<Vec<Recognized>>,
+    }
+
+    fn said(text: &str) -> Recognized {
+        Recognized { text: text.to_string(), stopped: false }
     }
 
     impl Engine for Fake {
@@ -891,21 +867,21 @@ mod tests {
         fn ensure_loaded(&mut self) -> Result<EngineInfo> {
             Ok(EngineInfo::default())
         }
-        fn transcribe(&mut self, _a: &Audio, ranges: &[(usize, usize)], _l: &str) -> Result<Vec<String>> {
+        fn transcribe(&mut self, _a: &Audio, ranges: &[(usize, usize)], _l: &str) -> Result<Vec<Recognized>> {
             self.calls.push(ranges.to_vec());
             Ok(self.replies.pop_front().expect("no more canned replies"))
         }
         fn forget(&mut self, _: &str) {}
     }
 
-    fn looping() -> String {
-        format!("ناجح 20 ما في {}س", "ست ".repeat(20))
+    fn looping() -> Recognized {
+        said(&format!("ناجح 20 ما في {}س", "ست ".repeat(20)))
     }
 
     #[test]
     fn a_looping_chunk_is_transcribed_again_in_two_halves() {
         let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
-        let mut e = Fake { calls: vec![], replies: VecDeque::from(vec![vec!["أول نص".into(), "ثاني نص".into()]]) };
+        let mut e = Fake { calls: vec![], replies: VecDeque::from(vec![vec![said("أول نص"), said("ثاني نص")]]) };
         let segs = fix_loops(&mut e, &audio, (0, 20 * SR), looping(), "ar", 0).unwrap();
         assert_eq!(e.calls.len(), 1);
         assert_eq!(e.calls[0].len(), 2, "both halves in one batch");
@@ -934,8 +910,29 @@ mod tests {
     fn ordinary_text_is_kept_as_one_line() {
         let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
         let mut e = Fake { calls: vec![], replies: VecDeque::new() };
-        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), "طيب هلا مكتب الاختبارات".into(), "ar", 0).unwrap();
+        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), said("طيب هلا مكتب الاختبارات"), "ar", 0).unwrap();
         assert!(e.calls.is_empty());
         assert_eq!(segs.len(), 1);
+    }
+
+    #[test]
+    fn text_that_stopped_early_is_read_again_so_the_rest_of_the_audio_is_not_lost() {
+        let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
+        let mut e = Fake { calls: vec![], replies: VecDeque::from(vec![vec![said("أول نص"), said("ثاني نص")]]) };
+        let stopped = Recognized { text: "أول".to_string(), stopped: true };
+        let segs = fix_loops(&mut e, &audio, (0, 20 * SR), stopped, "ar", 0).unwrap();
+        assert_eq!(e.calls.len(), 1);
+        assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["أول نص", "ثاني نص"]);
+    }
+
+    #[test]
+    fn a_short_piece_that_stopped_early_keeps_its_text_and_is_flagged() {
+        let audio = Audio { id: "x".into(), samples: vec![0.1; 3 * SR] };
+        let mut e = Fake { calls: vec![], replies: VecDeque::new() };
+        let stopped = Recognized { text: "طيب".to_string(), stopped: true };
+        let segs = fix_loops(&mut e, &audio, (0, 3 * SR), stopped, "ar", 0).unwrap();
+        assert!(e.calls.is_empty());
+        assert_eq!(segs[0].text, "طيب");
+        assert_eq!(segs[0].flag.as_deref(), Some("repeat"));
     }
 }

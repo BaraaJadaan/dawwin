@@ -5,6 +5,7 @@ mod engine;
 mod folder;
 mod history;
 pub mod i18n;
+mod models;
 mod queue;
 mod setup;
 mod transcript;
@@ -38,13 +39,8 @@ fn refresh_setup(core: C) -> Snapshot {
 }
 
 #[tauri::command]
-fn setup_engine(core: C) {
-    core.inner().setup_engine();
-}
-
-#[tauri::command]
-fn download_model(core: C) {
-    core.download_model();
+fn download_model(core: C, id: String) {
+    core.inner().download_model(&id);
 }
 
 #[tauri::command]
@@ -52,56 +48,70 @@ fn stop_download(core: C) {
     core.stop_download();
 }
 
-/// Keep a Hugging Face token for downloading the (gated) model.
 #[tauri::command]
-fn set_hf_token(core: C, token: String) -> R<Snapshot> {
-    setup::save_token(&core.paths, &token).map_err(e)?;
-    core.refresh_setup();
+fn use_model(core: C, id: String) -> R<Snapshot> {
+    core.use_model(&id).map_err(e)?;
     Ok(core.snapshot())
 }
 
 #[tauri::command]
-fn forget_hf_token(core: C) -> R<Snapshot> {
-    setup::forget_token(&core.paths).map_err(e)?;
-    core.refresh_setup();
+fn delete_model(core: C, id: String) -> R<Snapshot> {
+    core.delete_model(&id).map_err(e)?;
     Ok(core.snapshot())
+}
+
+/// How much the Python engine of older versions left behind, in bytes.
+#[tauri::command]
+async fn old_engine_size(app: AppHandle) -> u64 {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.paths.old_engine_dirs().iter().map(|d| setup::folder_size(d)).sum())
+        .await
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+async fn remove_old_engine(app: AppHandle) -> R<()> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        for d in core.paths.old_engine_dirs() {
+            std::fs::remove_dir_all(&d).map_err(|x| format!("{}: {x}", d.display()))?;
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|x| x.to_string())?
 }
 
 #[tauri::command]
 async fn choose_download_dir(app: AppHandle) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should the model (about 4 GB) be saved?")).blocking_pick_folder() else {
+    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should the model be saved?")).blocking_pick_folder() else {
         return Ok(core.snapshot());
     };
     let dir = dir.into_path().map_err(|x| x.to_string())?;
-    // a fresh folder of its own inside the one picked, unless the picked one is already it
-    let target = if dir.file_name().is_some_and(|n| n == "cohere-transcribe-arabic-07-2026") {
-        dir
-    } else {
-        dir.join("cohere-transcribe-arabic-07-2026")
-    };
-    core.change_settings(|s| s.download_dir = Some(target.display().to_string())).map_err(e)?;
+    core.set_download_dir(&dir).map_err(e)?;
     Ok(core.snapshot())
 }
 
-/// Use model files the user already has (a folder, or a Hugging Face cache folder).
+/// Use a model file the user already has.
 #[tauri::command]
 async fn import_model(app: AppHandle) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let Some(dir) = app
+    let Some(file) = app
         .dialog()
         .file()
-        .set_title(crate::tr!("Choose the folder with the model files (config.json, model.safetensors, tokenizer…)"))
-        .blocking_pick_folder()
+        .set_title(crate::tr!("Choose the model file (.gguf)"))
+        .add_filter("GGUF", &["gguf"])
+        .blocking_pick_file()
     else {
         return Ok(core.snapshot());
     };
-    let dir = dir.into_path().map_err(|x| x.to_string())?;
-    core.import_model(&dir).map_err(e)?;
+    let file = file.into_path().map_err(|x| x.to_string())?;
+    core.import_model(&file).map_err(e)?;
     Ok(core.snapshot())
 }
 
-/// The same, for a folder dropped on the window.
+/// The same, for a file or folder dropped on the window.
 #[tauri::command]
 fn import_model_path(core: C, path: String) -> R<Snapshot> {
     core.import_model(std::path::Path::new(&path.replace('/', "\\"))).map_err(e)?;
@@ -187,16 +197,21 @@ fn enqueue_folder(core: C, path: String, language: String) -> queue::FolderScan 
     core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language))
 }
 
-/// What a dropped path is: a model folder to import, a folder to transcribe, or something else.
+/// What a dropped path is: a model to import, a folder to transcribe, or something else.
 #[tauri::command]
 fn path_kind(path: String) -> &'static str {
     let p = PathBuf::from(path.replace('/', "\\"));
-    if !p.is_dir() {
-        "other"
-    } else if setup::validate_model_dir(&p).is_ok() {
+    if p.is_dir() {
+        // a folder of recordings stays a folder of recordings, even with a model in it
+        if folder::recordings_in(&p).is_empty() && models::find_in_folder(&p).is_some() {
+            "model"
+        } else {
+            "folder"
+        }
+    } else if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("gguf")) {
         "model"
     } else {
-        "folder"
+        "other"
     }
 }
 
@@ -250,18 +265,11 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
             if s.text != text {
                 s.text = text;
                 s.edited = true;
-                s.words.clear(); // timed again below
+                s.words.clear(); // they no longer fit the text
             }
         }
     })?;
-    core.request_align(&id, Some(vec![index]));
     Ok(())
-}
-
-/// Word times for a transcript saved without them; they arrive with a "words-ready" event.
-#[tauri::command]
-fn align_transcript(core: C, id: String) {
-    core.request_align(&id, None);
 }
 
 #[tauri::command]
@@ -392,17 +400,17 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_state,
             refresh_setup,
-            setup_engine,
             download_model,
             stop_download,
-            set_hf_token,
-            forget_hf_token,
+            use_model,
+            delete_model,
+            old_engine_size,
+            remove_old_engine,
             choose_download_dir,
             import_model,
             import_model_path,
             set_run_on,
             set_ui_language,
-            align_transcript,
             check_updates,
             set_check_updates,
             export_to_path,

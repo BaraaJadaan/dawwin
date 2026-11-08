@@ -1,0 +1,29 @@
+[package]
+name = "dawwin-engine"
+version = "1.1.0"
+description = "The speech engine of Dawwin: Cohere Transcribe Arabic through transcribe.cpp, in a process of its own"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/BaraaJadaan/dawwin"
+authors = ["Baraa Jadaan"]
+
+# Not part of a workspace: the app builds without a C++ toolchain, this does not.
+[workspace]
+
+[features]
+default = []
+# GPUs of every brand. Needs the Vulkan SDK to build, only the graphics driver to run.
+vulkan = ["transcribe-cpp/vulkan"]
+
+[dependencies]
+# Shared backends: a missing or broken GPU driver cannot stop the engine from starting, and the
+# CPU code is picked at run time, so it runs on old processors and is fast on new ones.
+transcribe-cpp = { version = "=0.4.1", default-features = false, features = ["dynamic-backends"] }
+serde_json = "1"
+log = "0.4"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true

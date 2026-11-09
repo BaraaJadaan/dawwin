@@ -65,8 +65,8 @@ never leave the computer.
 3. Drop a recording on the window.
 
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
-laptop CPU, it runs about 3 to 4 times faster than real time. By their published figures, Canary is about
-twice as fast as that, and Whisper about a third as fast.
+laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary
+ran about 7 times faster than real time, and Whisper about as fast as real time.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM, and room for the model. For WhatsApp voice
 notes (opus), install ffmpeg: `winget install Gyan.FFmpeg`.

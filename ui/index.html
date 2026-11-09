@@ -269,6 +269,16 @@
         <div id="segments" class="segments"></div>
         <div class="player" id="player" hidden>
           <audio id="audio" controls preload="metadata"></audio>
+          <div class="volume" id="volume" dir="ltr">
+            <button class="icon-btn" id="btn-mute" data-i18n-aria="player.mute">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M4 9.500v5h3.500L12 19V5L7.500 9.500H4Z" fill="currentColor"/>
+                <path class="on" d="M15.500 9a4 4 0 0 1 0 6M18 6.500a8 8 0 0 1 0 11"/>
+                <path class="off" d="m16 9.500 5 5m0-5-5 5"/>
+              </svg>
+            </button>
+            <input type="range" id="volume-bar" min="0" max="100" step="1" data-i18n-aria="player.volume">
+          </div>
           <span id="player-note" class="muted small"></span>
         </div>
       </section>

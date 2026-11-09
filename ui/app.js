@@ -583,7 +583,11 @@ function segRow(s, i, live) {
   if (!live) {
     text.contentEditable = "plaintext-only";
     // editing works on plain text: drop the search highlights (only then, so a selection survives)
-    text.addEventListener("focus", () => { if (text.querySelector("mark")) text.textContent = S.current.segments[i].text; });
+    text.addEventListener("focus", () => {
+      if (!text.querySelector("mark")) return;
+      text.textContent = S.current.segments[i].text;
+      shownWord = "";
+    });
     text.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); text.blur(); }
       if (ev.key === "Escape") { text.textContent = S.current.segments[i].text; text.blur(); }
@@ -663,6 +667,7 @@ function paintSegment(i) {
   if (!row) return;
   const el = row.querySelector(".text");
   if (document.activeElement === el) return;
+  shownWord = ""; // the highlight sits on the text nodes replaced here: draw it again
   const text = S.current.segments[i].text;
   const hits = S.hits.map((h, n) => ({ ...h, n })).filter((h) => h.i === i);
   if (!hits.length) { el.textContent = text; return; }
@@ -712,6 +717,34 @@ async function setupAudio(live) {
   }
   a.hidden = false;
   a.src = fileSrc(p);
+}
+
+// ------------------------------------------------------------------ volume
+
+const VOLUME_DEFAULT = 60;
+// The bar runs on a curve, because hearing does: most of its length covers the quiet end.
+const barToVolume = (bar) => (bar / 100) ** 2;
+const volumeToBar = (volume) => Math.round(Math.sqrt(volume) * 100);
+
+function wireVolume() {
+  const a = $("audio"), bar = $("volume-bar");
+  const saved = Number(store.get("volume", VOLUME_DEFAULT));
+  a.volume = barToVolume(saved >= 0 && saved <= 100 ? saved : VOLUME_DEFAULT);
+  a.muted = store.get("muted", "0") === "1";
+  const paint = () => {
+    bar.value = a.muted ? 0 : volumeToBar(a.volume);
+    $("volume").classList.toggle("silent", a.muted || a.volume === 0);
+  };
+  bar.oninput = () => { a.muted = false; a.volume = barToVolume(Number(bar.value)); };
+  $("btn-mute").onclick = () => {
+    if (a.volume === 0) { a.muted = false; a.volume = barToVolume(VOLUME_DEFAULT); } else a.muted = !a.muted;
+  };
+  a.addEventListener("volumechange", () => {
+    store.set("volume", volumeToBar(a.volume));
+    store.set("muted", a.muted ? "1" : "0");
+    paint();
+  });
+  paint();
 }
 
 // ------------------------------------------------------------------ hear a word
@@ -798,7 +831,10 @@ function followTick() {
     const key = `${S.current.id}:${i}:${k}`;
     const row = $("segments").querySelector(`.seg[data-i="${i}"]`);
     const el = row?.querySelector(".text");
-    if (k >= 0 && el && key !== shownWord && document.activeElement !== el && CSS.highlights) {
+    if (el && el.textContent !== S.current.segments[i].text) {
+      // the line is being edited: its characters no longer match the timings of its words
+      if (shownWord) clearWordHighlight();
+    } else if (k >= 0 && el && key !== shownWord && CSS.highlights) {
       const r = textRange(el, words[k].a, words[k].b);
       if (r) { CSS.highlights.set("now-word", new Highlight(r)); shownWord = key; }
     }
@@ -1084,6 +1120,7 @@ function onSegment({ id, segment }) {
 
 function wire() {
   wireListen();
+  wireVolume();
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => {
     if (ev.target.closest("#home-folder")) chooseFolder();

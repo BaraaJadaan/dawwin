@@ -1,6 +1,6 @@
 [package]
 name = "dawwin"
-version = "1.1.0"
+version = "1.1.1"
 description = "Local Arabic speech-to-text with Cohere Transcribe Arabic"
 edition = "2021"
 license = "MIT"

@@ -337,7 +337,16 @@ mark.current { background: var(--mark-current); color: #1c1203; }
 .empty-live { text-align: center; color: var(--muted); padding: 60px 20px; font-size: 14px; }
 
 .player { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 20px; display: flex; align-items: center; gap: 12px; }
-.player audio { flex: 1; height: 36px; }
+.player audio { flex: 1; min-width: 0; height: 36px; }
+/* the app's own, longer volume bar takes the place of the player's small one */
+.player audio::-webkit-media-controls-mute-button,
+.player audio::-webkit-media-controls-volume-control-container,
+.player audio::-webkit-media-controls-volume-slider { display: none; }
+.player audio[hidden] ~ .volume { display: none; }
+.volume { flex: 0 1 240px; min-width: 120px; display: flex; align-items: center; gap: 6px; }
+.volume input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.volume .off, .volume.silent .on { display: none; }
+.volume.silent .off { display: inline; }
 #player-note:empty { display: none; }
 
 /* ------------------------------------------------------------ overlays */

@@ -1,4 +1,7 @@
-//! The speech engine: Cohere Transcribe Arabic through transcribe.cpp.
+//! The speech engine: speech models (Cohere Transcribe, Canary, Whisper) through transcribe.cpp.
+//!
+//! One process holds one model. The app decides which model a recording needs, and starts a new
+//! process to change it.
 //!
 //! It runs in a process of its own, so a crash in a GPU driver costs a retry on the CPU instead of
 //! the whole app, and quitting it gives all its memory back. The app talks to it over stdin and
@@ -9,7 +12,7 @@
 //!
 //!   load:       {"model": <.gguf file>} -> where it runs
 //!   transcribe: {"path": <raw little-endian f32, 16 kHz mono>, "ranges": [[start, end], ...],
-//!                "language": "ar" | "en"} -> {"texts": [...], "stopped": [...]}, one per range.
+//!                "language": "ar" | "da" | ...} -> {"texts": [...], "stopped": [...]}, one per range.
 //!                `stopped`: the model looped or ran out of tokens, so the text ends early.
 //!
 //! `--cpu` keeps the GPU driver out of the process altogether.
@@ -191,9 +194,7 @@ fn open(path: &str, gpu: Option<Device>) -> Result<Session, Error> {
         ..ModelOptions::default()
     };
     let model = Model::load_with(path, &options)?;
-    if model.arch() != "cohere_asr" {
-        return Err(Error::ModelLoad(format!("{path} is not a Cohere Transcribe model ({})", model.arch())));
-    }
+    log::info!("model: {}", model.arch());
     let available = std::thread::available_parallelism().map_or(1, |n| n.get());
     // on the GPU the threads only feed it; on the CPU more than eight gains nothing
     let threads = if on_gpu { available.saturating_sub(2).max(1) } else { available.min(8) };

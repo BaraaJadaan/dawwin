@@ -102,10 +102,6 @@ button.chip:hover { border-color: var(--line-strong); }
 .chip.warn .dot { background: var(--warn); }
 .chip.busy .dot { background: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
 .chip.bad .dot { background: var(--danger); }
-.ui-lang { cursor: pointer; color: var(--muted); padding-inline: 9px 4px; }
-.ui-lang select { border: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; padding: 0 2px; outline: none; }
-.ui-lang select option { background: var(--panel); color: var(--text); }
-.ui-lang:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Arabic letters read smaller than Latin ones at the same size */
 :root[lang="ar"] body { font-size: 14.5px; }
 @keyframes pulse { 50% { opacity: .3; } }

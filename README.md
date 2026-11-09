@@ -9,6 +9,8 @@ Your recordings and transcripts never leave the computer.
 
 **[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)**
 
+![A finished transcript in Dawwin. The word being said is highlighted while the recording plays.](docs/screenshots/transcript.png)
+
 ## Features
 
 - Drop recordings on the window: m4a, mp3, wav, WhatsApp voice notes, flac, mp4 video. Several files queue up.
@@ -21,6 +23,21 @@ Your recordings and transcripts never leave the computer.
   subtitles (SRT, VTT) or data (CSV, TSV, JSON).
 - Runs on the GPU of any brand (NVIDIA, AMD, Intel), or on the CPU when there is none.
 - English or Arabic interface.
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/home.png" alt="The start page with a drop area for recordings and a choice of spoken language."><br>Drop recordings on the window, or choose a whole folder.</td>
+    <td width="50%"><img src="docs/screenshots/transcribing.png" alt="A recording being transcribed, with its text appearing and two more recordings waiting in the queue."><br>Read the text while it is being written. The rest of the queue waits its turn.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/search-export.png" alt="A search with every match highlighted, and the export menu open."><br>Search the transcript and export it in eight formats.</td>
+    <td><img src="docs/screenshots/play-from-here.png" alt="A selected word with a right-click menu offering Play from here."><br>Select a word and right-click to hear it being said.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/arabic.png" alt="The same transcript with the interface in Arabic, laid out right to left."><br>The whole interface also comes in Arabic, right to left.</td>
+    <td><img src="docs/screenshots/setup.png" alt="The first-run page with three steps and a choice between two models."><br>First run: choose a model and let it download. It can be paused and resumed.</td>
+  </tr>
+</table>
 
 ## Getting started
 

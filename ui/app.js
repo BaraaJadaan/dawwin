@@ -118,21 +118,19 @@ function setChip(el, cls, text) {
 
 function renderChips() {
   const { engine: e, setup: st } = S.snap;
-  const ce = $("chip-engine"), cm = $("chip-model");
-  if (e.state === "missing") setChip(ce, "bad", t("chip.noEngine"));
-  else if (e.state === "starting") setChip(ce, "busy", t("chip.starting"));
-  else if (e.state === "error") setChip(ce, "bad", t("chip.error"));
-  else if (st.run_on === "cpu" || e.device === "cpu") setChip(ce, "warn", t("chip.cpu"));
-  else if (e.gpu) setChip(ce, "ok", t("chip.gpu", { gpu: shortGpu(e.gpu) }));
-  else setChip(ce, "", t("chip.engineReady"));
-
-  if (st.download.active) {
-    const pct = st.download.total ? Math.floor((100 * st.download.done) / st.download.total) : 0;
-    setChip(cm, "busy", t("chip.downloading", { pct }));
-  } else if (!st.model.found) setChip(cm, "bad", t("chip.noModel"));
-  else if (e.state === "loading") setChip(cm, "busy", t("chip.loading"));
-  else if (e.state === "loaded") setChip(cm, "ok", t("chip.loaded"));
-  else setChip(cm, "ok", t("chip.ready"));
+  const chip = $("chip-status"), d = st.download;
+  if (e.state === "missing") return setChip(chip, "bad", t("chip.noEngine"));
+  if (e.state === "error") return setChip(chip, "bad", t("chip.error"));
+  if (d.active) {
+    const pct = d.total ? Math.floor((100 * d.done) / d.total) : 0;
+    return setChip(chip, "busy", t("chip.downloading", { pct }));
+  }
+  if (!st.model.found) return setChip(chip, "bad", t("chip.noModel"));
+  if (e.state === "starting") return setChip(chip, "busy", t("chip.starting"));
+  if (e.state === "loading") return setChip(chip, "busy", t("chip.loading"));
+  // the GPU's name runs left to right, also inside an Arabic sentence
+  const where = st.run_on !== "cpu" && e.device !== "cpu" && e.gpu ? `\u2066${shortGpu(e.gpu)}\u2069` : t("chip.cpu");
+  setChip(chip, e.note ? "warn" : "ok", `${where} · ${t(e.state === "loaded" ? "chip.loaded" : "chip.ready")}`);
 }
 
 // ------------------------------------------------------------------ queue
@@ -1138,7 +1136,6 @@ function wire() {
     catch (err) { toast(String(err)); }
   };
   $("btn-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
-  $("ui-lang").onchange = () => setUiLang($("ui-lang").value);
   $("btn-download").onclick = () => {
     if (S.snap.setup.download.active) invoke("stop_download");
     else invoke("download_model", { id: $("btn-download").dataset.model });
@@ -1222,18 +1219,12 @@ function wire() {
 }
 
 /** Strings with links or code inside, and the language menu. */
-function renderStatic() {
-  const sel = $("ui-lang");
-  sel.innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
-  sel.value = UI_LANG;
-}
 
 /** Switch the interface language and redraw everything that shows text. */
 async function setUiLang(lang, tellApp = true) {
   UI_LANG = I18N[lang] ? lang : "en";
   store.set("uiLang", UI_LANG);
   applyI18n();
-  renderStatic();
   if (S.snap) {
     renderChips();
     renderQueue();
@@ -1256,7 +1247,6 @@ async function init() {
   // the interface language: the app's setting, else this window's last choice, else Windows' language
   UI_LANG = store.get("uiLang", (navigator.language || "en").toLowerCase().startsWith("ar") ? "ar" : "en");
   applyI18n();
-  renderStatic();
   wire();
   const snap = await invoke("get_state");
   const saved = snap.setup.ui_lang;

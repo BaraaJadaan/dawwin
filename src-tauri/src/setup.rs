@@ -1,12 +1,13 @@
 //! Where things live, the settings, which tools are installed, and where the model is.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::models;
+use crate::models::{self, Family};
 
 #[cfg(windows)]
 pub fn no_window(cmd: &mut Command) {
@@ -163,9 +164,12 @@ pub fn engine_exe() -> Option<PathBuf> {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Settings {
-    /// The model file in use
+    /// The Cohere model file in use
     #[serde(default)]
     pub model_file: Option<String>,
+    /// The model file in use of the other families, by the family's key
+    #[serde(default)]
+    pub model_files: BTreeMap<String, String>,
     /// Where downloaded models are saved
     #[serde(default)]
     pub download_dir: Option<String>,
@@ -201,6 +205,28 @@ impl Settings {
         std::fs::write(&tmp, serde_json::to_vec_pretty(self)?)?;
         std::fs::rename(&tmp, paths.settings_file())?;
         Ok(())
+    }
+
+    /// The file the user chose for this family of models.
+    pub fn chosen_model(&self, family: Family) -> Option<PathBuf> {
+        match family {
+            Family::Cohere => self.model_file.as_ref(),
+            f => self.model_files.get(f.key()),
+        }
+        .map(PathBuf::from)
+    }
+
+    pub fn choose_model(&mut self, family: Family, file: Option<&Path>) {
+        let file = file.map(|f| f.display().to_string());
+        match (family, file) {
+            (Family::Cohere, file) => self.model_file = file,
+            (f, Some(file)) => {
+                self.model_files.insert(f.key().to_string(), file);
+            }
+            (f, None) => {
+                self.model_files.remove(f.key());
+            }
+        }
     }
 
     pub fn run_on(&self) -> &str {
@@ -242,26 +268,33 @@ pub struct ModelStatus {
     /// The file the model loads from
     pub path: String,
     pub bytes: u64,
-    /// "q8" | "q4", or empty for a model file of the user's own
+    /// One of ours ("q8", "canary", ...), or empty for a model file of the user's own
     pub variant: String,
-    /// Where downloads are saved
-    pub download_dir: String,
 }
 
-pub fn model_status(paths: &Paths, settings: &Settings) -> ModelStatus {
-    let download_dir = settings.download_dir(paths);
-    let chosen = settings.model_file.as_ref().map(PathBuf::from).filter(|p| models::check_file(p).is_ok());
-    let found = chosen.or_else(|| models::find_in_folder(&download_dir)).or_else(|| models::find_in_folder(&paths.default_model_dir()));
+/// The model file of this family: the one chosen, else one in the download folder or the usual place.
+pub fn model_status(paths: &Paths, settings: &Settings, family: Family) -> ModelStatus {
+    let chosen = settings.chosen_model(family).filter(|p| models::check_file(p).is_ok_and(|f| f == family));
+    let found = chosen
+        .or_else(|| models::find_in_folder(&settings.download_dir(paths), Some(family)))
+        .or_else(|| models::find_in_folder(&paths.default_model_dir(), Some(family)));
     match found {
         Some(path) => ModelStatus {
             found: true,
             bytes: std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
             variant: models::variant_of(&path).map(|v| v.id.to_string()).unwrap_or_default(),
             path: path.display().to_string(),
-            download_dir: download_dir.display().to_string(),
         },
-        None => ModelStatus { download_dir: download_dir.display().to_string(), ..Default::default() },
+        None => ModelStatus::default(),
     }
+}
+
+/// The model file a recording in this language is transcribed with: the best one that is here.
+pub fn model_for(paths: &Paths, settings: &Settings, language: &str) -> Option<(Family, ModelStatus)> {
+    models::models_for(language).into_iter().find_map(|v| {
+        let status = model_status(paths, settings, v.family);
+        status.found.then_some((v.family, status))
+    })
 }
 
 #[cfg(test)]
@@ -296,6 +329,60 @@ mod tests {
         assert!(s.check_updates);
         assert!(s.model_file.is_none(), "the old model cannot be used by this engine");
         assert_eq!(s.folder_formats(), ["txt"]);
+    }
+
+    /// A folder of model files named by their architecture, with the settings pointing nowhere.
+    fn with_models(name: &str, archs: &[&str]) -> (Paths, Settings) {
+        let root = std::env::temp_dir().join(format!("dawwin-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let models = root.join("models");
+        std::fs::create_dir_all(&models).unwrap();
+        for arch in archs {
+            let mut b = b"GGUF\x03\0\0\0".to_vec();
+            b.extend([0u8; 16]);
+            b.extend(20u64.to_le_bytes());
+            b.extend(b"general.architecture");
+            b.extend(8u32.to_le_bytes());
+            b.extend((arch.len() as u64).to_le_bytes());
+            b.extend(arch.as_bytes());
+            std::fs::write(models.join(format!("my-{arch}.gguf")), b).unwrap();
+        }
+        (Paths { local: root.clone(), roaming: root }, Settings::default())
+    }
+
+    #[test]
+    fn a_recording_goes_to_the_best_model_that_is_here() {
+        let (paths, s) = with_models("route", &["cohere_asr", "whisper"]);
+        let family = |l: &str| model_for(&paths, &s, l).map(|(f, _)| f);
+        assert_eq!(family("ar"), Some(Family::Cohere));
+        assert_eq!(family("en"), Some(Family::Cohere));
+        assert_eq!(family("da"), Some(Family::Whisper), "no Canary here: Whisper can do Danish too");
+        assert_eq!(family("tr"), Some(Family::Whisper));
+
+        let (paths, s) = with_models("route2", &["canary"]);
+        let family = |l: &str| model_for(&paths, &s, l).map(|(f, _)| f);
+        assert_eq!(family("da"), Some(Family::Canary));
+        assert_eq!(family("en"), Some(Family::Canary));
+        assert_eq!(family("ar"), None, "Arabic needs its own model");
+        assert_eq!(family("tr"), None, "Canary has no Turkish");
+    }
+
+    #[test]
+    fn the_chosen_file_of_each_family_is_kept_apart() {
+        let (paths, mut s) = with_models("slots", &["cohere_asr", "canary", "whisper"]);
+        let dir = paths.default_model_dir();
+        s.choose_model(Family::Whisper, Some(&dir.join("my-whisper.gguf")));
+        s.choose_model(Family::Cohere, Some(&dir.join("my-cohere_asr.gguf")));
+        assert!(s.model_file.as_deref().unwrap().ends_with("my-cohere_asr.gguf"), "where older versions kept it");
+        assert!(model_status(&paths, &s, Family::Whisper).path.ends_with("my-whisper.gguf"));
+        assert!(model_status(&paths, &s, Family::Canary).path.ends_with("my-canary.gguf"), "found in the folder");
+
+        // a choice pointing at a file of another family is not believed
+        s.choose_model(Family::Canary, Some(&dir.join("my-whisper.gguf")));
+        assert!(model_status(&paths, &s, Family::Canary).path.ends_with("my-canary.gguf"));
+
+        s.choose_model(Family::Whisper, None);
+        assert!(s.chosen_model(Family::Whisper).is_none());
     }
 
     #[test]

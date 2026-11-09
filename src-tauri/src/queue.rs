@@ -1,7 +1,7 @@
 //! The app's state and the one thread that owns the engine: it runs the queue and unloads the
 //! model when the app sits idle. A model download runs on a thread of its own.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -16,7 +16,7 @@ use crate::audio::{self, SR};
 use crate::engine::{Audio, Engine, EngineFailed, EngineInfo, EngineProcess, OutOfMemory, Recognized};
 use crate::folder;
 use crate::history;
-use crate::models;
+use crate::models::{self, Family};
 use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
 use crate::transcript::{collapse_loops, find_loop, Segment, Transcript};
 
@@ -24,7 +24,6 @@ const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-pub const MODEL_LABEL: &str = "Cohere Transcribe Arabic (07-2026)";
 const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing"];
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -86,9 +85,13 @@ pub struct DownloadView {
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct ModelView {
     pub id: String,
+    /// "cohere" | "canary" | "whisper"
+    pub family: String,
     pub file: String,
     pub size: u64,
     pub url: String,
+    /// Where to download it by hand
+    pub page: String,
     /// The whole file is there
     pub on_disk: bool,
     /// How much of a download that is not finished is there
@@ -100,9 +103,11 @@ pub struct ModelView {
 pub struct SetupView {
     pub engine_found: bool,
     pub ffmpeg: Option<String>,
-    pub model: ModelStatus,
+    /// The model file in use of each family, by its key
+    pub families: BTreeMap<String, ModelStatus>,
     pub models: Vec<ModelView>,
-    pub files_url: String,
+    /// Where downloads are saved
+    pub download_dir: String,
     /// "auto" | "cpu"
     pub run_on: String,
     /// The interface language, when one was picked
@@ -213,23 +218,27 @@ impl Core {
     pub fn refresh_setup(&self) {
         let engine_found = setup::engine_exe().is_some();
         let ffmpeg = setup::find_exe("ffmpeg").map(|p| p.display().to_string());
-        let model = self.model_status();
-        let (run_on, ui_lang, check_updates, folder_formats, dir) = {
+        let (families, run_on, ui_lang, check_updates, folder_formats, dir) = {
             let st = self.settings.lock().unwrap();
-            (st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths))
+            let families: BTreeMap<String, ModelStatus> =
+                Family::ALL.into_iter().map(|f| (f.key().to_string(), setup::model_status(&self.paths, &st, f))).collect();
+            (families, st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths))
         };
         let models = models::VARIANTS
             .iter()
             .map(|v| {
                 let dest = dir.join(v.file);
+                let active = families[v.family.key()].variant == v.id;
                 ModelView {
                     id: v.id.into(),
+                    family: v.family.key().into(),
                     file: v.file.into(),
                     size: v.size,
                     url: models::url(*v),
-                    on_disk: models::check_file(&dest).is_ok() || model.variant == v.id,
+                    page: models::files_page(*v),
+                    on_disk: models::check_file(&dest).is_ok() || active,
                     partial: models::downloaded(&dest),
-                    active: model.variant == v.id,
+                    active,
                 }
             })
             .collect();
@@ -237,9 +246,9 @@ impl Core {
             let st = &mut s.setup;
             st.engine_found = engine_found;
             st.ffmpeg = ffmpeg;
-            st.model = model;
+            st.families = families;
             st.models = models;
-            st.files_url = models::files_page();
+            st.download_dir = dir.display().to_string();
             st.run_on = run_on;
             st.ui_lang = ui_lang;
             st.check_updates = check_updates;
@@ -255,10 +264,6 @@ impl Core {
         });
     }
 
-    pub fn model_status(&self) -> ModelStatus {
-        setup::model_status(&self.paths, &self.settings.lock().unwrap())
-    }
-
     /// Change the settings, save them, and show what that changes.
     pub fn change_settings(&self, f: impl FnOnce(&mut Settings)) -> Result<()> {
         {
@@ -270,17 +275,24 @@ impl Core {
         Ok(())
     }
 
-    /// Use a model file the user already has, or one in the folder they point at.
-    pub fn import_model(&self, path: &Path) -> Result<ModelStatus> {
-        let file = if path.is_dir() {
-            models::find_in_folder(path).ok_or_else(|| anyhow!(crate::tr!("That folder does not hold a model file (.gguf).")))?
+    /// Use a model file the user already has, or the ones in the folder they point at.
+    pub fn import_model(&self, path: &Path) -> Result<()> {
+        let files: Vec<(Family, PathBuf)> = if path.is_dir() {
+            let found: Vec<_> = Family::ALL.into_iter().filter_map(|f| Some((f, models::find_in_folder(path, Some(f))?))).collect();
+            if found.is_empty() {
+                return Err(anyhow!(crate::tr!("That folder does not hold a model file (.gguf).")));
+            }
+            found
         } else {
-            models::check_file(path)?;
-            path.to_path_buf()
+            vec![(models::check_file(path)?, path.to_path_buf())]
         };
-        self.change_settings(|s| s.model_file = Some(file.display().to_string()))?;
+        self.change_settings(|s| {
+            for (family, file) in &files {
+                s.choose_model(*family, Some(file));
+            }
+        })?;
         self.send(Msg::Restart);
-        Ok(self.model_status())
+        Ok(())
     }
 
     /// Switch to a model that is already on the disk.
@@ -288,7 +300,7 @@ impl Core {
         let v = models::variant(id).ok_or_else(|| anyhow!("unknown model {id}"))?;
         let file = self.settings.lock().unwrap().download_dir(&self.paths).join(v.file);
         models::check_file(&file)?;
-        self.change_settings(|s| s.model_file = Some(file.display().to_string()))?;
+        self.change_settings(|s| s.choose_model(v.family, Some(&file)))?;
         self.send(Msg::Restart);
         Ok(())
     }
@@ -300,9 +312,9 @@ impl Core {
         let file = dir.join(v.file);
         models::discard(&file);
         if file.exists() {
-            let in_use = self.settings.lock().unwrap().model_file.as_deref().map(PathBuf::from) == Some(file.clone());
+            let in_use = self.settings.lock().unwrap().chosen_model(v.family).as_ref() == Some(&file);
             if in_use {
-                self.change_settings(|s| s.model_file = None)?;
+                self.change_settings(|s| s.choose_model(v.family, None))?;
             }
             self.send(Msg::DeleteFile(file));
         } else {
@@ -390,7 +402,7 @@ impl Core {
             let error = result.err().map(|e| format!("{e:#}"));
             if finished {
                 let _ = core.change_settings(|s| {
-                    s.model_file = Some(dest.display().to_string());
+                    s.choose_model(v.family, Some(&dest));
                     s.resume_model = None;
                 });
             } else if error.is_some() {
@@ -525,16 +537,22 @@ impl Core {
 
 // ---------------------------------------------------------------- engine thread
 
-fn ensure_engine<'a>(core: &Arc<Core>, engine: &'a mut Option<EngineProcess>) -> Result<&'a mut EngineProcess> {
+/// The engine, started if needed. With a `model` it is one that holds that model: a process holds
+/// one, and quitting it gives all the memory back.
+fn ensure_engine<'a>(core: &Arc<Core>, engine: &'a mut Option<EngineProcess>, model: Option<&str>) -> Result<&'a mut EngineProcess> {
+    if let (Some(e), Some(m)) = (engine.as_mut(), model) {
+        if !e.use_model(m) {
+            engine.take().unwrap().shutdown();
+        }
+    }
     if engine.is_none() {
         let exe = setup::engine_exe().ok_or_else(|| anyhow!(crate::tr!("The speech engine is missing. Please install Dawwin again.")))?;
-        let model = core.model_status();
         let cpu_only = core.settings.lock().unwrap().run_on() == "cpu" || core.gpu_failed.load(Ordering::SeqCst);
         core.update(|s| {
             s.engine.state = "starting".into();
             s.engine.error = None;
         });
-        *engine = Some(EngineProcess::spawn(&exe, &core.paths, &model.path, cpu_only)?);
+        *engine = Some(EngineProcess::spawn(&exe, &core.paths, model.unwrap_or_default(), cpu_only)?);
     }
     Ok(engine.as_mut().unwrap())
 }
@@ -569,7 +587,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
         };
         last_used = Instant::now();
         match msg {
-            Msg::Probe => match ensure_engine(&core, &mut engine).and_then(|e| e.probe()) {
+            Msg::Probe => match ensure_engine(&core, &mut engine, None).and_then(|e| e.probe()) {
                 Ok(v) => core.update(|s| {
                     let e = &mut s.engine;
                     if e.state == "starting" || e.state == "off" {
@@ -662,11 +680,11 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let _awake = KeepAwake::new();
     core.update_job(id, |j| j.status = "decoding".into());
 
-    let model = core.model_status();
-    if !model.found {
-        return Err(anyhow!(crate::tr!("There is no model yet. Choose one in Settings.")));
-    }
-    let w = ensure_engine(core, engine)?;
+    let found = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &job.language);
+    let Some((family, model)) = found else {
+        return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
+    };
+    let w = ensure_engine(core, engine, Some(&model.path))?;
     w.start_loading()?; // the model loads while the audio decodes
 
     let ffmpeg = setup::find_exe("ffmpeg");
@@ -696,10 +714,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         language: job.language.clone(),
         elapsed_s: 0.0,
         device,
-        model: match model.variant.as_str() {
-            "" => MODEL_LABEL.to_string(),
-            v => format!("{MODEL_LABEL} · {}", v.to_uppercase()),
-        },
+        model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
         partial: false,
         segments: Vec::new(),
     };

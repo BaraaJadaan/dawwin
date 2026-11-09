@@ -47,13 +47,13 @@ jobs:
           if-no-files-found: error
 
   models:
-    # A machine without a GPU, on a fast connection: the whole first-run path for both models.
+    # A machine without a GPU, on a fast connection: the whole first-run path for every model.
     needs: engine
     runs-on: windows-2022
     strategy:
       fail-fast: false
       matrix:
-        model: [q4, q8]
+        model: [q4, q8, canary, whisper]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -75,7 +75,7 @@ jobs:
           $requests = @(
             (@{ id = 1; cmd = "probe" } | ConvertTo-Json -Compress),
             (@{ id = 2; cmd = "load"; model = $model.FullName } | ConvertTo-Json -Compress),
-            (@{ id = 3; cmd = "transcribe"; path = $raw; ranges = ,@(0, 16000); language = "ar" } | ConvertTo-Json -Compress -Depth 4),
+            (@{ id = 3; cmd = "transcribe"; path = $raw; ranges = ,@(0, 16000); language = "en" } | ConvertTo-Json -Compress -Depth 4),
             (@{ id = 4; cmd = "quit" } | ConvertTo-Json -Compress)
           )
           $output = $requests | & .\engine-out\dawwin-engine.exe

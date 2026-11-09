@@ -11,12 +11,12 @@ in a GPU driver costs a retry on the CPU instead of the whole app.
 
 | Path | What it does |
 | --- | --- |
-| `engine/src/main.rs` | `dawwin-engine.exe`: loads the model, talks JSON lines over stdin/stdout. Picks a dedicated GPU first, and falls back on the CPU. `--cpu` keeps the GPU driver out of the process. |
+| `engine/src/main.rs` | `dawwin-engine.exe`: loads one model, talks JSON lines over stdin/stdout. Picks a dedicated GPU first, and falls back on the CPU. `--cpu` keeps the GPU driver out of the process. |
 | `src-tauri/src/engine.rs` | The `Engine` interface, and `EngineProcess`, which runs the engine and notices when it dies. |
 | `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, save. |
 | `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when installed, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise). Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
-| `src-tauri/src/models.rs` | The two models, their pinned revision and checksums, and the download. |
-| `src-tauri/src/setup.rs` | Where things live, the settings, and which model is in use. |
+| `src-tauri/src/models.rs` | The models, their pinned revisions and checksums, which model each language goes to, and the download. |
+| `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data and the exports (txt, md, srt, vtt, docx, csv, tsv, json). |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
@@ -38,6 +38,11 @@ in a GPU driver costs a retry on the CPU instead of the whole app.
 - **Word timings.** The engine gives none, so the word being said is estimated from
   `audio::voice_profile` (where the speech is in the line). Transcripts from older versions keep the
   timings they were saved with.
+- **Which model.** `models_for` in `models.rs` lists the models of each spoken language, the best first:
+  Cohere for Arabic, Canary for the European languages (fewer mistakes than Whisper, and several times
+  faster), Whisper for the rest. A recording goes to the first one on the disk. A model file is told apart
+  by the architecture in its GGUF header, and the settings keep one chosen file per kind of model. An
+  engine process holds one model, so a recording in another language starts a new one.
 - **Model download.** `<file>.part` holds the bytes, and `<file>.part.ok` how many of them are known to
   be on the disk (synced every 8 MB). A restart asks for the rest with an HTTP range request. The file
   takes its real name only after its SHA-256 matches, and a model in use is never rewritten in place,
@@ -86,7 +91,7 @@ releases are built on the maintainer's PC, with the engine from GitHub Actions.
 1. Bump the version in `package.json`, `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json` and
    `engine/Cargo.toml`.
 2. Put `thmanyahsans-Regular.otf`, `-Medium.otf` and `-Bold.otf` in `ui/fonts/`.
-3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads both real models
+3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads every real model
    with a pause in the middle and loads them.
 4. `npm run engine -- --from-ci`, then `npm run build`. The last line it prints must say yes to both GPU
    support and the font.

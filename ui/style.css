@@ -181,10 +181,7 @@ select.input { width: auto; min-width: 200px; cursor: pointer; }
 .dz-icon { color: var(--accent); margin-bottom: 12px; }
 .dropzone h1 { font-size: 22px; margin-bottom: 6px; }
 .dropzone p { margin: 0 0 22px; color: var(--muted); }
-.lang { display: flex; flex-direction: column; align-items: center; gap: 8px; }
-.segmented { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 9px; padding: 3px; gap: 3px; background: var(--bg); }
-.segmented button { border: 0; background: transparent; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--muted); }
-.segmented button[aria-checked="true"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+.lang { display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: default; }
 .home-note { width: min(640px, 100%); }
 .notice {
   display: flex; gap: 12px; align-items: center; justify-content: space-between;

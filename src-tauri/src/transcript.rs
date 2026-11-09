@@ -127,7 +127,11 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
         crate::tr!("Duration"),
         ts(t.duration_s),
         crate::tr!("Language"),
-        if t.language == "en" { crate::tr!("English") } else { crate::tr!("Arabic") },
+        match t.language.as_str() {
+            "en" => crate::tr!("English"),
+            "ar" => crate::tr!("Arabic"),
+            other => crate::models::language_name(other).to_string(),
+        },
         crate::tr!("Model"),
         t.model
     ));
@@ -261,9 +265,9 @@ fn xml(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// A Word document with right-to-left paragraphs.
+/// A Word document, with right-to-left paragraphs where the language needs them.
 pub fn to_docx(t: &Transcript, stamps: bool) -> Result<Vec<u8>> {
-    let rtl = t.language != "en";
+    let rtl = crate::models::is_right_to_left(&t.language);
     let ppr = if rtl { "<w:pPr><w:bidi/><w:spacing w:after=\"160\" w:line=\"312\" w:lineRule=\"auto\"/></w:pPr>" } else { "<w:pPr><w:spacing w:after=\"160\"/></w:pPr>" };
     let text_rpr = if rtl { "<w:rPr><w:rtl/><w:lang w:bidi=\"ar-SY\"/></w:rPr>" } else { "" };
     let mut body = String::new();

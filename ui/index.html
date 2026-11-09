@@ -63,12 +63,9 @@
           </div>
           <h1 data-i18n="home.drop"></h1>
           <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
-          <div class="lang" role="radiogroup" data-i18n-aria="home.spoken">
-            <span class="muted small" data-i18n="home.spoken"></span>
-            <div class="segmented">
-              <button type="button" role="radio" data-lang="ar" data-i18n="home.ar"></button>
-              <button type="button" role="radio" data-lang="en" data-i18n="home.en"></button>
-            </div>
+          <div class="lang">
+            <label class="muted small" for="spoken" data-i18n="home.spoken"></label>
+            <select id="spoken" class="input select"></select>
           </div>
         </div>
         <div id="home-note" class="home-note"></div>
@@ -88,6 +85,10 @@
           <!-- 1. choose -->
           <section class="card panel" id="panel-choose" hidden>
             <h2 data-i18n="step.choose"></h2>
+            <div class="row small dest">
+              <label class="muted" for="setup-spoken" data-i18n="home.spoken"></label>
+              <select id="setup-spoken" class="input select"></select>
+            </div>
             <div class="model-cards" id="model-cards" role="radiogroup" data-i18n-aria="step.choose"></div>
             <div class="row small dest">
               <span class="muted" data-i18n="setup.savesTo"></span>

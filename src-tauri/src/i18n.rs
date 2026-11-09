@@ -45,13 +45,13 @@ macro_rules! tr {
 static AR: &[(&str, &str)] = &[
     // queue
     ("That folder does not hold a model file (.gguf).", "هذا المجلد لا يحوي ملف نموذج (.gguf)."),
-    ("There is no model yet. Choose one in Settings.", "لا يوجد نموذج بعد. اختر واحدًا من الإعدادات."),
+    ("There is no model for this language yet. Choose one in Settings.", "لا يوجد نموذج لهذه اللغة بعد. اختر واحدًا من الإعدادات."),
     ("The speech engine is missing. Please install Dawwin again.", "محرّك الكلام غير موجود. أعد تثبيت دَوِّن من فضلك."),
     // models
     ("That file could not be read.", "تعذّرت قراءة ذلك الملف."),
     ("That is not a model file.", "هذا ليس ملف نموذج."),
     ("That model file is incomplete.", "ملف النموذج هذا غير مكتمل."),
-    ("That file holds a different model. Dawwin needs Cohere Transcribe Arabic.", "هذا الملف لنموذج آخر. يحتاج دَوِّن إلى Cohere Transcribe Arabic."),
+    ("Dawwin cannot use that model. It works with Cohere Transcribe, Canary and Whisper model files.", "لا يستطيع دَوِّن استخدام ذلك النموذج. فهو يعمل مع ملفات نماذج Cohere Transcribe وCanary وWhisper."),
     ("The download arrived damaged, so it was removed. Please start it again.", "وصل التنزيل تالفًا فحُذف. ابدأه من جديد من فضلك."),
     ("The server refused the download (error {}).", "رفض الخادم التنزيل (الخطأ {})."),
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
@@ -70,7 +70,7 @@ static AR: &[(&str, &str)] = &[
     ("Word document", "مستند Word"),
     ("Where should the model be saved?", "أين يُحفظ النموذج؟"),
     ("Choose the model file (.gguf)", "اختر ملف النموذج (.gguf)"),
-    ("Dawwin · Arabic transcription", "دَوِّن · تحويل الكلام العربي إلى نص"),
+    ("Dawwin · Speech to text", "دَوِّن · تحويل الكلام إلى نص"),
     // audio
     ("ffmpeg could not read the file: {}", "تعذّر على ffmpeg قراءة الملف: {}"),
     ("unsupported format ({}); install ffmpeg for this file type", "صيغة غير مدعومة ({})؛ ثبّت ffmpeg لهذا النوع من الملفات"),

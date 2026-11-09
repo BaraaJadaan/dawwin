@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Dawwin",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "identifier": "app.dawwin.desktop",
   "build": {
     "frontendDist": "../ui"
@@ -10,7 +10,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "Dawwin · Arabic transcription",
+        "title": "Dawwin · Speech to text",
         "width": 1200,
         "height": 800,
         "minWidth": 880,
@@ -37,8 +37,8 @@
       "icons/icon.png",
       "icons/icon.ico"
     ],
-    "shortDescription": "Local Arabic speech-to-text",
-    "longDescription": "Transcribes Arabic and English recordings on this computer with Cohere Transcribe Arabic.",
+    "shortDescription": "Local speech-to-text, Arabic first",
+    "longDescription": "Transcribes recordings on this computer, in Arabic and about 100 other languages.",
     "publisher": "Baraa Jadaan",
     "homepage": "https://github.com/BaraaJadaan/dawwin",
     "copyright": "© 2026 Baraa Jadaan, MIT License",

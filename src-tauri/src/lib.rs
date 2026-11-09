@@ -1,4 +1,4 @@
-//! Dawwin: local Arabic speech-to-text. The commands the UI calls.
+//! Dawwin: local speech-to-text, Arabic first. The commands the UI calls.
 
 mod audio;
 mod engine;
@@ -124,7 +124,7 @@ fn set_ui_language(app: AppHandle, lang: String) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>();
     core.set_ui_lang(&lang).map_err(e)?;
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_title(&crate::tr!("Dawwin · Arabic transcription"));
+        let _ = w.set_title(&crate::tr!("Dawwin · Speech to text"));
     }
     Ok(core.snapshot())
 }
@@ -184,7 +184,30 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 fn spoken(language: &str) -> String {
-    if language == "en" { "en" } else { "ar" }.to_string()
+    if models::known_language(language) { language } else { "ar" }.to_string()
+}
+
+#[derive(serde::Serialize)]
+struct SpokenLanguage {
+    code: &'static str,
+    /// In English; the interface asks Windows for the name in its own language first
+    name: &'static str,
+    right_to_left: bool,
+    /// The models that can transcribe it, the best first
+    models: Vec<&'static str>,
+}
+
+/// The languages recordings can be in.
+#[tauri::command]
+fn spoken_languages() -> Vec<SpokenLanguage> {
+    models::languages()
+        .map(|code| SpokenLanguage {
+            code,
+            name: models::language_name(code),
+            right_to_left: models::is_right_to_left(code),
+            models: models::models_for(code).iter().map(|v| v.id).collect(),
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -203,7 +226,7 @@ fn path_kind(path: String) -> &'static str {
     let p = PathBuf::from(path.replace('/', "\\"));
     if p.is_dir() {
         // a folder of recordings stays a folder of recordings, even with a model in it
-        if folder::recordings_in(&p).is_empty() && models::find_in_folder(&p).is_some() {
+        if folder::recordings_in(&p).is_empty() && models::find_in_folder(&p, None).is_some() {
             "model"
         } else {
             "folder"
@@ -416,6 +439,7 @@ pub fn run() {
             export_to_path,
             pick_folder,
             enqueue_folder,
+            spoken_languages,
             path_kind,
             set_folder_formats,
             cancel_all_jobs,

@@ -2,10 +2,13 @@
 
 *Dawwin* means "write it down" in Arabic.
 
-Turn Arabic recordings into text on your own Windows PC. Dawwin runs the open
-[Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) model
-locally. It handles dialects (Syrian, Gulf, Egyptian, …) and Arabic mixed with English terms.
-Your recordings and transcripts never leave the computer.
+Turn recordings into text on your own Windows PC, in Arabic and about 100 other languages. For Arabic,
+Dawwin runs the open
+[Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) model,
+which handles dialects (Syrian, Gulf, Egyptian, …) and Arabic mixed with English terms. Other languages
+get [NVIDIA Canary](https://huggingface.co/nvidia/canary-1b-v2) or
+[OpenAI Whisper](https://huggingface.co/openai/whisper-large-v3-turbo). Your recordings and transcripts
+never leave the computer.
 
 **[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)**
 
@@ -16,7 +19,9 @@ Your recordings and transcripts never leave the computer.
 - Drop recordings on the window: m4a, mp3, wav, WhatsApp voice notes, flac, mp4 video. Several files queue up.
 - Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
   recordings that are already done are skipped, so a stopped run picks up where it left off.
-- The transcript appears line by line, right to left, with timestamps.
+- Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
+  yet, it offers to download it.
+- The transcript appears line by line, in the direction of its language, with timestamps.
 - **Follow words**: the word being said is highlighted as the recording plays. Ctrl+click a word, or
   select text and right-click → **Play from here**, to hear it.
 - Correct lines in place, search (أ/إ/ا, ة/ه and ى/ي match), and export to Word, text, Markdown,
@@ -35,7 +40,7 @@ Your recordings and transcripts never leave the computer.
   </tr>
   <tr>
     <td><img src="docs/screenshots/arabic.png" alt="The same transcript with the interface in Arabic, laid out right to left."><br>The whole interface also comes in Arabic, right to left.</td>
-    <td><img src="docs/screenshots/setup.png" alt="The first-run page with three steps and a choice between two models."><br>First run: choose a model and let it download. It can be paused and resumed.</td>
+    <td><img src="docs/screenshots/setup.png" alt="The first-run page with three steps, a language menu set to Danish, and a choice of two models with a short description of each."><br>Choose a language and a model. The download survives pausing, closing the app and a lost connection.</td>
   </tr>
 </table>
 
@@ -44,19 +49,24 @@ Your recordings and transcripts never leave the computer.
 1. Download `Dawwin_x.y.z_x64-setup.exe` from
    [Releases](https://github.com/BaraaJadaan/dawwin/releases) and run it. Windows may say the app is
    unrecognised: choose **More info → Run anyway**. Or use the portable `.zip`: unpack it and run `dawwin.exe`.
-2. Choose a model. No account is needed.
+2. Choose the language of your recordings, then a model. No account is needed, and you only need the
+   models for the languages you use.
 
-   | | Download | GPU memory | |
+   | Model | For | Download | |
    | --- | --- | --- | --- |
-   | **Full quality** (Q8) | 2.4 GB | about 3 GB | Almost the same as the original model |
-   | **Smaller** (Q4) | 1.6 GB | about 2 GB | For weaker PCs and slow connections |
+   | **Arabic, full quality** (Cohere Q8) | Arabic with its dialects, English | 2.4 GB | The most accurate. About 3 GB of GPU memory. |
+   | **Arabic, smaller** (Cohere Q4) | Arabic with its dialects, English | 1.6 GB | Almost as accurate. For weaker PCs and slow connections. About 2 GB of GPU memory. |
+   | **European languages** (Canary 1B v2) | 25 languages: Danish, French, Spanish, German, Russian, … | 0.7 GB | Accurate and fast, also without a GPU. |
+   | **All languages** (Whisper large-v3 turbo) | About 100 languages: Turkish, Persian, Hindi, … | 0.5 GB | Accurate, but much slower without a GPU. |
 
    The download can be paused. If the connection drops or Dawwin closes, it carries on from where it
-   stopped. Already have the file? Press **I have the file**.
+   stopped. Already have the file? Press **I have the file**: any Cohere Transcribe, Canary or Whisper
+   GGUF file works.
 3. Drop a recording on the window.
 
-On an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core laptop CPU, about 3
-to 4 times faster than real time.
+With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
+laptop CPU, it runs about 3 to 4 times faster than real time. By their published figures, Canary is about
+twice as fast as that, and Whisper about a third as fast.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM, and room for the model. For WhatsApp voice
 notes (opus), install ffmpeg: `winget install Gyan.FFmpeg`.
@@ -99,9 +109,12 @@ the model folder, if you chose another place for it).
 
 [MIT](LICENSE). Three things are not part of this repository and have their own terms:
 
-- **The model**: Cohere publishes it under Apache-2.0. Dawwin downloads the
-  [GGUF conversion](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf) made by
-  the [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) project.
+- **The models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC BY 4.0,
+  and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
+  [Cohere](https://huggingface.co/handy-computer/cohere-transcribe-arabic-07-2026-gguf),
+  [Canary](https://huggingface.co/handy-computer/canary-1b-v2-gguf) and
+  [Whisper](https://huggingface.co/handy-computer/whisper-large-v3-turbo-gguf) made by the
+  [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) project.
 - **The engine**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), under the MIT license.
 - **The font**: official builds embed [Thmanyah Sans](https://font.thmanyah.com), © Thmanyah Publishing
   and Distribution. Its license does not allow sharing the font files, so builds from this repository

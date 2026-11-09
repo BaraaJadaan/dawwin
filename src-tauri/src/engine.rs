@@ -1,8 +1,8 @@
 //! The speech-to-text engine, behind one interface.
 //!
-//! [`EngineProcess`] runs `dawwin-engine.exe` (Cohere Transcribe Arabic through transcribe.cpp) in
-//! a child process and talks JSON lines with it. A crash in there, in a GPU driver say, ends that
-//! process and not the app.
+//! [`EngineProcess`] runs `dawwin-engine.exe` (speech models through transcribe.cpp) in a child
+//! process and talks JSON lines with it. A crash in there, in a GPU driver say, ends that process
+//! and not the app. A process holds one model: another model takes another process.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -168,6 +168,18 @@ impl EngineProcess {
 
     pub fn alive(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Point this engine at a model. False when it already holds another one.
+    pub fn use_model(&mut self, model: &str) -> bool {
+        if self.model == model {
+            return true;
+        }
+        if self.loaded.is_some() || self.pending_load.is_some() {
+            return false;
+        }
+        self.model = model.to_string();
+        true
     }
 
     fn wait(&mut self, id: u64) -> Result<Value> {

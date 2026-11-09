@@ -21,6 +21,7 @@ const S = {
   history: [],
   view: "home",
   current: null,      // the transcript on screen
+  languages: new Map(), // the languages recordings can be in, by code
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
@@ -106,7 +107,27 @@ function showView(v) {
 }
 
 function setupComplete(snap) {
-  return snap && snap.setup.engine_found && snap.setup.model.found;
+  return snap && snap.setup.engine_found && !!spokenModel(snap.setup);
+}
+
+/** The models that can transcribe a language, the best first. */
+function modelsFor(st, code = S.spoken) {
+  return (S.languages.get(code)?.models || []).map((id) => st.models.find((m) => m.id === id)).filter(Boolean);
+}
+
+/** The model file a recording in this language would use, or null when it has none yet. */
+function spokenModel(st, code = S.spoken) {
+  for (const m of modelsFor(st, code)) if (st.families[m.family]?.found) return st.families[m.family];
+  return null;
+}
+
+let languageNames = null;
+function langName(code) {
+  if (code === "ar" || code === "en") return t("lang." + code);
+  if (languageNames?.lang !== UI_LANG) languageNames = { lang: UI_LANG, names: new Intl.DisplayNames([I18N[UI_LANG].locale], { type: "language" }) };
+  const name = languageNames.names.of(code === "jw" ? "jv" : code);
+  // Windows does not know them all by name
+  return name && name !== code ? name : S.languages.get(code)?.name || code;
 }
 
 // ------------------------------------------------------------------ status chips
@@ -125,7 +146,7 @@ function renderChips() {
     const pct = d.total ? Math.floor((100 * d.done) / d.total) : 0;
     return setChip(chip, "busy", t("chip.downloading", { pct }));
   }
-  if (!st.model.found) return setChip(chip, "bad", t("chip.noModel"));
+  if (!spokenModel(st)) return setChip(chip, "bad", t("chip.noModel"));
   if (e.state === "starting") return setChip(chip, "busy", t("chip.starting"));
   if (e.state === "loading") return setChip(chip, "busy", t("chip.loading"));
   // the GPU's name runs left to right, also inside an Arabic sentence
@@ -207,14 +228,14 @@ function renderHistory() {
 
 const STEPS = ["choose", "download", "ready"];
 function firstOpenStep(st) {
-  if (st.model.found) return "ready";
-  return st.download.active || st.models.some((m) => m.partial > 0) ? "download" : "choose";
+  if (spokenModel(st)) return "ready";
+  return st.download.active || modelsFor(st).some((m) => m.partial > 0) ? "download" : "choose";
 }
 
 /** The model the download step is about: the one downloading, one left paused, or the one picked. */
 function downloadingModel(st) {
-  const id = st.download.active ? st.download.model : st.models.find((m) => m.partial > 0 && !m.on_disk)?.id;
-  return st.models.find((m) => m.id === (id || S.pick)) || st.models[0];
+  const id = st.download.active ? st.download.model : modelsFor(st).find((m) => m.partial > 0 && !m.on_disk)?.id;
+  return st.models.find((m) => m.id === (id || S.pick)) || modelsFor(st)[0];
 }
 
 function modelName(m) {
@@ -243,9 +264,9 @@ function rateText(r) {
 
 function renderSetup() {
   const { setup: st, engine: e } = S.snap;
-  const m = st.model, d = st.download;
-  const started = d.active || st.models.some((x) => x.partial > 0);
-  const done = { choose: m.found || started, download: m.found, ready: m.found && st.engine_found };
+  const found = !!spokenModel(st), d = st.download, choices = modelsFor(st);
+  const started = d.active || choices.some((x) => x.partial > 0);
+  const done = { choose: found || started, download: found, ready: found && st.engine_found };
   const busy = { choose: false, download: d.active, ready: false };
   const step = S.setupStep || firstOpenStep(st);
 
@@ -259,10 +280,13 @@ function renderSetup() {
   for (const k of STEPS) $("panel-" + k).hidden = k !== step;
 
   // 1. choose
-  if (!S.pick) S.pick = (downloadingModel(st) || {}).id || "q8";
+  paintSpoken();
+  if (!choices.some((x) => x.id === S.pick)) {
+    S.pick = (choices.find((x) => d.active && x.id === d.model) || choices.find((x) => x.partial > 0 || x.on_disk) || choices[0])?.id;
+  }
   renderModelCards(st);
   const picked = st.models.find((x) => x.id === S.pick);
-  $("download-dir").textContent = m.download_dir;
+  $("download-dir").textContent = st.download_dir;
   $("btn-download-dir").disabled = d.active;
   $("btn-choose-go").disabled = d.active;
   $("btn-choose-go").textContent = t(picked?.on_disk ? "choose.use" : picked?.partial > 0 ? "dl.resume" : "dl.download");
@@ -300,13 +324,13 @@ function renderSetup() {
 }
 
 function renderModelCards(st) {
-  const box = $("model-cards");
-  if (box.dataset.lang !== UI_LANG || box.children.length !== st.models.length) {
-    box.dataset.lang = UI_LANG;
-    box.innerHTML = st.models.map((m) => `
+  const box = $("model-cards"), choices = modelsFor(st), key = `${UI_LANG}:${choices.map((m) => m.id)}`;
+  if (box.dataset.key !== key) {
+    box.dataset.key = key;
+    box.innerHTML = choices.map((m) => `
       <button type="button" class="model-card" role="radio" data-id="${m.id}">
         <h3>${esc(modelName(m))}</h3>
-        <p class="muted small">${esc(t(`model.${m.id}.detail`, { size: gb(m.size) }))}</p>
+        <p class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))} · ${esc(t(`model.${m.id}.detail`))}</p>
         <p class="status small"></p>
       </button>`).join("");
     for (const b of box.children) {
@@ -329,7 +353,6 @@ function renderModelCards(st) {
 function renderSettings() {
   if (!S.snap) return;
   const { setup: st, engine: e } = S.snap;
-  const m = st.model;
   $("set-lang").innerHTML = Object.entries(I18N).map(([k, v]) => `<option value="${k}">${esc(v.name)}</option>`).join("");
   $("set-lang").value = UI_LANG;
 
@@ -342,8 +365,9 @@ function renderSettings() {
 
   // model
   renderModelRows(st);
-  $("set-custom").hidden = !(m.found && !m.variant);
-  if (m.found && !m.variant) $("set-custom-text").innerHTML = tHtml("set.customModel", { path: ltr(m.path) });
+  const own = Object.values(st.families).filter((f) => f.found && !f.variant);
+  $("set-custom").hidden = !own.length;
+  $("set-custom-text").innerHTML = own.map((f) => tHtml("set.customModel", { path: ltr(f.path) })).join("<br>");
   if (st.download.error) {
     $("set-import-error").textContent = st.download.error;
     $("set-import-error").hidden = false;
@@ -384,7 +408,8 @@ function renderModelRows(st) {
     box.innerHTML = st.models.map((m) => `
       <div class="setting" data-id="${m.id}">
         <div class="setting-text">
-          <h3>${esc(modelName(m))} <span class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))}</span></h3>
+          <h3>${esc(t(`model.${m.id}.long`))} <span class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))}</span></h3>
+          <p class="muted small">${esc(t(`model.${m.id}.detail`))}</p>
           <p class="muted small status"></p>
         </div>
         <button class="btn btn-sm use" >${esc(t("set.modelUse"))}</button>
@@ -407,19 +432,21 @@ function renderModelRows(st) {
     const m = st.models.find((x) => x.id === row.dataset.id);
     const going = d.active && d.model === m.id;
     const pctOf = (n) => Math.floor((100 * n) / m.size);
+    // "use" only means something where there is a choice of file for the same languages
+    const choice = st.models.filter((x) => x.family === m.family).length > 1;
     row.querySelector(".status").textContent = going
       ? (d.verifying ? t("dl.verifying") : t("set.modelGoing", { pct: pctOf(d.done) }))
-      : m.active ? t("set.modelInUse")
+      : m.active && choice ? t("set.modelInUse")
       : m.on_disk ? t("set.modelOnDisk")
       : m.partial > 0 ? t("set.modelPaused", { pct: pctOf(m.partial) })
       : t("set.modelNone");
-    row.querySelector(".use").hidden = !m.on_disk || m.active;
+    row.querySelector(".use").hidden = !m.on_disk || m.active || !choice;
     const get = row.querySelector(".get");
     get.hidden = m.on_disk;
     get.disabled = d.active && !going;
     get.textContent = t(going ? "dl.pause" : m.partial > 0 ? "dl.resume" : "dl.download");
     const del = row.querySelector(".del");
-    del.hidden = m.active || going || !(m.on_disk || m.partial > 0);
+    del.hidden = going || !(m.on_disk || m.partial > 0);
     if (armedDelete !== m.id) del.textContent = t("set.modelDelete");
   }
 }
@@ -464,7 +491,7 @@ async function importModel(errorEl) {
   errorEl.hidden = true;
   try {
     onState(await invoke("import_model"));
-    if (S.snap.setup.model.found) toast(t("toast.modelReady"));
+    toast(t(spokenModel(S.snap.setup) ? "toast.modelReady" : "toast.modelFound"));
     if (S.view === "settings") renderSettings();
   } catch (err) {
     errorEl.textContent = String(err);
@@ -473,11 +500,13 @@ async function importModel(errorEl) {
 }
 
 function renderHomeNote() {
-  const el = $("home-note");
+  const el = $("home-note"), st = S.snap.setup;
   if (setupComplete(S.snap)) { el.innerHTML = ""; return; }
-  if (!S.snap.setup.engine_found) { el.innerHTML = `<div class="notice"><span>${esc(t("home.engineMissing"))}</span></div>`; return; }
-  el.innerHTML = `<div class="notice"><span>${esc(t("home.setupNeeded"))}</span><button class="btn btn-sm btn-primary">${esc(t("home.openSetup"))}</button></div>`;
-  el.querySelector("button").onclick = () => showView("setup");
+  if (!st.engine_found) { el.innerHTML = `<div class="notice"><span>${esc(t("home.engineMissing"))}</span></div>`; return; }
+  const first = modelsFor(st)[0], another = Object.values(st.families).some((f) => f.found);
+  const text = another && first ? t("home.needsModel", { lang: langName(S.spoken), size: gb(first.size) }) : t("home.setupNeeded");
+  el.innerHTML = `<div class="notice"><span>${esc(text)}</span><button class="btn btn-sm btn-primary">${esc(t(another ? "home.getModel" : "home.openSetup"))}</button></div>`;
+  el.querySelector("button").onclick = () => { S.setupStep = null; showView("setup"); renderSetup(); };
 }
 
 // ------------------------------------------------------------------ transcript view
@@ -533,9 +562,9 @@ function renderTranscript() {
   renderLiveProgress();
   $("btn-delete").hidden = live;
   const box = $("segments");
-  box.dir = cur.language === "en" ? "ltr" : "rtl";
+  box.dir = S.languages.get(cur.language)?.right_to_left ? "rtl" : "ltr";
   box.classList.toggle("no-stamps", !S.stamps);
-  box.lang = cur.language === "en" ? "en" : "ar";
+  box.lang = cur.language === "jw" ? "jv" : cur.language;
   box.innerHTML = "";
   if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; clearWordHighlight(); }
   wordCache.clear();
@@ -549,7 +578,7 @@ function renderMeta() {
   const c = S.current;
   const bits = [];
   if (c.duration_s) bits.push(dur(c.duration_s));
-  bits.push(t(c.language === "en" ? "lang.en" : "lang.ar"));
+  bits.push(langName(c.language));
   if (c.created_ms) bits.push(date(c.created_ms));
   if (c.elapsed_s && !isLive(c.id)) {
     bits.push(t("meta.took", { dur: dur(c.elapsed_s) }) + (c.device ? t("meta.on", { device: deviceLabel(c.device) }) : ""));
@@ -958,7 +987,7 @@ async function addFiles(paths) {
   let skipped = 0;
   for (const p of paths.filter((p) => !isMedia(p))) {
     // a dropped folder is recordings to transcribe, unless it is the model or the model is what is being asked for
-    const wantsModel = S.view === "setup" && !S.snap.setup.model.found;
+    const wantsModel = S.view === "setup" && !spokenModel(S.snap.setup);
     const kind = await invoke("path_kind", { path: p });
     if (kind === "folder" && !wantsModel) {
       await addFolder(p);
@@ -972,7 +1001,7 @@ async function addFiles(paths) {
       onState(await invoke("import_model_path", { path: p }));
       toast(t("toast.modelFound"));
     } catch (err) {
-      if (S.view === "setup" && !S.snap.setup.model.found) {
+      if (S.view === "setup" && !spokenModel(S.snap.setup)) {
         $("import-error").textContent = String(err);
         $("import-error").hidden = false;
       } else skipped++;
@@ -1079,7 +1108,7 @@ async function renameCurrent() {
 function onState(snap) {
   const prev = S.snap;
   S.snap = snap;
-  if (!prev?.setup.model.found && snap.setup.model.found) S.setupStep = null;
+  if (!(prev && spokenModel(prev.setup)) && spokenModel(snap.setup)) S.setupStep = null;
   renderChips();
   renderQueue();
   renderHomeNote();
@@ -1124,16 +1153,14 @@ function wire() {
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => {
     if (ev.target.closest("#home-folder")) chooseFolder();
-    else if (!ev.target.closest(".segmented")) chooseFiles();
+    else if (!ev.target.closest(".lang")) chooseFiles();
   });
   $("dropzone").addEventListener("keydown", (ev) => {
     if (ev.target === $("dropzone") && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); chooseFiles(); }
   });
   $("queue-cancel-all").onclick = () => invoke("cancel_all_jobs");
-  for (const b of document.querySelectorAll("#dropzone .segmented button")) {
-    b.onclick = (ev) => { ev.stopPropagation(); S.spoken = b.dataset.lang; store.set("lang", S.spoken); paintLang(); };
-  }
-  paintLang();
+  for (const menu of [$("spoken"), $("setup-spoken")]) menu.onchange = () => setSpoken(menu.value);
+  paintSpoken();
   for (const c of document.querySelectorAll("[data-goto=setup]")) {
     c.onclick = () => {
       if (setupComplete(S.snap)) { showView("settings"); return; }
@@ -1150,8 +1177,8 @@ function wire() {
   $("set-import").onclick = () => importModel($("set-import-error"));
   $("set-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
   $("set-model-folder").onclick = () => {
-    const m = S.snap.setup.model;
-    invoke("reveal", { path: m.found ? m.path : m.download_dir });
+    const st = S.snap.setup, m = spokenModel(st);
+    invoke("reveal", { path: m ? m.path : st.download_dir });
   };
   $("set-old-remove").onclick = async () => {
     $("set-old-remove").disabled = true;
@@ -1190,7 +1217,10 @@ function wire() {
     invoke("download_model", { id: m.id });
     renderSetup();
   };
-  $("btn-manual").onclick = () => invoke("open_url", { url: S.snap.setup.files_url });
+  $("btn-manual").onclick = () => {
+    const m = S.snap.setup.models.find((x) => x.id === S.pick);
+    if (m) invoke("open_url", { url: m.page });
+  };
   $("btn-recheck").onclick = async () => { onState(await invoke("refresh_setup")); toast(t("toast.checked")); };
   $("btn-log").onclick = () => invoke("open_log");
   $("btn-data").onclick = () => invoke("reveal", { path: S.snap.setup.data_dir + "\\history" });
@@ -1262,6 +1292,7 @@ async function setUiLang(lang, tellApp = true) {
   UI_LANG = I18N[lang] ? lang : "en";
   store.set("uiLang", UI_LANG);
   applyI18n();
+  paintSpoken();
   if (S.snap) {
     renderChips();
     renderQueue();
@@ -1276,14 +1307,41 @@ async function setUiLang(lang, tellApp = true) {
   }
 }
 
-function paintLang() {
-  for (const b of document.querySelectorAll("#dropzone .segmented button")) b.setAttribute("aria-checked", String(b.dataset.lang === S.spoken));
+/** Fill the language menus, with the two this app is mostly used for on top. */
+function paintSpoken() {
+  for (const menu of [$("spoken"), $("setup-spoken")]) {
+    if (menu.dataset.lang !== UI_LANG) {
+      menu.dataset.lang = UI_LANG;
+      const others = [...S.languages.keys()]
+        .filter((c) => c !== "ar" && c !== "en")
+        .map((c) => [c, langName(c)])
+        .sort((a, b) => a[1].localeCompare(b[1], I18N[UI_LANG].locale));
+      menu.innerHTML = `<option value="ar">${esc(t("home.ar"))}</option><option value="en">${esc(t("home.en"))}</option><option disabled>──────────</option>`
+        + others.map(([c, name]) => `<option value="${c}">${esc(name)}</option>`).join("");
+    }
+    menu.value = S.spoken;
+  }
+}
+
+function setSpoken(code) {
+  S.spoken = code;
+  S.setupStep = null;
+  store.set("lang", code);
+  paintSpoken();
+  renderChips();
+  renderHomeNote();
+  if (S.view === "setup") renderSetup();
 }
 
 async function init() {
   // the interface language: the app's setting, else this window's last choice, else Windows' language
   UI_LANG = store.get("uiLang", (navigator.language || "en").toLowerCase().startsWith("ar") ? "ar" : "en");
   applyI18n();
+  S.languages = new Map((await invoke("spoken_languages")).map((l) => [l.code, l]));
+  // the first time: the language of this Windows, when that is one more than Arabic and English
+  const windows = (navigator.language || "").split("-")[0].toLowerCase();
+  if (store.get("lang", null) === null && windows !== "en" && S.languages.has(windows)) S.spoken = windows;
+  if (!S.languages.has(S.spoken)) S.spoken = "ar";
   wire();
   const snap = await invoke("get_state");
   const saved = snap.setup.ui_lang;

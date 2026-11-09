@@ -13,35 +13,171 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Result};
 use sha2::{Digest, Sha256};
 
-const REPOSITORY: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
-/// The revision these checksums belong to: it cannot change under the app.
-const REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
-/// Fall back on the disk at most this much after a power cut, instead of the whole download.
+/// Fall back on the disk at most this much after a crash or a power cut, instead of the whole download.
 const SYNC_EVERY: u64 = 8 * 1024 * 1024;
+/// And at most this much time: on a slow connection those megabytes take minutes.
+const SYNC_AFTER: Duration = Duration::from_secs(10);
 const BUFFER: usize = 256 * 1024;
+
+/// What a model is built on. It decides which languages the model is used for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Family {
+    Cohere,
+    Canary,
+    Whisper,
+}
+
+impl Family {
+    pub const ALL: [Family; 3] = [Family::Cohere, Family::Canary, Family::Whisper];
+
+    /// What the settings and the interface call it.
+    pub fn key(self) -> &'static str {
+        match self {
+            Family::Cohere => "cohere",
+            Family::Canary => "canary",
+            Family::Whisper => "whisper",
+        }
+    }
+
+    fn from_architecture(arch: &str) -> Option<Family> {
+        match arch {
+            "cohere_asr" => Some(Family::Cohere),
+            "canary" => Some(Family::Canary),
+            "whisper" => Some(Family::Whisper),
+            _ => None,
+        }
+    }
+
+    /// The name on a transcript made with a model file of the user's own.
+    pub fn label(self) -> &'static str {
+        match self {
+            Family::Cohere => "Cohere Transcribe Arabic (07-2026)",
+            Family::Canary => "NVIDIA Canary",
+            Family::Whisper => "OpenAI Whisper",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Variant {
     pub id: &'static str,
+    pub family: Family,
+    /// The name on the transcripts it makes
+    pub label: &'static str,
+    repository: &'static str,
+    /// The revision the checksum belongs to: it cannot change under the app.
+    revision: &'static str,
     pub file: &'static str,
     pub sha256: &'static str,
     pub size: u64,
 }
 
-pub const VARIANTS: [Variant; 2] = [
+const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
+const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
+
+pub const VARIANTS: [Variant; 4] = [
     Variant {
         id: "q8",
+        family: Family::Cohere,
+        label: "Cohere Transcribe Arabic (07-2026) · Q8",
+        repository: COHERE_ARABIC,
+        revision: COHERE_ARABIC_REVISION,
         file: "cohere-transcribe-arabic-07-2026-Q8_0.gguf",
         sha256: "910de5c9c57f9fd8a280e1701f9cd96f63768878c1ca9e4ecf23638a5e0fef16",
         size: 2_410_655_136,
     },
     Variant {
         id: "q4",
+        family: Family::Cohere,
+        label: "Cohere Transcribe Arabic (07-2026) · Q4",
+        repository: COHERE_ARABIC,
+        revision: COHERE_ARABIC_REVISION,
         file: "cohere-transcribe-arabic-07-2026-Q4_K_M.gguf",
         sha256: "4671080cd10ffc6166e1e1b36216f9b51e1455f170d55c59cff7b81332ad4621",
         size: 1_558_162_848,
     },
+    Variant {
+        id: "canary",
+        family: Family::Canary,
+        label: "NVIDIA Canary 1B v2 · Q4",
+        repository: "handy-computer/canary-1b-v2-gguf",
+        revision: "692af661b140183b60e44f55ad03c59e1e77d078",
+        file: "canary-1b-v2-Q4_K_M.gguf",
+        sha256: "49e0a67e219bec95a254c2348460b6350e75a7ac6f93a131e48244b4c7cb53b9",
+        size: 735_476_448,
+    },
+    Variant {
+        id: "whisper",
+        family: Family::Whisper,
+        label: "OpenAI Whisper large-v3 turbo · Q4",
+        repository: "handy-computer/whisper-large-v3-turbo-gguf",
+        revision: "18ada752005f5fddef499256f9a458d0b37a203a",
+        file: "whisper-large-v3-turbo-Q4_K_M.gguf",
+        sha256: "c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df",
+        size: 536_069_696,
+    },
 ];
+
+/// Every spoken language the app offers, with its English name: what Whisper knows.
+const LANGUAGES: &[(&str, &str)] = &[
+    ("af", "Afrikaans"), ("am", "Amharic"), ("ar", "Arabic"), ("as", "Assamese"), ("az", "Azerbaijani"),
+    ("ba", "Bashkir"), ("be", "Belarusian"), ("bg", "Bulgarian"), ("bn", "Bengali"), ("bo", "Tibetan"),
+    ("br", "Breton"), ("bs", "Bosnian"), ("ca", "Catalan"), ("cs", "Czech"), ("cy", "Welsh"),
+    ("da", "Danish"), ("de", "German"), ("el", "Greek"), ("en", "English"), ("es", "Spanish"),
+    ("et", "Estonian"), ("eu", "Basque"), ("fa", "Persian"), ("fi", "Finnish"), ("fo", "Faroese"),
+    ("fr", "French"), ("gl", "Galician"), ("gu", "Gujarati"), ("ha", "Hausa"), ("haw", "Hawaiian"),
+    ("he", "Hebrew"), ("hi", "Hindi"), ("hr", "Croatian"), ("ht", "Haitian Creole"), ("hu", "Hungarian"),
+    ("hy", "Armenian"), ("id", "Indonesian"), ("is", "Icelandic"), ("it", "Italian"), ("ja", "Japanese"),
+    ("jw", "Javanese"), ("ka", "Georgian"), ("kk", "Kazakh"), ("km", "Khmer"), ("kn", "Kannada"),
+    ("ko", "Korean"), ("la", "Latin"), ("lb", "Luxembourgish"), ("ln", "Lingala"), ("lo", "Lao"),
+    ("lt", "Lithuanian"), ("lv", "Latvian"), ("mg", "Malagasy"), ("mi", "Maori"), ("mk", "Macedonian"),
+    ("ml", "Malayalam"), ("mn", "Mongolian"), ("mr", "Marathi"), ("ms", "Malay"), ("mt", "Maltese"),
+    ("my", "Burmese"), ("ne", "Nepali"), ("nl", "Dutch"), ("nn", "Norwegian Nynorsk"), ("no", "Norwegian"),
+    ("oc", "Occitan"), ("pa", "Punjabi"), ("pl", "Polish"), ("ps", "Pashto"), ("pt", "Portuguese"),
+    ("ro", "Romanian"), ("ru", "Russian"), ("sa", "Sanskrit"), ("sd", "Sindhi"), ("si", "Sinhala"),
+    ("sk", "Slovak"), ("sl", "Slovenian"), ("sn", "Shona"), ("so", "Somali"), ("sq", "Albanian"),
+    ("sr", "Serbian"), ("su", "Sundanese"), ("sv", "Swedish"), ("sw", "Swahili"), ("ta", "Tamil"),
+    ("te", "Telugu"), ("tg", "Tajik"), ("th", "Thai"), ("tk", "Turkmen"), ("tl", "Filipino"),
+    ("tr", "Turkish"), ("tt", "Tatar"), ("uk", "Ukrainian"), ("ur", "Urdu"), ("uz", "Uzbek"),
+    ("vi", "Vietnamese"), ("yi", "Yiddish"), ("yo", "Yoruba"), ("yue", "Cantonese"), ("zh", "Chinese"),
+];
+
+/// What Canary was trained on. On these it makes fewer mistakes than Whisper, and is several times faster.
+const CANARY_LANGUAGES: &[&str] = &[
+    "bg", "cs", "da", "de", "el", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+const RIGHT_TO_LEFT: &[&str] = &["ar", "fa", "he", "ps", "sd", "ur", "yi"];
+
+pub fn languages() -> impl Iterator<Item = &'static str> {
+    LANGUAGES.iter().map(|(code, _)| *code)
+}
+
+pub fn known_language(code: &str) -> bool {
+    languages().any(|l| l == code)
+}
+
+pub fn is_right_to_left(code: &str) -> bool {
+    RIGHT_TO_LEFT.contains(&code)
+}
+
+/// The name of a language in English, or the code of one the app does not know.
+pub fn language_name<'a>(code: &'a str) -> &'a str {
+    LANGUAGES.iter().find(|(c, _)| *c == code).map_or(code, |(_, name)| *name)
+}
+
+/// The models for a spoken language, the best first.
+pub fn models_for(language: &str) -> Vec<Variant> {
+    let ids: &[&str] = match language {
+        // Arabic is what this app is for: only the model trained on its dialects will do
+        "ar" => &["q8", "q4"],
+        "en" => &["q8", "q4", "canary", "whisper"],
+        l if CANARY_LANGUAGES.contains(&l) => &["canary", "whisper"],
+        l if known_language(l) => &["whisper"],
+        _ => &[],
+    };
+    ids.iter().filter_map(|id| variant(id)).collect()
+}
 
 pub fn variant(id: &str) -> Option<Variant> {
     VARIANTS.into_iter().find(|v| v.id == id)
@@ -59,12 +195,12 @@ fn endpoint() -> String {
 }
 
 pub fn url(v: Variant) -> String {
-    format!("{}/{REPOSITORY}/resolve/{REVISION}/{}", endpoint(), v.file)
+    format!("{}/{}/resolve/{}/{}", endpoint(), v.repository, v.revision, v.file)
 }
 
 /// Where to download a model by hand.
-pub fn files_page() -> String {
-    format!("{}/{REPOSITORY}/tree/{REVISION}", endpoint())
+pub fn files_page(v: Variant) -> String {
+    format!("{}/{}/tree/{}", endpoint(), v.repository, v.revision)
 }
 
 pub fn part_path(dest: &Path) -> PathBuf {
@@ -102,9 +238,18 @@ pub fn move_unfinished(from: &Path, to: &Path) {
     }
 }
 
-/// A finished model file that the engine can try to load. Our own files must have their exact
-/// size, so a file cut short by a copy is not taken for a model.
-pub fn check_file(path: &Path) -> Result<u64> {
+/// The architecture a GGUF file says it holds: after the key come the value's type (4 bytes), its
+/// length (8 bytes) and the text.
+fn architecture(head: &[u8]) -> Option<&str> {
+    const KEY: &[u8] = b"general.architecture";
+    let at = head.windows(KEY.len()).position(|w| w == KEY)? + KEY.len();
+    let len = u64::from_le_bytes(head.get(at + 4..at + 12)?.try_into().ok()?) as usize;
+    std::str::from_utf8(head.get(at + 12..(at + 12).checked_add(len)?)?).ok()
+}
+
+/// A finished model file that the engine can try to load, and what kind it is. Our own files must
+/// have their exact size, so a file cut short by a copy is not taken for a model.
+pub fn check_file(path: &Path) -> Result<Family> {
     let meta = std::fs::metadata(path).map_err(|_| anyhow!(crate::tr!("That file could not be read.")))?;
     if !meta.is_file() {
         bail!(crate::tr!("That is not a model file."));
@@ -121,22 +266,22 @@ pub fn check_file(path: &Path) -> Result<u64> {
     if !head.starts_with(b"GGUF") {
         bail!(crate::tr!("That is not a model file."));
     }
-    if !head.windows(10).any(|w| w == b"cohere_asr") {
-        bail!(crate::tr!("That file holds a different model. Dawwin needs Cohere Transcribe Arabic."));
-    }
-    Ok(meta.len())
+    architecture(&head)
+        .and_then(Family::from_architecture)
+        .ok_or_else(|| anyhow!(crate::tr!("Dawwin cannot use that model. It works with Cohere Transcribe, Canary and Whisper model files.")))
 }
 
-/// A model file in this folder, the larger of ours first.
-pub fn find_in_folder(dir: &Path) -> Option<PathBuf> {
-    let ours = VARIANTS.iter().map(|v| dir.join(v.file)).find(|p| check_file(p).is_ok());
+/// A model file in this folder, of this family if one is named, ours first and the larger first.
+pub fn find_in_folder(dir: &Path, family: Option<Family>) -> Option<PathBuf> {
+    let wanted = |p: &PathBuf| check_file(p).is_ok_and(|f| family.is_none() || family == Some(f));
+    let ours = VARIANTS.iter().map(|v| dir.join(v.file)).find(wanted);
     ours.or_else(|| {
         std::fs::read_dir(dir)
             .ok()?
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("gguf")))
-            .find(|p| check_file(p).is_ok())
+            .find(wanted)
     })
 }
 
@@ -257,6 +402,7 @@ fn fetch(agent: &ureq::Agent, d: &Download, offset: u64, stop: &AtomicBool, on_e
     let mut body = response.into_reader();
     let mut buf = vec![0u8; BUFFER];
     let mut unsynced = 0u64;
+    let mut synced = Instant::now();
     let mut told = Instant::now();
     on_event(Event::Progress { done: at });
     let end = loop {
@@ -275,10 +421,11 @@ fn fetch(agent: &ureq::Agent, d: &Download, offset: u64, stop: &AtomicBool, on_e
         file.write_all(&buf[..n])?;
         at += n as u64;
         unsynced += n as u64;
-        if unsynced >= SYNC_EVERY {
+        if unsynced >= SYNC_EVERY || synced.elapsed() >= SYNC_AFTER {
             file.sync_data()?;
             write_marker(&d.dest, at)?;
             unsynced = 0;
+            synced = Instant::now();
         }
         if told.elapsed() >= Duration::from_millis(250) {
             on_event(Event::Progress { done: at });
@@ -589,28 +736,93 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(3));
     }
 
+    /// The start of a real GGUF file: header, then the architecture as its first value.
+    fn gguf(arch: &str) -> Vec<u8> {
+        let mut b = b"GGUF\x03\0\0\0".to_vec();
+        b.extend(0u64.to_le_bytes()); // tensors
+        b.extend(1u64.to_le_bytes()); // values
+        b.extend(20u64.to_le_bytes());
+        b.extend(b"general.architecture");
+        b.extend(8u32.to_le_bytes()); // a string
+        b.extend((arch.len() as u64).to_le_bytes());
+        b.extend(arch.as_bytes());
+        b.extend(vec![0u8; 1000]);
+        b
+    }
+
     #[test]
-    fn only_real_model_files_pass() {
+    fn only_real_model_files_pass_and_they_say_what_they_are() {
         let dir = folder("check");
         let good = dir.join("mine.gguf");
-        let mut bytes = b"GGUF\x03\0\0\0general.architecture\x0a\0\0\0cohere_asr".to_vec();
-        bytes.extend(vec![0u8; 1000]);
-        std::fs::write(&good, &bytes).unwrap();
-        assert!(check_file(&good).is_ok());
-        assert_eq!(find_in_folder(&dir), Some(good));
+        std::fs::write(&good, gguf("cohere_asr")).unwrap();
+        assert_eq!(check_file(&good).unwrap(), Family::Cohere);
+        assert_eq!(find_in_folder(&dir, None), Some(good.clone()));
+        assert_eq!(find_in_folder(&dir, Some(Family::Cohere)), Some(good));
+        assert_eq!(find_in_folder(&dir, Some(Family::Whisper)), None);
 
-        let other = dir.join("whisper.gguf");
-        std::fs::write(&other, b"GGUF\x03\0\0\0general.architecture\x07\0\0\0whisper").unwrap();
-        assert!(check_file(&other).is_err());
+        let whisper = dir.join("whisper-small.gguf");
+        std::fs::write(&whisper, gguf("whisper")).unwrap();
+        assert_eq!(check_file(&whisper).unwrap(), Family::Whisper);
+        assert_eq!(find_in_folder(&dir, Some(Family::Whisper)), Some(whisper));
+
+        let canary = dir.join("canary-flash.gguf");
+        std::fs::write(&canary, gguf("canary")).unwrap();
+        assert_eq!(check_file(&canary).unwrap(), Family::Canary);
+
+        let other = dir.join("llama.gguf");
+        std::fs::write(&other, gguf("llama")).unwrap();
+        assert!(check_file(&other).is_err(), "not a speech model we know");
 
         let text = dir.join("notes.gguf");
         std::fs::write(&text, b"not a model").unwrap();
         assert!(check_file(&text).is_err());
 
+        let cut = dir.join("cut.gguf");
+        std::fs::write(&cut, &gguf("whisper")[..30]).unwrap();
+        assert!(check_file(&cut).is_err(), "the header ends before the architecture");
+
         // our own file name, cut short by a copy
         let short = dir.join(VARIANTS[1].file);
-        std::fs::write(&short, &bytes).unwrap();
+        std::fs::write(&short, gguf("cohere_asr")).unwrap();
         assert!(check_file(&short).is_err());
+    }
+
+    #[test]
+    fn each_language_goes_to_the_model_that_does_it_best() {
+        let ids = |l: &str| models_for(l).iter().map(|v| v.id).collect::<Vec<_>>();
+        assert_eq!(ids("ar"), ["q8", "q4"], "Arabic stays with the model made for it");
+        assert_eq!(ids("en"), ["q8", "q4", "canary", "whisper"], "English works with every model");
+        for european in ["da", "fr", "es", "de", "it", "ru"] {
+            assert_eq!(ids(european), ["canary", "whisper"], "{european}");
+        }
+        for other in ["tr", "fa", "ja", "zh", "hi"] {
+            assert_eq!(ids(other), ["whisper"], "{other}");
+        }
+        assert!(ids("xx").is_empty());
+    }
+
+    #[test]
+    fn every_language_has_a_model_and_a_name() {
+        assert!(languages().count() >= 99);
+        for code in languages() {
+            assert!(!models_for(code).is_empty(), "{code}");
+            assert_ne!(language_name(code), code, "{code}");
+        }
+        for code in CANARY_LANGUAGES {
+            assert!(known_language(code), "{code}");
+        }
+        assert_eq!(language_name("tr"), "Turkish");
+        assert_eq!(language_name("xx"), "xx");
+    }
+
+    #[test]
+    fn right_to_left_languages_are_known() {
+        for l in ["ar", "fa", "he", "ur"] {
+            assert!(is_right_to_left(l), "{l}");
+        }
+        for l in ["en", "da", "tr", "fr"] {
+            assert!(!is_right_to_left(l), "{l}");
+        }
     }
 
     /// The real thing, over the real network: `cargo test real_download -- --ignored --nocapture`.

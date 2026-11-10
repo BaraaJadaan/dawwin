@@ -9,6 +9,7 @@ pub mod i18n;
 mod models;
 mod queue;
 mod setup;
+mod tools;
 mod transcript;
 mod translate;
 mod updates;

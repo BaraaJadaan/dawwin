@@ -1,0 +1,174 @@
+name: Tools
+
+# The programs Dawwin downloads only when they are wanted (src-tauri/src/tools.rs): its own small
+# ffmpeg in two sizes (tools/ffmpeg/build.sh), "audio", for reading and saving sound and adding
+# subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
+# llama.cpp's official server. Each is built or taken, packed (tools/pack.py), and tried on Windows
+# with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
+# tag, the files go on that release, where the app downloads them from.
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Upload the files to this release (its tag, for example v1.3.0). Empty: only build and try."
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "tools/ffmpeg/**"
+      - "tools/pack.py"
+      - "src-tauri/src/tools.rs"
+      - ".github/workflows/tools.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  ffmpeg:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [audio, video]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends mingw-w64 nasm meson ninja-build pkg-config autoconf automake libtool xz-utils
+      - name: Build
+        run: bash tools/ffmpeg/build.sh ${{ matrix.variant }}
+      - name: Pack
+        run: |
+          python3 tools/pack.py packs/dawwin-ffmpeg-${{ matrix.variant }}-8.1.2.tar.xz out/ffmpeg-${{ matrix.variant }} | tee -a "$GITHUB_STEP_SUMMARY"
+          cat out/ffmpeg-${{ matrix.variant }}/README.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-ffmpeg-${{ matrix.variant }}
+          path: packs/
+
+  translator:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: llama.cpp's server and what it needs, from its official release
+        run: node tools/stage-engine.mjs --translator-only
+      - name: Pack
+        shell: pwsh
+        run: python tools/pack.py packs/dawwin-translator-llama.cpp-b12237.tar.xz src-tauri/engine-bin/translate --skip README.md | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-translator
+          path: packs/
+
+  samples:
+    # Files of the kinds people bring, made with Ubuntu's full ffmpeg: only for the test.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Make them
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          mkdir s && cd s
+          v="-f lavfi -i testsrc2=size=1280x720:rate=30:duration=30"
+          ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libx264 -preset veryfast -c:a aac -ac 1 -ar 32000 meeting.mp4
+          ffmpeg -loglevel error -i meeting.mp4 -c copy obs.mkv
+          ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libx264 -preset veryfast -c:a ac3 -ac 6 film.mkv
+          ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libvpx-vp9 -deadline realtime -b:v 1M -c:a libopus browser.webm
+          ffmpeg -loglevel error -f lavfi -i "sine=frequency=300:duration=10" -c:a libopus whatsapp.ogg
+          # a phone video, filmed upright: the picture is stored on its side, with a rotation to show it
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=30:duration=5 -f lavfi -i "sine=duration=5" -c:v libx264 -preset veryfast -c:a aac -metadata:s:v:0 rotate=90 phone.mp4
+          printf '1\n00:00:01,000 --> 00:00:05,000\nطيب، خلونا نبدأ الاجتماع\n\n2\n00:00:06,000 --> 00:00:10,000\nOkay, let'"'"'s start the meeting\n\n' > subtitles.srt
+          ls -l
+      - uses: actions/upload-artifact@v4
+        with:
+          name: samples
+          path: s/
+
+  try:
+    needs: [ffmpeg, translator, samples]
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pack-*
+          merge-multiple: true
+          path: packs
+      - uses: actions/download-artifact@v4
+        with:
+          name: samples
+          path: s
+      - name: Unpack each with the app's own code, and start it
+        shell: pwsh
+        run: |
+          $env:DAWWIN_TEST_TOOLS = (Resolve-Path packs).Path
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_tools_unpack_and_start -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Read the sound, save it, add subtitle tracks
+        shell: pwsh
+        run: |
+          foreach ($variant in "audio", "video") {
+            New-Item -ItemType Directory -Force "ff-$variant" | Out-Null
+            # Windows' own tar, not Git's
+            & "$env:SystemRoot\System32\tar.exe" -xf "packs\dawwin-ffmpeg-$variant-8.1.2.tar.xz" -C "ff-$variant"
+            $ff = "ff-$variant\ffmpeg.exe"
+            Write-Host "== $variant"
+            foreach ($f in "meeting.mp4", "obs.mkv", "film.mkv", "browser.webm", "whatsapp.ogg", "phone.mp4") {
+              & $ff -nostdin -loglevel error -i "s\$f" -vn -ac 1 -ar 16000 -f f32le "out-$f.f32"
+              $n = (Get-Item "out-$f.f32").Length / 4 / 16000
+              Write-Host ("read {0}: {1:N1} s of sound" -f $f, $n)
+              if ($LASTEXITCODE -ne 0 -or $n -lt 4.5) { throw "$variant could not read $f" }
+            }
+            & $ff -nostdin -loglevel error -y -i "s\film.mkv" -vn -map 0:a:0 -c:a aac -b:a 128k "film-$variant.m4a"
+            if ($LASTEXITCODE -ne 0) { throw "$variant could not save the sound as M4A" }
+            & $ff -nostdin -loglevel error -y -i "s\meeting.mp4" -f srt -i "s\subtitles.srt" -map 0:v? -map 0:a? -map 1:0 -c copy -c:s mov_text -metadata:s:s:0 language=ara "sub-$variant.mp4"
+            if ($LASTEXITCODE -ne 0) { throw "$variant could not add a subtitle track to an MP4" }
+            & $ff -nostdin -loglevel error -y -i "s\film.mkv" -f srt -i "s\subtitles.srt" -map 0 -map 1:0 -c copy -c:s srt "sub-$variant.mkv"
+            if ($LASTEXITCODE -ne 0) { throw "$variant could not add a subtitle track to an MKV" }
+            Write-Host "M4A and subtitle tracks: fine"
+          }
+      - name: Burn subtitles into the picture (video only), as the app does
+        shell: pwsh
+        run: |
+          $ff = (Resolve-Path "ff-video\ffmpeg.exe").Path
+          Copy-Item "s\subtitles.srt" burn.srt
+          $style = "subtitles=burn.srt:force_style='FontName=Segoe UI,FontSize=18,Outline=1.6,Shadow=0.8,MarginV=18',format=nv12"
+          foreach ($f in "meeting.mp4", "film.mkv", "browser.webm", "phone.mp4") {
+            $name = [IO.Path]::GetFileNameWithoutExtension($f)
+            $t = Measure-Command { & $ff -nostdin -loglevel error -y -i "s\$f" -map 0:v:0 -map 0:a? -vf $style -c:v h264_mf -b:v 3M -c:a aac -b:a 160k -movflags +faststart "burned-$name.mp4" }
+            if ($LASTEXITCODE -ne 0) { throw "burning into $f failed" }
+            Write-Host ("{0}: {1:N1} s, {2:N0} KB" -f $f, $t.TotalSeconds, ((Get-Item "burned-$name.mp4").Length / 1KB))
+            & $ff -nostdin -loglevel error -i "burned-$name.mp4" -f null - ; if ($LASTEXITCODE -ne 0) { throw "burned-$name.mp4 does not read back" }
+          }
+          # upright stays upright: the burned phone video is taller than wide
+          $info = (& $ff -hide_banner -i burned-phone.mp4 2>&1 | Out-String)
+          if ($info -notmatch "360x640") { Write-Host $info; throw "the phone video lost its rotation" }
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: burned
+          path: burned-*.mp4
+
+  release:
+    needs: try
+    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pack-*
+          merge-multiple: true
+          path: packs
+      - name: Put them on the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release }}
+        run: |
+          cd packs
+          for f in *.tar.xz; do echo "$(stat -c %s "$f") $(sha256sum "$f" | cut -d' ' -f1) $f"; done | tee -a "$GITHUB_STEP_SUMMARY"
+          gh release upload "$TAG" *.tar.xz --clobber --repo "${{ github.repository }}"

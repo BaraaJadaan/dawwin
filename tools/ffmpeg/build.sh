@@ -9,8 +9,9 @@
 #                                 libass with FreeType, HarfBuzz and FriBidi (Arabic shaping), and the
 #                                 H.264 encoders of Windows (Media Foundation), NVIDIA and AMD
 #
-# Writes out/ffmpeg-<variant>.exe and out/ffmpeg-<variant>-configure.txt (what the build is made of,
-# which the LGPL asks to be stated).
+# Writes out/ffmpeg-<variant>/: ffmpeg.exe, README.txt (what the build is made of and where its
+# source is, which the LGPL asks to be stated) and the licenses of what is in it. tools/pack.py packs
+# that folder into the file Dawwin downloads.
 set -euo pipefail
 
 VARIANT="${1:?audio or video}"
@@ -80,7 +81,7 @@ if [ "$VARIANT" = video ]; then
     --enable-mediafoundation --enable-d3d11va --enable-ffnvcodec --enable-nvenc --enable-amf
     --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,mjpeg,prores,h263,msmpeg4v3,wmv3,vc1
     --enable-encoder=h264_mf,hevc_mf,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf
-    --enable-filter=subtitles,ass,scale,format,null,setsar,pad,fps
+    --enable-filter=subtitles,ass,scale,format,null,setsar,pad,fps,transpose,hflip,vflip
     --extra-cflags="-I$PREFIX/include"
   )
 else
@@ -107,10 +108,26 @@ cd "$WORK/src/ffmpeg-$FFMPEG"
   "${EXTRA[@]}" | tee "$WORK/configure.log"
 make -j "$JOBS"
 "$HOST-strip" ffmpeg.exe
-cp ffmpeg.exe "$OUT/ffmpeg-$VARIANT.exe"
+DEST="$OUT/ffmpeg-$VARIANT"
+rm -rf "$DEST" && mkdir -p "$DEST"
+cp ffmpeg.exe "$DEST/ffmpeg.exe"
+cp COPYING.LGPLv2.1 "$DEST/LICENSE-ffmpeg.txt"
 {
-  echo "FFmpeg $FFMPEG, built by tools/ffmpeg/build.sh $VARIANT. LGPL v2.1 or later; source: https://ffmpeg.org/releases/ffmpeg-$FFMPEG.tar.xz"
-  [ "$VARIANT" = video ] && echo "With FreeType $FREETYPE, FriBidi $FRIBIDI, HarfBuzz $HARFBUZZ, libass $LIBASS, nv-codec-headers and AMF headers."
+  echo "FFmpeg $FFMPEG for Dawwin (https://github.com/BaraaJadaan/dawwin), built by tools/ffmpeg/build.sh $VARIANT."
+  echo "FFmpeg is free software under the GNU Lesser General Public License, version 2.1 or later (LICENSE-ffmpeg.txt)."
+  echo "Its source: https://ffmpeg.org/releases/ffmpeg-$FFMPEG.tar.xz"
+  if [ "$VARIANT" = video ]; then
+    echo "With FreeType $FREETYPE, FriBidi $FRIBIDI, HarfBuzz $HARFBUZZ and libass $LIBASS, whose licenses are next to this file,"
+    echo "and the encoder headers of NVIDIA (nv-codec-headers n12.1.14.0) and AMD (AMF), both MIT."
+  fi
+  echo
   grep -m1 FFMPEG_CONFIGURATION config.h
-} > "$OUT/ffmpeg-$VARIANT-configure.txt"
-ls -l "$OUT/ffmpeg-$VARIANT.exe"
+} > "$DEST/README.txt"
+if [ "$VARIANT" = video ]; then
+  cp "$WORK/src/freetype-$FREETYPE/docs/FTL.TXT" "$DEST/LICENSE-freetype.txt"
+  cp "$WORK/src/fribidi-$FRIBIDI/COPYING" "$DEST/LICENSE-fribidi.txt"
+  cp "$WORK/src/harfbuzz-$HARFBUZZ/COPYING" "$DEST/LICENSE-harfbuzz.txt"
+  cp "$WORK/src/libass-$LIBASS/COPYING" "$DEST/LICENSE-libass.txt"
+  cp "$WORK/src/AMF/LICENSE.txt" "$DEST/LICENSE-AMF.txt" 2>/dev/null || true
+fi
+ls -l "$DEST"

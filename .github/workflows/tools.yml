@@ -154,7 +154,8 @@ jobs:
             $t = Measure-Command { & $ff -nostdin -loglevel error -y -i "s\$f" -map 0:v:0 -map 0:a? -vf $style -c:v h264_mf -b:v 3M -c:a aac -b:a 160k -movflags +faststart "burned-$name.mp4" }
             if ($LASTEXITCODE -ne 0) { throw "burning into $f failed" }
             Write-Host ("{0}: {1:N1} s, {2:N0} KB" -f $f, $t.TotalSeconds, ((Get-Item "burned-$name.mp4").Length / 1KB))
-            & $ff -nostdin -loglevel error -i "burned-$name.mp4" -f null - ; if ($LASTEXITCODE -ne 0) { throw "burned-$name.mp4 does not read back" }
+            # read back whole (this ffmpeg has no encoder for a null output of decoded pictures)
+            & $ff -nostdin -loglevel error -i "burned-$name.mp4" -c copy -f null - ; if ($LASTEXITCODE -ne 0) { throw "burned-$name.mp4 does not read back" }
           }
           # upright stays upright: the burned phone video is taller than wide
           $info = (& $ff -hide_banner -i burned-phone.mp4 2>&1 | Out-String)

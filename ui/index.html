@@ -171,6 +171,12 @@
             <p id="set-import-error" class="error setting-error" dir="auto" hidden></p>
           </section>
 
+          <section class="card group">
+            <h2 data-i18n="set.translation"></h2>
+            <div id="set-translators"></div>
+            <div class="setting" id="set-no-translator" hidden><div class="setting-text"><p class="small error-text" data-i18n="set.noTranslator"></p></div></div>
+          </section>
+
           <section class="card group" id="set-old-box" hidden>
             <h2 data-i18n="set.oldEngine"></h2>
             <div class="setting">
@@ -248,10 +254,17 @@
             </div>
             <label class="toggle small"><input type="checkbox" id="follow"> <span data-i18n="t.follow"></span></label>
             <label class="toggle small"><input type="checkbox" id="stamps" checked> <span data-i18n="t.stamps"></span></label>
+            <select id="t-lang" class="input select select-sm" data-i18n-aria="t.translation"></select>
+            <button class="btn btn-sm" id="btn-retranslate" data-i18n="t.updateTranslation" hidden></button>
             <button class="btn btn-sm" id="btn-copy" data-i18n="t.copyAll"></button>
             <div class="menu-wrap">
               <button class="btn btn-sm btn-primary" id="btn-export" aria-haspopup="true" data-i18n="t.export"></button>
               <div class="menu" id="export-menu" hidden>
+                <div class="menu-scope" id="export-scope" role="radiogroup" hidden>
+                  <button type="button" role="radio" data-scope="original" data-i18n="exp.original"></button>
+                  <button type="button" role="radio" data-scope="translation" data-i18n="exp.translation"></button>
+                  <button type="button" role="radio" data-scope="both" data-i18n="exp.both"></button>
+                </div>
                 <button data-fmt="docx" data-i18n="exp.docx"></button>
                 <button data-fmt="txt" data-i18n="exp.txt"></button>
                 <button data-fmt="md" data-i18n="exp.md"></button>

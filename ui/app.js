@@ -7,7 +7,7 @@ const listen = T.event.listen;
 const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
-const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing"]);
+const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 const MEDIA_EXT = ["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
 
@@ -22,6 +22,9 @@ const S = {
   view: "home",
   current: null,      // the transcript on screen
   languages: new Map(), // the languages recordings can be in, by code
+  targets: new Map(),   // the languages a transcript can be translated into, by code
+  shown: "",            // the translation shown under the lines of the transcript on screen ("": none)
+  scope: store.get("scope", "translation"), // what export and copy take while a translation is shown
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
@@ -127,7 +130,27 @@ function langName(code) {
   if (languageNames?.lang !== UI_LANG) languageNames = { lang: UI_LANG, names: new Intl.DisplayNames([I18N[UI_LANG].locale], { type: "language" }) };
   const name = languageNames.names.of(code === "jw" ? "jv" : code);
   // Windows does not know them all by name
-  return name && name !== code ? name : S.languages.get(code)?.name || code;
+  return name && name !== code ? name : S.languages.get(code)?.name || S.targets.get(code)?.name || code;
+}
+
+// ------------------------------------------------------------------ translations
+
+function translationOf(tx, lang) {
+  return (tx?.translations || []).find((x) => x.language === lang) || null;
+}
+/** Line `i` holds a translation of what it says now. */
+function translatedNow(tr, i, seg) {
+  const l = tr?.lines?.[i];
+  return !!l && !!l.text.trim() && l.from === seg.text;
+}
+/** How many lines of a transcript have no translation into `lang` of what they say now. */
+function untranslated(tx, lang) {
+  const tr = translationOf(tx, lang);
+  return tx.segments.filter((s, i) => s.text.trim() && !translatedNow(tr, i, s)).length;
+}
+/** The translation job of a transcript that is waiting or running, into `lang` or any language. */
+function translateJob(id, lang) {
+  return S.snap?.queue.find((j) => j.kind === "translate" && j.transcript === id && (!lang || j.target === lang) && ACTIVE.has(j.status)) || null;
 }
 
 // ------------------------------------------------------------------ status chips
@@ -146,6 +169,8 @@ function renderChips() {
     const pct = d.total ? Math.floor((100 * d.done) / d.total) : 0;
     return setChip(chip, "busy", t("chip.downloading", { pct }));
   }
+  const tj = S.snap.queue.find((j) => j.kind === "translate" && j.status === "translating");
+  if (tj) return setChip(chip, "busy", t("chip.translating", { pct: Math.floor(tj.progress * 100) }));
   if (!spokenModel(st)) return setChip(chip, "bad", t("chip.noModel"));
   if (e.state === "starting") return setChip(chip, "busy", t("chip.starting"));
   if (e.state === "loading") return setChip(chip, "busy", t("chip.loading"));
@@ -164,10 +189,11 @@ function jobLine(j) {
   switch (j.status) {
     case "queued": return t("job.queued");
     case "decoding": return t("job.decoding");
-    case "loading": return t("job.loading");
+    case "loading": return t(j.kind === "translate" ? "job.loadingTranslator" : "job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
+    case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "done": return t("job.done", { dur: dur(j.elapsed_s) });
-    case "cancelled": return t(j.saved ? "job.cancelledSaved" : "job.cancelled");
+    case "cancelled": return t(j.kind === "translate" ? "job.cancelledKept" : j.saved ? "job.cancelledSaved" : "job.cancelled");
     case "failed": return t("job.failed", { err: (j.error || t("job.unknown")).split("\n")[0] });
     default: return j.status;
   }
@@ -182,14 +208,17 @@ function renderQueue() {
   ul.innerHTML = "";
   for (const j of jobs) {
     const li = document.createElement("li");
-    li.className = "item" + (S.current?.id === j.id && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
+    const of = j.transcript || j.id;
+    li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
     const indet = j.status === "decoding" || j.status === "loading";
+    const what = j.kind === "translate" ? `<div class="sub">${esc(t("job.translating", { lang: langName(j.target) }))}</div>` : "";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
+      ${what}
       <div class="sub">${esc(jobLine(j))}</div>
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
-    li.onclick = () => openTranscript(j.id);
+    li.onclick = () => openTranscript(of, j.target);
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
       if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
@@ -402,10 +431,16 @@ function renderSettings() {
 }
 
 function renderModelRows(st) {
-  const box = $("set-models"), d = st.download;
-  if (box.dataset.lang !== UI_LANG || box.children.length !== st.models.length) {
+  renderRows($("set-models"), st, st.models.filter((m) => m.family !== "translator"));
+  renderRows($("set-translators"), st, st.models.filter((m) => m.family === "translator"));
+  $("set-no-translator").hidden = st.translator_found;
+}
+
+function renderRows(box, st, models) {
+  const d = st.download;
+  if (box.dataset.lang !== UI_LANG || box.children.length !== models.length) {
     box.dataset.lang = UI_LANG;
-    box.innerHTML = st.models.map((m) => `
+    box.innerHTML = models.map((m) => `
       <div class="setting" data-id="${m.id}">
         <div class="setting-text">
           <h3>${esc(t(`model.${m.id}.long`))} <span class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))}</span></h3>
@@ -538,17 +573,31 @@ function isLive(id) {
   return !!j && ACTIVE.has(j.status);
 }
 
-async function openTranscript(id) {
+/** Open a transcript; with `lang`, with its translation into that language under the lines. */
+async function openTranscript(id, lang) {
   let tx = null;
   try { tx = await invoke("get_transcript", { id }); } catch { /* not started yet */ }
   const j = jobById(id);
   if (!tx && j) {
-    tx = { id, title: j.title, source_path: j.path, created_ms: Date.now(), duration_s: j.duration_s, language: j.language, elapsed_s: 0, device: "", model: "", partial: false, segments: [] };
+    tx = { id, title: j.title, source_path: j.path, created_ms: Date.now(), duration_s: j.duration_s, language: j.language, elapsed_s: 0, device: "", model: "", partial: false, segments: [], translations: [] };
   }
   if (!tx) { toast(t("toast.gone")); await loadHistory(); return; }
+  if (S.current?.id !== id || lang) {
+    // the translation last shown with this transcript, while it has one
+    const last = lang || store.get("shown:" + id, "");
+    S.shown = last && (translationOf(tx, last) || translateJob(id, last)) ? last : "";
+  }
   S.current = tx;
   showView("transcript");
   renderTranscript();
+}
+
+/** Read the transcript on screen again (a translation of it was saved), keeping the place. */
+async function reloadCurrent() {
+  const id = S.current?.id;
+  if (!id) return;
+  try { S.current = await invoke("get_transcript", { id }); } catch { return; }
+  if (S.view === "transcript" && S.current.id === id) renderTranscript();
 }
 
 function renderTranscript() {
@@ -560,18 +609,76 @@ function renderTranscript() {
   $("t-partial").hidden = !cur.partial || live;
   renderMeta();
   renderLiveProgress();
+  paintTranslationMenu();
   $("btn-delete").hidden = live;
   const box = $("segments");
   box.dir = S.languages.get(cur.language)?.right_to_left ? "rtl" : "ltr";
   box.classList.toggle("no-stamps", !S.stamps);
   box.lang = cur.language === "jw" ? "jv" : cur.language;
+  const same = box.dataset.for === cur.id, keep = box.scrollTop;
   box.innerHTML = "";
-  if (box.dataset.for !== cur.id) { box.scrollTop = 0; box.dataset.for = cur.id; clearWordHighlight(); }
+  if (!same) { box.dataset.for = cur.id; clearWordHighlight(); }
   wordCache.clear();
   cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
   if (!cur.segments.length) box.append(emptyLive());
+  box.scrollTop = same ? keep : 0;
   runSearch(false);
   setupAudio(live);
+}
+
+/** The translation menu: none, the languages it is translated into, then all the others. */
+function paintTranslationMenu() {
+  const cur = S.current, menu = $("t-lang");
+  const done = (cur.translations || []).map((x) => x.language).filter((l) => S.targets.has(l) && l !== cur.language);
+  if (S.shown && !done.includes(S.shown)) done.push(S.shown); // a translation that is starting
+  const rest = [...S.targets.keys()].filter((c) => c !== cur.language && !done.includes(c));
+  const first = ["en", "ar"].filter((c) => rest.includes(c));
+  const others = rest.filter((c) => !first.includes(c)).map((c) => [c, langName(c)]).sort((a, b) => a[1].localeCompare(b[1], I18N[UI_LANG].locale));
+  const opt = (c) => `<option value="${c}">${esc(langName(c))}</option>`;
+  const line = `<option disabled>──────────</option>`;
+  const key = `${UI_LANG}:${cur.id}:${done}`;
+  if (menu.dataset.key !== key) {
+    menu.dataset.key = key;
+    menu.innerHTML = `<option value="">${esc(t("t.noTranslation"))}</option>`
+      + (done.length ? line + done.map(opt).join("") : "")
+      + line + first.map(opt).join("") + others.map(([c]) => opt(c)).join("");
+  }
+  menu.value = S.shown;
+  menu.disabled = isLive(cur.id) || !S.snap?.setup.translator_found;
+  $("btn-retranslate").hidden = !S.shown || !!translateJob(cur.id, S.shown) || !untranslated(cur, S.shown);
+}
+
+/** Show the transcript's translation into `lang` (or none), and translate it if it has none yet. */
+async function showTranslation(lang) {
+  const cur = S.current;
+  S.shown = lang;
+  store.set("shown:" + cur.id, lang);
+  const any = translationOf(cur, lang)?.lines?.some((l) => l.text);
+  if (lang && !any && !translateJob(cur.id, lang) && !(await startTranslation(lang))) {
+    S.shown = "";
+    store.set("shown:" + cur.id, "");
+  }
+  renderTranscript();
+}
+
+async function startTranslation(lang) {
+  if (!S.snap.setup.families.translator?.found) {
+    toast(t("toast.needTranslator"), { label: t("toast.getTranslator"), run: openTranslationSettings });
+    return false;
+  }
+  try {
+    await invoke("translate", { id: S.current.id, language: lang });
+    onState(await invoke("get_state"));
+    return true;
+  } catch (err) {
+    toast(String(err));
+    return false;
+  }
+}
+
+function openTranslationSettings() {
+  showView("settings");
+  $("set-translators").scrollIntoView({ block: "center" });
 }
 
 function renderMeta() {
@@ -624,14 +731,81 @@ function segRow(s, i, live) {
     text.addEventListener("blur", () => saveSegment(i, text));
   }
   row.append(time, text);
-  if (s.flag === "repeat" || s.edited) {
+  const tr = S.shown ? translationOf(S.current, S.shown) : null;
+  const outdated = !!tr?.lines?.[i]?.text && tr.lines[i].from !== s.text;
+  if (S.shown) row.append(translationLine(i, live));
+  if (s.flag === "repeat" || s.edited || outdated) {
     const note = document.createElement("div");
     note.className = "note" + (s.flag === "repeat" ? "" : " edited");
     note.dir = I18N[UI_LANG].dir; // the note is in the interface language, not the transcript's
-    note.textContent = t(s.flag === "repeat" ? "note.repeat" : "note.edited");
+    const notes = [];
+    if (s.flag === "repeat") notes.push(t("note.repeat"));
+    else if (s.edited) notes.push(t("note.edited"));
+    if (outdated) notes.push(t("note.outdated"));
+    note.textContent = notes.join(" · ");
     row.append(note);
   }
   return row;
+}
+
+/** The line's translation, under it; it can be corrected by hand when no translation is running. */
+function translationLine(i, live) {
+  const cur = S.current, seg = cur.segments[i], line = translationOf(cur, S.shown)?.lines?.[i];
+  const el = document.createElement("div");
+  el.className = "trans";
+  el.dir = S.targets.get(S.shown)?.right_to_left ? "rtl" : "ltr";
+  el.lang = S.shown;
+  el.spellcheck = false;
+  paintTranslationLine(el, line, seg);
+  if (!live && !translateJob(cur.id, S.shown)) {
+    el.contentEditable = "plaintext-only";
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); el.blur(); }
+      if (ev.key === "Escape") { el.textContent = translationOf(S.current, S.shown)?.lines?.[i]?.text || ""; el.blur(); }
+    });
+    el.addEventListener("blur", () => saveTranslation(i, el));
+  }
+  return el;
+}
+
+function paintTranslationLine(el, line, seg) {
+  el.textContent = line?.text || "";
+  el.classList.toggle("outdated", !!line?.text && line.from !== seg.text);
+  el.classList.toggle("pending", !line?.text && !!seg.text.trim());
+}
+
+async function saveTranslation(i, el) {
+  const cur = S.current, lang = S.shown, tr = translationOf(cur, lang);
+  const text = el.innerText.replace(/\s+/g, " ").trim();
+  const before = tr?.lines?.[i]?.text || "";
+  if (!tr || text === before) { el.textContent = before; return; }
+  try {
+    await invoke("update_translation", { id: cur.id, language: lang, index: i, text });
+    while (tr.lines.length < cur.segments.length) tr.lines.push({ text: "", from: "", edited: false });
+    tr.lines[i] = { text, from: cur.segments[i].text, edited: true };
+    el.closest(".seg").replaceWith(segRow(cur.segments[i], i, false));
+    paintTranslationMenu();
+  } catch (err) {
+    toast(String(err));
+    el.textContent = before;
+  }
+}
+
+/** A line the translation running in the background just finished. */
+function onTranslated({ id, language, index, text, from }) {
+  const cur = S.current;
+  if (!cur || cur.id !== id) return;
+  let tr = translationOf(cur, language);
+  if (!tr) {
+    tr = { language, model: "", lines: [] };
+    (cur.translations ||= []).push(tr);
+  }
+  while (tr.lines.length < cur.segments.length) tr.lines.push({ text: "", from: "", edited: false });
+  if (cur.segments[index]?.text !== from) return; // edited meanwhile: it waits for another turn
+  tr.lines[index] = { text, from, edited: false };
+  if (S.view !== "transcript" || S.shown !== language) return;
+  const el = $("segments").querySelector(`.seg[data-i="${index}"] .trans`);
+  if (el && document.activeElement !== el) paintTranslationLine(el, tr.lines[index], cur.segments[index]);
 }
 
 async function saveSegment(i, el) {
@@ -647,6 +821,7 @@ async function saveSegment(i, el) {
     wordCache.delete(i);
     const row = el.closest(".seg");
     row.replaceWith(segRow(seg, i, false));
+    if (S.shown) paintTranslationMenu();
     runSearch(false);
   } catch (err) {
     toast(String(err));
@@ -656,15 +831,22 @@ async function saveSegment(i, el) {
 
 function renderLiveProgress() {
   const cur = S.current;
-  const j = jobById(cur.id);
+  const own = jobById(cur.id);
+  // the transcript being written, else a translation of it
+  const j = own && ACTIVE.has(own.status) ? own : translateJob(cur.id, S.shown) || translateJob(cur.id);
   const box = $("t-progress");
-  if (!j || !ACTIVE.has(j.status)) { box.hidden = true; return; }
+  if (!j) { box.hidden = true; return; }
   box.hidden = false;
+  $("t-cancel").dataset.job = j.id;
   const indet = j.status === "decoding" || j.status === "loading" || j.status === "queued";
   box.querySelector(".progress").classList.toggle("indeterminate", indet);
   $("t-bar").style.width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
   let line = jobLine(j);
   if (j.status === "transcribing" && j.duration_s) line += " · " + t("t.of", { a: ts(j.progress * j.duration_s), b: ts(j.duration_s) });
+  if (j.kind === "translate") {
+    line = t("job.translating", { lang: langName(j.target) }) + " · " + line;
+    if (j.device) line += " · " + deviceLabel(j.device);
+  }
   $("t-status").textContent = line;
 }
 
@@ -1045,10 +1227,26 @@ async function chooseFolder() {
   if (path) addFolder(path);
 }
 
+/** What export and copy take: the transcript, or with a translation shown, the choice in the export menu. */
+function exportView() {
+  const tr = S.shown ? translationOf(S.current, S.shown) : null;
+  return tr && tr.lines.some((l) => l.text) ? { view: S.scope, language: S.shown } : { view: "original", language: null };
+}
+
+function paintExportScope() {
+  const box = $("export-scope");
+  box.hidden = !exportView().language;
+  for (const b of box.querySelectorAll("button")) {
+    const on = b.dataset.scope === S.scope;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-checked", String(on));
+  }
+}
+
 async function exportAs(fmt) {
   $("export-menu").hidden = true;
   try {
-    const path = await invoke("export_transcript", { id: S.current.id, format: fmt, stamps: S.stamps });
+    const path = await invoke("export_transcript", { id: S.current.id, format: fmt, stamps: S.stamps, ...exportView() });
     if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
   } catch (err) {
     toast(t("toast.exportFailed", { err }));
@@ -1057,7 +1255,7 @@ async function exportAs(fmt) {
 
 async function copyAll() {
   try {
-    const text = await invoke("transcript_text", { id: S.current.id, stamps: S.stamps });
+    const text = await invoke("transcript_text", { id: S.current.id, stamps: S.stamps, ...exportView() });
     await navigator.clipboard.writeText(text);
     toast(t("toast.copied", { n: S.current.segments.length }));
   } catch (err) {
@@ -1125,6 +1323,13 @@ function onState(snap) {
       S.current.duration_s = j.duration_s;
       renderMeta();
     }
+    // a translation of it ended: what it saved can now be corrected by hand
+    const ended = (prev?.queue || []).filter((x) => x.kind === "translate" && x.transcript === S.current.id && ACTIVE.has(x.status))
+      .map((x) => snap.queue.find((y) => y.id === x.id)).filter((y) => !y || !ACTIVE.has(y.status));
+    if (ended.length) {
+      for (const y of ended) if (y?.status === "failed") toast(t("toast.translateFailed", { err: (y.error || t("job.unknown")).split("\n")[0] }));
+      reloadCurrent();
+    } else paintTranslationMenu();
   }
   // finished jobs live in History; drop them from "In progress"
   for (const j of snap.queue) if (j.status === "done") invoke("dismiss_job", { id: j.id });
@@ -1252,11 +1457,27 @@ function wire() {
     $("segments").classList.toggle("no-stamps", !S.stamps);
   };
   $("btn-copy").onclick = copyAll;
-  $("btn-export").onclick = (ev) => { ev.stopPropagation(); $("export-menu").hidden = !$("export-menu").hidden; };
-  for (const b of $("export-menu").querySelectorAll("button")) b.onclick = () => exportAs(b.dataset.fmt);
+  $("btn-export").onclick = (ev) => {
+    ev.stopPropagation();
+    paintExportScope();
+    $("export-menu").hidden = !$("export-menu").hidden;
+  };
+  for (const b of $("export-menu").querySelectorAll("button[data-fmt]")) b.onclick = () => exportAs(b.dataset.fmt);
+  for (const b of $("export-scope").querySelectorAll("button")) {
+    b.onclick = (ev) => {
+      ev.stopPropagation(); // the menu stays open for the format
+      S.scope = b.dataset.scope;
+      store.set("scope", S.scope);
+      paintExportScope();
+    };
+  }
   document.addEventListener("click", () => ($("export-menu").hidden = true));
   $("btn-delete").onclick = deleteCurrent;
-  $("t-cancel").onclick = () => S.current && invoke("cancel_job", { id: S.current.id });
+  $("t-cancel").onclick = () => S.current && invoke("cancel_job", { id: $("t-cancel").dataset.job || S.current.id });
+  $("t-lang").onchange = () => showTranslation($("t-lang").value);
+  $("btn-retranslate").onclick = async () => {
+    if (S.current && S.shown && (await startTranslation(S.shown))) paintTranslationMenu();
+  };
 
   const title = $("t-title");
   title.addEventListener("keydown", (ev) => {
@@ -1279,6 +1500,7 @@ function wire() {
 
   listen("state", (e) => onState(e.payload));
   listen("segment", (e) => onSegment(e.payload));
+  listen("translated", (e) => onTranslated(e.payload));
   listen("history-changed", () => loadHistory());
   listen("transcript-started", (e) => {
     if (S.current?.id === e.payload) openTranscript(e.payload);
@@ -1338,6 +1560,7 @@ async function init() {
   UI_LANG = store.get("uiLang", (navigator.language || "en").toLowerCase().startsWith("ar") ? "ar" : "en");
   applyI18n();
   S.languages = new Map((await invoke("spoken_languages")).map((l) => [l.code, l]));
+  S.targets = new Map((await invoke("translation_targets")).map((l) => [l.code, l]));
   // the first time: the language of this Windows, when that is one more than Arabic and English
   const windows = (navigator.language || "").split("-")[0].toLowerCase();
   if (store.get("lang", null) === null && windows !== "en" && S.languages.has(windows)) S.spoken = windows;

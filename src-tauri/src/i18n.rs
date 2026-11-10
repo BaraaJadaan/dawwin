@@ -84,6 +84,17 @@ static AR: &[(&str, &str)] = &[
     ("the engine exited ({}). Last output:\n{}", "خرج المحرّك ({}). آخر ما كتبه:\n{}"),
     ("the engine exited. Last output:\n{}", "خرج المحرّك. آخر ما كتبه:\n{}"),
     ("cannot start {}", "تعذّر تشغيل {}"),
+    // translation
+    ("There is no translation into that language.", "لا توجد ترجمة إلى تلك اللغة."),
+    ("Dawwin cannot translate into that language.", "لا يستطيع دَوِّن الترجمة إلى تلك اللغة."),
+    ("This transcript is still being written. Translate it when it is done.", "ما زال هذا التفريغ قيد الكتابة. ترجمه بعد اكتماله."),
+    ("The transcript is already in that language.", "التفريغ بتلك اللغة أصلًا."),
+    ("There is no translation model yet. Download one in Settings.", "لا يوجد نموذج ترجمة بعد. نزّل واحدًا من الإعدادات."),
+    ("The translator is missing. Please install Dawwin again.", "المترجم غير موجود. أعد تثبيت دَوِّن من فضلك."),
+    ("the translator exited ({}). Last output:\n{}", "خرج المترجم ({}). آخر ما كتبه:\n{}"),
+    ("the translator exited. Last output:\n{}", "خرج المترجم. آخر ما كتبه:\n{}"),
+    ("the translator did not start. Last output:\n{}", "لم يبدأ المترجم. آخر ما كتبه:\n{}"),
+    ("Cancelled.", "أُلغي."),
     // updates
     ("Could not reach GitHub. Check the connection and try again.", "تعذّر الوصول إلى GitHub. تحقّق من الاتصال وحاول مجددًا."),
     ("No version has been published yet.", "لم يُنشر أي إصدار بعد."),

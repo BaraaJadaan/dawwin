@@ -264,6 +264,49 @@ pub fn voice_profile(audio: &[f32], a: usize, b: usize, n: usize) -> Vec<f32> {
         .collect()
 }
 
+/// Where the speaker stops inside `[a, b)`: each pause of at least a quarter second between words,
+/// as [how much of the speech in the range came before it (0 to 1), its start, its end], in seconds
+/// from the start of the recording. Subtitles end and start at these, as professional ones do.
+pub fn pauses(audio: &[f32], a: usize, b: usize) -> Vec<[f32; 3]> {
+    const MIN_FRAMES: usize = 12; // 240 ms
+    let frame = SR / 50;
+    let rms = smoothed_rms(&audio[a..b]);
+    if rms.len() < 10 {
+        return Vec::new();
+    }
+    let db: Vec<f32> = rms.iter().map(|r| 20.0 * r.max(1e-6).log10()).collect();
+    let mut sorted = db.clone();
+    sorted.sort_by(|x, y| x.total_cmp(y));
+    let loud = sorted[sorted.len() * 9 / 10];
+    if loud < -60.0 {
+        return Vec::new();
+    }
+    // the same line between speech and pause as `voice_profile`
+    let voiced: Vec<bool> = db.iter().map(|d| *d > loud - 25.0).collect();
+    let total = voiced.iter().filter(|v| **v).count();
+    let (Some(first), Some(last)) = (voiced.iter().position(|v| *v), voiced.iter().rposition(|v| *v)) else { return Vec::new() };
+    let t0 = a as f32 / SR as f32;
+    let at = |f: usize| ((t0 + f as f32 * frame as f32 / SR as f32) * 100.0).round() / 100.0;
+    let mut out = Vec::new();
+    let (mut before, mut i) = (0usize, first);
+    while i <= last {
+        if voiced[i] {
+            before += 1;
+            i += 1;
+            continue;
+        }
+        let run_start = i;
+        while i <= last && !voiced[i] {
+            i += 1;
+        }
+        if i - run_start >= MIN_FRAMES {
+            let share = ((before as f32 / total as f32) * 1000.0).round() / 1000.0;
+            out.push([share, at(run_start), at(i)]);
+        }
+    }
+    out
+}
+
 /// Digital silence (or near it): nothing for the model to hear.
 pub fn is_silent(audio: &[f32]) -> bool {
     audio.iter().fold(0f32, |m, x| m.max(x.abs())) < 1e-3
@@ -345,6 +388,26 @@ mod tests {
         assert!((p[5] - 7.5).abs() < 0.3, "half the speech is gone by 7.5 s, got {}", p[5]);
         assert!(p.windows(2).all(|w| w[0] <= w[1]));
         assert!(voice_profile(&vec![0.0; 3 * SR], 0, 3 * SR, 10).is_empty());
+    }
+
+    #[test]
+    fn pauses_are_found_between_the_words() {
+        // 1 s silence, 2 s speech, 0.6 s pause, 2 s speech, 0.1 s dip, 1 s speech, 1 s silence
+        let tone = |i: usize| (i as f32 * 0.07).sin() * 0.3;
+        let spans = [(0.0, 1.0, false), (1.0, 3.0, true), (3.0, 3.6, false), (3.6, 5.6, true), (5.6, 5.7, false), (5.7, 6.7, true), (6.7, 7.7, false)];
+        let audio: Vec<f32> = (0..(7.7 * SR as f32) as usize)
+            .map(|i| {
+                let t = i as f32 / SR as f32;
+                let speech = spans.iter().any(|(a, b, s)| *s && t >= *a && t < *b);
+                if speech { tone(i) } else { 0.0 }
+            })
+            .collect();
+        let p = pauses(&audio, 0, audio.len());
+        assert_eq!(p.len(), 1, "silence before and after the speech, and a 0.1 s dip, are no pauses: {p:?}");
+        let [share, start, end] = p[0];
+        assert!((share - 0.4).abs() < 0.05, "2 of 5 s of speech came before it: {share}");
+        assert!((start - 3.0).abs() < 0.2 && (end - 3.6).abs() < 0.2, "{start}..{end}");
+        assert!(pauses(&vec![0.0; 3 * SR], 0, 3 * SR).is_empty());
     }
 
     #[test]

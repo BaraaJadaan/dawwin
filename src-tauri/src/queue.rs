@@ -18,13 +18,16 @@ use crate::folder;
 use crate::history;
 use crate::models::{self, Family};
 use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
-use crate::transcript::{collapse_loops, find_loop, Segment, Transcript};
+use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
+use crate::translate::TranslatorProcess;
 
 const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating"];
+/// Save a translation that is under way at least this often, so closing the app keeps it.
+const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct JobView {
@@ -32,7 +35,14 @@ pub struct JobView {
     pub title: String,
     pub path: String,
     pub language: String,
-    /// queued | decoding | loading | transcribing | done | failed | cancelled
+    /// "translate" for translating a finished transcript; empty for transcribing a recording
+    pub kind: String,
+    /// What a translation translates: the transcript's id, and the language it goes into
+    pub transcript: Option<String>,
+    pub target: Option<String>,
+    /// Where a translation runs: "GPU · …" or "CPU"
+    pub device: Option<String>,
+    /// queued | decoding | loading | transcribing | translating | done | failed | cancelled
     pub status: String,
     pub progress: f64,
     pub eta_s: Option<f64>,
@@ -102,6 +112,8 @@ pub struct ModelView {
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct SetupView {
     pub engine_found: bool,
+    /// llama.cpp's server, which runs the translation models
+    pub translator_found: bool,
     pub ffmpeg: Option<String>,
     /// The model file in use of each family, by its key
     pub families: BTreeMap<String, ModelStatus>,
@@ -131,6 +143,7 @@ pub struct Snapshot {
 
 enum Msg {
     Job(String),
+    Translate(String),
     Probe,
     /// Stop the engine so the next one starts with new settings (another model, GPU or CPU)
     Restart,
@@ -147,6 +160,8 @@ pub struct Core {
     download_stop: Arc<AtomicBool>,
     /// The GPU crashed or failed in this session: stay on the CPU until the app restarts
     gpu_failed: AtomicBool,
+    /// The same, for the translator
+    translator_gpu_failed: AtomicBool,
     pub settings: Mutex<Settings>,
     tx: Mutex<Sender<Msg>>,
     counter: AtomicU64,
@@ -170,6 +185,7 @@ impl Core {
             cancels: Mutex::new(HashMap::new()),
             download_stop: Arc::new(AtomicBool::new(false)),
             gpu_failed: AtomicBool::new(false),
+            translator_gpu_failed: AtomicBool::new(false),
             settings: Mutex::new(settings),
             tx: Mutex::new(tx),
             counter: AtomicU64::new(0),
@@ -217,6 +233,7 @@ impl Core {
     /// Re-read what is installed (engine, tools, models) and tell the UI.
     pub fn refresh_setup(&self) {
         let engine_found = setup::engine_exe().is_some();
+        let translator_found = setup::translator_exe().is_some();
         let ffmpeg = setup::find_exe("ffmpeg").map(|p| p.display().to_string());
         let (families, run_on, ui_lang, check_updates, folder_formats, dir) = {
             let st = self.settings.lock().unwrap();
@@ -245,6 +262,7 @@ impl Core {
         self.update(|s| {
             let st = &mut s.setup;
             st.engine_found = engine_found;
+            st.translator_found = translator_found;
             st.ffmpeg = ffmpeg;
             st.families = families;
             st.models = models;
@@ -346,7 +364,9 @@ impl Core {
         if !matches!(value, "auto" | "cpu") {
             return Err(anyhow!("unknown setting {value}"));
         }
-        self.gpu_failed.store(false, Ordering::SeqCst); // the user asks for it: try the GPU again
+        // the user asks for it: try the GPU again
+        self.gpu_failed.store(false, Ordering::SeqCst);
+        self.translator_gpu_failed.store(false, Ordering::SeqCst);
         self.change_settings(|s| s.run_on = Some(value.to_string()))?;
         self.send(Msg::Restart);
         Ok(())
@@ -511,6 +531,52 @@ impl Core {
         });
     }
 
+    /// Translate a finished transcript into another language, as a job in the queue. Lines that
+    /// already have a translation of what they say now are kept, so this also brings a translation
+    /// up to date after edits, or finishes one that was stopped.
+    pub fn translate(&self, transcript: &str, language: &str) -> Result<String> {
+        if !models::can_translate_into(language) {
+            return Err(anyhow!(crate::tr!("Dawwin cannot translate into that language.")));
+        }
+        if self.is_live(transcript) {
+            return Err(anyhow!(crate::tr!("This transcript is still being written. Translate it when it is done.")));
+        }
+        let t = history::load(&self.paths.history_dir(), transcript)?;
+        if t.language == language {
+            return Err(anyhow!(crate::tr!("The transcript is already in that language.")));
+        }
+        if !setup::model_status(&self.paths, &self.settings.lock().unwrap(), Family::Translator).found {
+            return Err(anyhow!(crate::tr!("There is no translation model yet. Download one in Settings.")));
+        }
+        let running = self.snapshot().queue.into_iter().find(|j| {
+            j.kind == "translate" && j.transcript.as_deref() == Some(transcript) && j.target.as_deref() == Some(language) && ACTIVE_JOB.contains(&j.status.as_str())
+        });
+        if let Some(j) = running {
+            return Ok(j.id);
+        }
+        // a translation that stopped before goes from the list: this one carries it on
+        self.update(|s| {
+            s.queue.retain(|j| !(j.kind == "translate" && j.transcript.as_deref() == Some(transcript) && j.target.as_deref() == Some(language)))
+        });
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!("{}-{:03}", now_ms(), n % 1000);
+        self.cancels.lock().unwrap().insert(id.clone(), Arc::new(AtomicBool::new(false)));
+        let job = JobView {
+            id: id.clone(),
+            title: t.title.clone(),
+            path: t.source_path.clone(),
+            language: t.language.clone(),
+            kind: "translate".into(),
+            transcript: Some(transcript.to_string()),
+            target: Some(language.to_string()),
+            status: "queued".into(),
+            ..Default::default()
+        };
+        self.update(|s| s.queue.push(job));
+        self.send(Msg::Translate(id.clone()));
+        Ok(id)
+    }
+
     pub fn cancel_all(&self) {
         let ids: Vec<String> = self.snapshot().queue.into_iter().filter(|j| ACTIVE_JOB.contains(&j.status.as_str())).map(|j| j.id).collect();
         for id in ids {
@@ -572,14 +638,21 @@ fn give_up_on_gpu(core: &Arc<Core>, engine: &mut Option<EngineProcess>) {
 
 fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     let mut engine: Option<EngineProcess> = None;
+    // the speech engine and the translator take turns: both want the GPU's memory
+    let mut translator: Option<TranslatorProcess> = None;
     let mut last_used = Instant::now();
     loop {
         let msg = match rx.recv_timeout(Duration::from_secs(20)) {
             Ok(m) => m,
             Err(RecvTimeoutError::Timeout) => {
-                if engine.is_some() && last_used.elapsed() > IDLE_UNLOAD {
-                    engine.take().unwrap().shutdown();
-                    core.update(|s| s.engine.state = "off".into());
+                if last_used.elapsed() > IDLE_UNLOAD {
+                    if let Some(e) = engine.take() {
+                        e.shutdown();
+                        core.update(|s| s.engine.state = "off".into());
+                    }
+                    if let Some(t) = translator.take() {
+                        t.shutdown();
+                    }
                 }
                 continue;
             }
@@ -614,6 +687,9 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 if let Some(e) = engine.take() {
                     e.shutdown();
                 }
+                if let Some(t) = translator.take() {
+                    t.shutdown();
+                }
                 core.update(|s| {
                     s.engine.state = "off".into();
                     s.engine.note = None;
@@ -629,7 +705,44 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     core.send(Msg::Probe);
                 }
             }
+            Msg::Translate(id) => {
+                if let Some(e) = engine.take() {
+                    e.shutdown();
+                    core.update(|s| s.engine.state = "off".into());
+                }
+                if let Err(err) = run_translation(&core, &mut translator, &id) {
+                    let on_gpu = translator.as_ref().is_some_and(|t| !t.cpu_only);
+                    let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
+                    if err.is::<EngineFailed>() && on_gpu && !cancelled && !core.translator_gpu_failed.swap(true, Ordering::SeqCst) {
+                        // the rest of it again, on the CPU: slower, but it gets done
+                        if let Some(t) = translator.take() {
+                            t.shutdown();
+                        }
+                        core.update_job(&id, |j| {
+                            j.status = "queued".into();
+                            j.eta_s = None;
+                        });
+                        core.send(Msg::Translate(id));
+                        continue;
+                    }
+                    let msg = format!("{err:#}");
+                    core.update_job(&id, |j| {
+                        j.status = "failed".into();
+                        j.error = Some(msg);
+                        j.eta_s = None;
+                    });
+                    if let Some(t) = translator.as_mut() {
+                        if !t.alive() {
+                            translator = None;
+                        }
+                    }
+                }
+                core.cancels.lock().unwrap().remove(&id);
+            }
             Msg::Job(id) => {
+                if let Some(t) = translator.take() {
+                    t.shutdown();
+                }
                 let res = run_job(&core, &mut engine, &id);
                 if let Err(err) = res {
                     let engine_at_fault = err.is::<EngineFailed>() || err.is::<OutOfMemory>();
@@ -669,7 +782,142 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     if let Some(e) = engine.take() {
         e.shutdown();
     }
+    if let Some(t) = translator.take() {
+        t.shutdown();
+    }
 }
+
+/// The translator, started with this model if it is not running with it already, and loaded.
+fn ensure_translator<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProcess>, model: &str, cancel: &AtomicBool) -> Result<&'a mut TranslatorProcess> {
+    let cpu_only = core.settings.lock().unwrap().run_on() == "cpu" || core.translator_gpu_failed.load(Ordering::SeqCst);
+    if let Some(t) = slot.as_mut() {
+        if t.model != model || t.cpu_only != cpu_only || !t.alive() {
+            slot.take().unwrap().shutdown();
+        }
+    }
+    if slot.is_none() {
+        let exe = setup::translator_exe().ok_or_else(|| anyhow!(crate::tr!("The translator is missing. Please install Dawwin again.")))?;
+        // the GPU the speech engine found best: a dedicated one before one in the processor
+        let gpu = core.snapshot().engine.gpu;
+        *slot = Some(TranslatorProcess::spawn(&exe, &core.paths, model, cpu_only, gpu.as_deref())?);
+    }
+    let t = slot.as_mut().unwrap();
+    t.wait_ready(cancel)?;
+    Ok(t)
+}
+
+/// The lines of a transcript to translate: those with text and without a translation of what they say now.
+fn lines_to_translate(t: &Transcript, language: &str) -> Vec<usize> {
+    let done = t.translation(language);
+    (0..t.segments.len())
+        .filter(|&i| !t.segments[i].text.trim().is_empty() && !done.is_some_and(|tr| tr.is_current(i, &t.segments[i])))
+        .collect()
+}
+
+/// Write translated lines into the transcript's file. A line that was edited while it was being
+/// translated keeps waiting: its translation is of words it no longer has.
+fn keep_translated(dir: &Path, transcript: &str, language: &str, model: &str, lines: &mut Vec<(usize, String, String)>) -> Result<()> {
+    if lines.is_empty() {
+        return Ok(());
+    }
+    let taken = std::mem::take(lines);
+    history::modify(dir, transcript, |t| {
+        if t.translation(language).is_none() {
+            t.translations.push(Translation::new(language, model));
+        }
+        let count = t.segments.len();
+        let texts: Vec<String> = t.segments.iter().map(|s| s.text.clone()).collect();
+        let tr = t.translations.iter_mut().find(|x| x.language == language).expect("just added");
+        tr.model = model.to_string();
+        tr.lines.resize(count, TranslatedLine::default());
+        for (i, from, text) in taken {
+            if texts.get(i) == Some(&from) {
+                tr.lines[i] = TranslatedLine { text, from, edited: false };
+            }
+        }
+    })?;
+    Ok(())
+}
+
+fn run_translation(core: &Arc<Core>, translator: &mut Option<TranslatorProcess>, id: &str) -> Result<()> {
+    let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
+    if job.status != "queued" {
+        return Ok(());
+    }
+    let (Some(transcript), Some(language)) = (job.transcript.clone(), job.target.clone()) else { return Ok(()) };
+    let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
+    let started = Instant::now();
+    let _awake = KeepAwake::new();
+    core.update_job(id, |j| j.status = "loading".into());
+
+    let model = setup::model_status(&core.paths, &core.settings.lock().unwrap(), Family::Translator);
+    let variant = models::variant(&model.variant).filter(|v| model.found && v.family == Family::Translator);
+    let Some(variant) = variant else {
+        return Err(anyhow!(crate::tr!("There is no translation model yet. Download one in Settings.")));
+    };
+    let prompt = variant.prompt.expect("a translation model has a prompt");
+    let t = history::load(&core.paths.history_dir(), &transcript)?;
+    let todo = lines_to_translate(&t, &language);
+    let w = ensure_translator(core, translator, &model.path, &cancel)?;
+    let device = w.placement.label();
+    core.update_job(id, |j| {
+        j.status = "translating".into();
+        j.progress = 0.0;
+        j.device = Some(device);
+    });
+    let _ = core.app.emit("translation-started", serde_json::json!({ "id": transcript, "language": language }));
+
+    let t_start = Instant::now();
+    let mut pending: Vec<(usize, String, String)> = Vec::new();
+    let mut last_saved = Instant::now();
+    let mut failure = None;
+    for (n, &i) in todo.iter().enumerate() {
+        if cancel.load(Ordering::SeqCst) {
+            break;
+        }
+        let source = t.segments[i].text.clone();
+        let text = match w.translate(prompt, &source, &t.language, &language) {
+            Ok(text) => text,
+            Err(e) => {
+                failure = Some(e);
+                break;
+            }
+        };
+        let _ = core.app.emit("translated", serde_json::json!({ "id": transcript, "language": language, "index": i, "text": text, "from": source }));
+        pending.push((i, source, text));
+        let done = n + 1;
+        let spent = t_start.elapsed().as_secs_f64();
+        let eta = Some(spent / done as f64 * (todo.len() - done) as f64);
+        core.update_job(id, |j| {
+            j.progress = done as f64 / todo.len() as f64;
+            j.eta_s = eta;
+            j.elapsed_s = started.elapsed().as_secs_f64();
+        });
+        if last_saved.elapsed() > TRANSLATION_SAVE {
+            keep_translated(&core.paths.history_dir(), &transcript, &language, variant.label, &mut pending)?;
+            last_saved = Instant::now();
+        }
+    }
+    // what is done is kept, whatever stopped it
+    keep_translated(&core.paths.history_dir(), &transcript, &language, variant.label, &mut pending)?;
+    let _ = core.app.emit("history-changed", &transcript);
+    if let Some(e) = failure {
+        return Err(e);
+    }
+    let cancelled = cancel.load(Ordering::SeqCst);
+    core.update_job(id, |j| {
+        j.status = if cancelled { "cancelled".into() } else { "done".into() };
+        j.eta_s = None;
+        j.elapsed_s = started.elapsed().as_secs_f64();
+        j.saved = true;
+        j.error = None;
+        if !cancelled {
+            j.progress = 1.0;
+        }
+    });
+    Ok(())
+}
+
 fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Result<()> {
     let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
     if job.status != "queued" {
@@ -717,6 +965,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
         partial: false,
         segments: Vec::new(),
+        translations: Vec::new(),
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -844,6 +1093,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Rec
         edited: false,
         voice: audio::voice_profile(&audio.samples, a, b, 20),
         words: Vec::new(),
+        pauses: audio::pauses(&audio.samples, a, b),
     };
     if !got.stopped && find_loop(&got.text).is_none() {
         return Ok(vec![seg(a, b, got.text, None)]);
@@ -938,6 +1188,63 @@ mod tests {
         let segs = fix_loops(&mut e, &audio, (0, 20 * SR), stopped, "ar", 0).unwrap();
         assert_eq!(e.calls.len(), 1);
         assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["أول نص", "ثاني نص"]);
+    }
+
+    fn line(text: &str) -> Segment {
+        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] }
+    }
+
+    fn saved_transcript(name: &str, lines: &[&str]) -> (PathBuf, Transcript) {
+        let dir = std::env::temp_dir().join(format!("dawwin-tr-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let t = Transcript {
+            id: "t1".into(),
+            title: "اجتماع".into(),
+            source_path: String::new(),
+            created_ms: 0,
+            duration_s: 3.0,
+            language: "ar".into(),
+            elapsed_s: 0.0,
+            device: String::new(),
+            model: String::new(),
+            partial: false,
+            segments: lines.iter().map(|l| line(l)).collect(),
+            translations: vec![],
+        };
+        history::save(&dir, &t).unwrap();
+        (dir, t)
+    }
+
+    #[test]
+    fn a_translation_does_only_the_lines_it_has_not_done() {
+        let (dir, t) = saved_transcript("todo", &["أول سطر", "  ", "ثالث سطر"]);
+        assert_eq!(lines_to_translate(&t, "en"), [0, 2], "empty lines are not translated");
+        let mut lines = vec![(0, "أول سطر".to_string(), "First line".to_string())];
+        keep_translated(&dir, "t1", "en", "MiLMMT-46 1B · Q4", &mut lines).unwrap();
+        assert!(lines.is_empty());
+        let t = history::load(&dir, "t1").unwrap();
+        let tr = t.translation("en").unwrap();
+        assert_eq!(tr.lines.len(), 3, "one per line of the transcript");
+        assert_eq!(tr.text(0), "First line");
+        assert_eq!(lines_to_translate(&t, "en"), [2], "stopped half way: it carries on");
+        assert_eq!(lines_to_translate(&t, "fr"), [0, 2], "each language on its own");
+    }
+
+    #[test]
+    fn a_line_edited_while_it_was_translated_waits_for_another_turn() {
+        let (dir, _) = saved_transcript("edited", &["أول سطر"]);
+        history::modify(&dir, "t1", |t| t.segments[0].text = "أول سطر معدل".into()).unwrap();
+        let mut lines = vec![(0, "أول سطر".to_string(), "First line".to_string())];
+        keep_translated(&dir, "t1", "en", "m", &mut lines).unwrap();
+        let t = history::load(&dir, "t1").unwrap();
+        assert_eq!(t.translation("en").unwrap().text(0), "");
+        assert_eq!(lines_to_translate(&t, "en"), [0]);
+        // and a line edited after its translation is translated again
+        let mut lines = vec![(0, "أول سطر معدل".to_string(), "First line, edited".to_string())];
+        keep_translated(&dir, "t1", "en", "m", &mut lines).unwrap();
+        let (t, _) = history::modify(&dir, "t1", |t| t.segments[0].text = "سطر آخر".into()).unwrap();
+        assert_eq!(lines_to_translate(&t, "en"), [0]);
     }
 
     #[test]

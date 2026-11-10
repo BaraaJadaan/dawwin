@@ -19,16 +19,18 @@ const SYNC_EVERY: u64 = 8 * 1024 * 1024;
 const SYNC_AFTER: Duration = Duration::from_secs(10);
 const BUFFER: usize = 256 * 1024;
 
-/// What a model is built on. It decides which languages the model is used for.
+/// What a model is built on. It decides which languages the model is used for. The translator is
+/// the one that is no speech model: the app uses one at a time, whichever of them it is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Cohere,
     Canary,
     Whisper,
+    Translator,
 }
 
 impl Family {
-    pub const ALL: [Family; 3] = [Family::Cohere, Family::Canary, Family::Whisper];
+    pub const ALL: [Family; 4] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator];
 
     /// What the settings and the interface call it.
     pub fn key(self) -> &'static str {
@@ -36,6 +38,7 @@ impl Family {
             Family::Cohere => "cohere",
             Family::Canary => "canary",
             Family::Whisper => "whisper",
+            Family::Translator => "translator",
         }
     }
 
@@ -54,8 +57,47 @@ impl Family {
             Family::Cohere => "Cohere Transcribe Arabic (07-2026)",
             Family::Canary => "NVIDIA Canary",
             Family::Whisper => "OpenAI Whisper",
+            Family::Translator => "MiLMMT-46",
         }
     }
+}
+
+/// How a translation model wants to be asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Prompt {
+    /// Xiaomi's MiLMMT-46, as its model card asks: a plain text to complete, one line.
+    MiLMMT,
+}
+
+impl Prompt {
+    /// The text the model completes with the translation, and where the translation ends.
+    pub fn build(self, text: &str, from: &str, to: &str) -> (String, Vec<&'static str>) {
+        match self {
+            Prompt::MiLMMT => {
+                let (s, t) = (milmmt_name(from), milmmt_name(to));
+                (format!("Translate this from {s} to {t}:\n{s}: {text}\n{t}:"), vec!["\n"])
+            }
+        }
+    }
+}
+
+/// What MiLMMT-46 was trained on, by the names its prompt needs. It also reads other languages,
+/// "not guaranteed" to do them well; those it is told the English name of.
+pub const MILMMT_LANGUAGES: &[(&str, &str)] = &[
+    ("ar", "Arabic"), ("az", "Azerbaijani"), ("bg", "Bulgarian"), ("bn", "Bengali"), ("ca", "Catalan"),
+    ("cs", "Czech"), ("da", "Danish"), ("de", "German"), ("el", "Greek"), ("en", "English"),
+    ("es", "Spanish"), ("fa", "Persian"), ("fi", "Finnish"), ("fr", "French"), ("he", "Hebrew"),
+    ("hi", "Hindi"), ("hr", "Croatian"), ("hu", "Hungarian"), ("id", "Indonesian"), ("it", "Italian"),
+    ("ja", "Japanese"), ("kk", "Kazakh"), ("km", "Khmer"), ("ko", "Korean"), ("lo", "Lao"),
+    ("ms", "Malay"), ("my", "Burmese"), ("nl", "Dutch"), ("no", "Norwegian"), ("pl", "Polish"),
+    ("pt", "Portuguese"), ("ro", "Romanian"), ("ru", "Russian"), ("sk", "Slovak"), ("sl", "Slovenian"),
+    ("sv", "Swedish"), ("ta", "Tamil"), ("th", "Thai"), ("tl", "Tagalog"), ("tr", "Turkish"),
+    ("ur", "Urdu"), ("uz", "Uzbek"), ("vi", "Vietnamese"), ("yue", "Cantonese"),
+    ("zh", "Chinese (Simplified)"), ("zh-Hant", "Chinese (Traditional)"),
+];
+
+fn milmmt_name(code: &str) -> &str {
+    MILMMT_LANGUAGES.iter().find(|(c, _)| *c == code).map_or_else(|| language_name(code), |(_, n)| *n)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -70,12 +112,14 @@ pub struct Variant {
     pub file: &'static str,
     pub sha256: &'static str,
     pub size: u64,
+    /// How to ask it, for a translation model
+    pub prompt: Option<Prompt>,
 }
 
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 4] = [
+pub const VARIANTS: [Variant; 6] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -85,6 +129,7 @@ pub const VARIANTS: [Variant; 4] = [
         file: "cohere-transcribe-arabic-07-2026-Q8_0.gguf",
         sha256: "910de5c9c57f9fd8a280e1701f9cd96f63768878c1ca9e4ecf23638a5e0fef16",
         size: 2_410_655_136,
+        prompt: None,
     },
     Variant {
         id: "q4",
@@ -95,6 +140,7 @@ pub const VARIANTS: [Variant; 4] = [
         file: "cohere-transcribe-arabic-07-2026-Q4_K_M.gguf",
         sha256: "4671080cd10ffc6166e1e1b36216f9b51e1455f170d55c59cff7b81332ad4621",
         size: 1_558_162_848,
+        prompt: None,
     },
     Variant {
         id: "canary",
@@ -105,6 +151,7 @@ pub const VARIANTS: [Variant; 4] = [
         file: "canary-1b-v2-Q4_K_M.gguf",
         sha256: "49e0a67e219bec95a254c2348460b6350e75a7ac6f93a131e48244b4c7cb53b9",
         size: 735_476_448,
+        prompt: None,
     },
     Variant {
         id: "whisper",
@@ -115,6 +162,32 @@ pub const VARIANTS: [Variant; 4] = [
         file: "whisper-large-v3-turbo-Q4_K_M.gguf",
         sha256: "c6e172d0074f0fa9440b88247854b50643cd4bb58b8515c797bbed16d858c7df",
         size: 536_069_696,
+        prompt: None,
+    },
+    // Translation. Xiaomi's MiLMMT-46 (built on Gemma 3, Gemma terms of use) scored best of ten
+    // open translation models in our test on WMT24++ (tools/bench-translate): the 12B best of all
+    // over seven directions, and the 4B as good as the 12B from and into Arabic, at a third of its size.
+    Variant {
+        id: "milmmt-12b",
+        family: Family::Translator,
+        label: "MiLMMT-46 12B · Q4",
+        repository: "mradermacher/MiLMMT-46-12B-v1.0-GGUF",
+        revision: "67b6e43ad31a3aad46bafc4f899a9c0d5eec898d",
+        file: "MiLMMT-46-12B-v1.0.Q4_K_M.gguf",
+        sha256: "8c2d878d8daf8722faf1a42eef02ce046411ede17bf3115fb8b2cce491d5fb03",
+        size: 7_300_777_440,
+        prompt: Some(Prompt::MiLMMT),
+    },
+    Variant {
+        id: "milmmt-4b",
+        family: Family::Translator,
+        label: "MiLMMT-46 4B · Q4",
+        repository: "mradermacher/MiLMMT-46-4B-v1.0-GGUF",
+        revision: "3d05b58ace3d89a89af0574cdc49c84567f33969",
+        file: "MiLMMT-46-4B-v1.0.Q4_K_M.gguf",
+        sha256: "25424cbb5423afaa22b1b53bfb3d8aa116cfd84b5f8dcfa82363bfb3c4221ddf",
+        size: 2_489_893_152,
+        prompt: Some(Prompt::MiLMMT),
     },
 ];
 
@@ -181,6 +254,15 @@ pub fn models_for(language: &str) -> Vec<Variant> {
 
 pub fn variant(id: &str) -> Option<Variant> {
     VARIANTS.into_iter().find(|v| v.id == id)
+}
+
+/// The languages a transcript can be translated into: code, and name in English.
+pub fn translation_targets() -> impl Iterator<Item = (&'static str, &'static str)> {
+    MILMMT_LANGUAGES.iter().copied()
+}
+
+pub fn can_translate_into(code: &str) -> bool {
+    translation_targets().any(|(c, _)| c == code)
 }
 
 /// Which of ours this file is, by name.
@@ -265,6 +347,10 @@ pub fn check_file(path: &Path) -> Result<Family> {
     head.truncate(n);
     if !head.starts_with(b"GGUF") {
         bail!(crate::tr!("That is not a model file."));
+    }
+    // a translation model is one of ours: its prompt depends on which model it is
+    if let Some(v) = variant_of(path).filter(|v| v.family == Family::Translator) {
+        return Ok(v.family);
     }
     architecture(&head)
         .and_then(Family::from_architecture)
@@ -813,6 +899,44 @@ mod tests {
         }
         assert_eq!(language_name("tr"), "Turkish");
         assert_eq!(language_name("xx"), "xx");
+    }
+
+    #[test]
+    fn the_translation_prompt_is_the_one_on_the_model_card() {
+        let (p, stop) = Prompt::MiLMMT.build("طيب نبدأ", "ar", "en");
+        assert_eq!(p, "Translate this from Arabic to English:\nArabic: طيب نبدأ\nEnglish:");
+        assert_eq!(stop, ["\n"]);
+        let (p, _) = Prompt::MiLMMT.build("x", "zh", "tl");
+        assert_eq!(p, "Translate this from Chinese (Simplified) to Tagalog:\nChinese (Simplified): x\nTagalog:");
+        let (p, _) = Prompt::MiLMMT.build("x", "sw", "en");
+        assert!(p.starts_with("Translate this from Swahili to English"), "a language it was not trained on goes by its English name");
+    }
+
+    #[test]
+    fn translation_targets_have_names_and_directions() {
+        assert_eq!(translation_targets().count(), 46);
+        for (code, _) in translation_targets() {
+            assert!(known_language(code) || code == "zh-Hant", "{code}");
+        }
+        assert!(can_translate_into("ar") && can_translate_into("da") && can_translate_into("tr"));
+        assert!(!can_translate_into("sw"));
+        for v in VARIANTS {
+            assert_eq!(v.prompt.is_some(), v.family == Family::Translator, "{}", v.id);
+        }
+    }
+
+    #[test]
+    fn only_our_own_translation_models_are_taken_for_translators() {
+        let dir = folder("translator");
+        // some other Gemma 3 model: not a speech model, and not a translator Dawwin knows how to ask
+        let other = dir.join("gemma-3-4b.gguf");
+        std::fs::write(&other, gguf("gemma3")).unwrap();
+        assert!(check_file(&other).is_err());
+        assert_eq!(find_in_folder(&dir, Some(Family::Translator)), None);
+        // ours, by name, but cut short
+        let short = dir.join(variant("milmmt-4b").unwrap().file);
+        std::fs::write(&short, gguf("gemma3")).unwrap();
+        assert!(check_file(&short).is_err());
     }
 
     #[test]

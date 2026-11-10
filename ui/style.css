@@ -327,6 +327,24 @@ code { font: 12px Consolas, "Cascadia Mono", monospace; background: var(--bg); b
 .seg .text[contenteditable="true"]:focus { background: var(--panel); box-shadow: 0 0 0 2px var(--accent); }
 .seg .note { grid-column: 2; font-family: var(--ui-font); font-size: 12px; color: var(--warn); margin-top: -2px; text-align: start; }
 .seg .note.edited { color: var(--muted); }
+/* the line's translation, under it */
+.seg .trans {
+  grid-column: 2; margin: -10px -6px 0; padding: 2px 6px 0; border-radius: 6px; outline: none;
+  font-family: var(--ar-font); font-size: 16px; line-height: 1.8; color: var(--muted);
+  white-space: pre-wrap; overflow-wrap: anywhere; unicode-bidi: plaintext; min-height: 1.8em;
+}
+.seg .trans[contenteditable="plaintext-only"]:focus { background: var(--panel); color: var(--text); box-shadow: 0 0 0 2px var(--accent); }
+.seg .trans.outdated { text-decoration: line-through; text-decoration-color: var(--line-strong); }
+.seg .trans.pending::before { content: "…"; }
+.segments.no-stamps .seg .trans { grid-column: 1; }
+/* on the same side as its line, whichever way the two languages run */
+.segments[dir="rtl"] .seg .trans { text-align: right; }
+.segments[dir="ltr"] .seg .trans { text-align: left; }
+.select-sm { height: 30px; min-width: 0; font-size: 13px; padding: 0 6px; }
+#export-menu { min-width: 250px; }
+.menu-scope { display: flex; gap: 2px; padding: 3px; margin-bottom: 4px; border-radius: 8px; background: var(--bg); }
+.menu .menu-scope button { flex: 1; text-align: center; padding: 6px 8px; font-size: 12.5px; color: var(--muted); }
+.menu .menu-scope button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
 mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1px; }
 /* the word being said, while "Follow words" is on */
 ::highlight(now-word) { background-color: var(--now-word); color: var(--text); }

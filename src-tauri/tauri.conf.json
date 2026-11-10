@@ -44,7 +44,8 @@
     "copyright": "© 2026 Baraa Jadaan, MIT License",
     "license": "MIT",
     "resources": {
-      "engine-bin/*": "engine/"
+      "engine-bin/*": "engine/",
+      "engine-bin/translate/*": "engine/translate/"
     }
   }
 }

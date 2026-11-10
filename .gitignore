@@ -9,5 +9,9 @@ __pycache__/
 /engine/target/
 /src-tauri/engine-bin/*
 !/src-tauri/engine-bin/README.md
+!/src-tauri/engine-bin/translate/
+/src-tauri/engine-bin/translate/*
+!/src-tauri/engine-bin/translate/README.md
+/src-tauri/engine-cache/
 # The Thamanya font's license forbids uploading the font files: they stay out of the repository
 /ui/fonts/

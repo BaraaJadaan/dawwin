@@ -1,6 +1,7 @@
 //! Dawwin: local speech-to-text, Arabic first. The commands the UI calls.
 
 mod audio;
+mod captions;
 mod engine;
 mod folder;
 mod history;
@@ -9,6 +10,7 @@ mod models;
 mod queue;
 mod setup;
 mod transcript;
+mod translate;
 mod updates;
 
 use std::path::PathBuf;
@@ -18,7 +20,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::queue::{Core, Snapshot};
-use crate::transcript::Transcript;
+use crate::transcript::{Transcript, View};
 
 type C<'a> = State<'a, Arc<Core>>;
 type R<T> = Result<T, String>;
@@ -274,11 +276,7 @@ fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript>
     if core.is_live(id) {
         return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
-    let dir = core.paths.history_dir();
-    let mut t = history::load(&dir, id).map_err(e)?;
-    f(&mut t);
-    history::save(&dir, &t).map_err(e)?;
-    Ok(t)
+    history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
 #[tauri::command]
@@ -295,6 +293,52 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
     Ok(())
 }
 
+#[derive(serde::Serialize)]
+struct TranslationTarget {
+    code: &'static str,
+    /// In English; the interface asks Windows for the name in its own language first
+    name: &'static str,
+    right_to_left: bool,
+}
+
+/// The languages a transcript can be translated into.
+#[tauri::command]
+fn translation_targets() -> Vec<TranslationTarget> {
+    models::translation_targets()
+        .map(|(code, name)| TranslationTarget { code, name, right_to_left: models::is_right_to_left(code) })
+        .collect()
+}
+
+/// Translate a finished transcript, in the queue: the job's id.
+#[tauri::command]
+fn translate(core: C, id: String, language: String) -> R<String> {
+    core.translate(&id, &language).map_err(e)
+}
+
+#[tauri::command]
+fn update_translation(core: C, id: String, language: String, index: usize, text: String) -> R<()> {
+    edit(&core, &id, |t| {
+        let count = t.segments.len();
+        let from = t.segments.get(index).map(|s| s.text.clone());
+        if let (Some(tr), Some(from)) = (t.translations.iter_mut().find(|x| x.language == language), from) {
+            tr.lines.resize(count, Default::default());
+            let line = &mut tr.lines[index];
+            if line.text != text {
+                line.text = text;
+                line.edited = true;
+                // written by hand for the line as it is now
+                line.from = from;
+            }
+        }
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_translation(core: C, id: String, language: String) -> R<()> {
+    edit(&core, &id, |t| t.translations.retain(|x| x.language != language)).map(|_| ())
+}
+
 #[tauri::command]
 fn rename_transcript(core: C, id: String, title: String) -> R<()> {
     let title = title.trim().to_string();
@@ -309,10 +353,12 @@ fn delete_transcript(core: C, id: String) -> R<()> {
     history::delete(&core.paths.history_dir(), &id).map_err(e)
 }
 
+/// The text to copy: the transcript, its translation, or both (`view` "translation" | "both", into `language`).
 #[tauri::command]
-fn transcript_text(core: C, id: String, stamps: bool) -> R<String> {
+fn transcript_text(core: C, id: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
     let t = core.transcript(&id).map_err(e)?;
-    Ok(transcript::to_txt(&t, stamps))
+    let bytes = transcript::export_view(&t, "txt", stamps, &View::parse(view.as_deref(), language.as_deref())).map_err(e)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 fn safe_name(s: &str) -> String {
@@ -322,9 +368,15 @@ fn safe_name(s: &str) -> String {
 }
 
 #[tauri::command]
-async fn export_transcript(app: AppHandle, id: String, format: String, stamps: bool) -> R<Option<String>> {
+async fn export_transcript(app: AppHandle, id: String, format: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<Option<String>> {
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
+    let view = View::parse(view.as_deref(), language.as_deref());
+    // "Meeting (English).docx" for a translation, so it does not take the place of the transcript
+    let name = match &view {
+        View::Original => safe_name(&t.title),
+        View::Translation(l) | View::Both(l) => format!("{} ({})", safe_name(&t.title), models::language_name(l)),
+    };
     let (ext, label) = match format.as_str() {
         "txt" => ("txt", crate::tr!("Text")),
         "md" => ("md", "Markdown".to_string()),
@@ -340,29 +392,29 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
         .dialog()
         .file()
         .set_title(crate::tr!("Export transcript"))
-        .set_file_name(format!("{}.{ext}", safe_name(&t.title)))
+        .set_file_name(format!("{name}.{ext}"))
         .add_filter(label, &[ext]);
     if let Some(dir) = PathBuf::from(&t.source_path).parent().filter(|d| d.is_dir()) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
-    write_export(&t, ext, stamps, &dest)?;
+    write_export(&t, ext, stamps, &view, &dest)?;
     Ok(Some(dest.display().to_string()))
 }
 
 /// Export without asking where (the file name decides the format).
 #[tauri::command]
-fn export_to_path(core: C, id: String, path: String, stamps: bool) -> R<String> {
+fn export_to_path(core: C, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
     let t = core.transcript(&id).map_err(e)?;
     let dest = PathBuf::from(&path);
     let ext = dest.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
-    write_export(&t, &ext, stamps, &dest)?;
+    write_export(&t, &ext, stamps, &View::parse(view.as_deref(), language.as_deref()), &dest)?;
     Ok(path)
 }
 
-fn write_export(t: &Transcript, ext: &str, stamps: bool, dest: &std::path::Path) -> R<()> {
-    let bytes = transcript::export_bytes(t, ext, stamps).map_err(e)?;
+fn write_export(t: &Transcript, ext: &str, stamps: bool, view: &View, dest: &std::path::Path) -> R<()> {
+    let bytes = transcript::export_view(t, ext, stamps, view).map_err(e)?;
     std::fs::write(dest, bytes).map_err(|x| x.to_string())
 }
 
@@ -451,6 +503,10 @@ pub fn run() {
             list_history,
             get_transcript,
             update_segment,
+            translation_targets,
+            translate,
+            update_translation,
+            delete_translation,
             rename_transcript,
             delete_transcript,
             transcript_text,

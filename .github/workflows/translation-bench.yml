@@ -1,0 +1,90 @@
+name: Translation bench
+
+# Which local translation models Dawwin offers: every candidate translates the same WMT24++
+# sentences through llama.cpp on a CPU, and COMET-22 scores them. Results so far are in
+# tools/bench-translate/results-*.md. Run it from the Actions tab.
+on:
+  workflow_dispatch:
+    inputs:
+      directions:
+        description: "Directions, such as ar-en,en-ar (from ar, da, tr, fr and en)"
+        default: "ar-en,en-ar,da-en,en-da,tr-en,en-tr,en-fr"
+      sentences:
+        description: "Sentences per direction"
+        default: "40"
+
+env:
+  LLAMA: b12237
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tools/bench-translate/prepare.py tests.jsonl
+        env:
+          BENCH_DIRECTIONS: ${{ inputs.directions }}
+          BENCH_N: ${{ inputs.sentences }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tests
+          path: tests.jsonl
+
+  translate:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: milmmt46-12b, family: milmmt, url: "mradermacher/MiLMMT-46-12B-v1.0-GGUF/resolve/main/MiLMMT-46-12B-v1.0.Q4_K_M.gguf" }
+          - { key: milmmt46-4b, family: milmmt, url: "mradermacher/MiLMMT-46-4B-v1.0-GGUF/resolve/main/MiLMMT-46-4B-v1.0.Q4_K_M.gguf" }
+          - { key: milmmt46-1b, family: milmmt, url: "mradermacher/MiLMMT-46-1B-v1.0-GGUF/resolve/main/MiLMMT-46-1B-v1.0.Q4_K_M.gguf" }
+          - { key: hy-mt2-7b, family: hymt, url: "tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf" }
+          - { key: hy-mt2-1.8b, family: hymt, url: "tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf" }
+          - { key: translategemma-12b, family: tgemma, url: "mradermacher/translategemma-12b-it-GGUF/resolve/main/translategemma-12b-it.Q4_K_M.gguf" }
+          - { key: translategemma-4b, family: tgemma, url: "bullerwins/translategemma-4b-it-GGUF/resolve/main/translategemma-4b-it-Q4_K_M.gguf" }
+          - { key: plamo3-8b, family: plamo, url: "pfnet/plamo-3-translate-8b-GGUF/resolve/main/plamo-3-translate-8b-Q4_K_M.gguf" }
+          - { key: plamo3-2b, family: plamo, url: "pfnet/plamo-3-translate-2b-GGUF/resolve/main/plamo-3-translate-2b-Q4_K_M.gguf" }
+          - { key: plamo3-0.8b, family: plamo, url: "pfnet/plamo-3-translate-0.8b-GGUF/resolve/main/plamo-3-translate-0.8b-Q4_K_M.gguf" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tests
+      - name: llama.cpp
+        run: |
+          curl -L --fail --retry 5 -o llama.tgz "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA/llama-$LLAMA-bin-ubuntu-x64.tar.gz"
+          mkdir llama && tar -xzf llama.tgz -C llama
+          echo "SERVER=$(find "$PWD/llama" -name llama-server -type f | head -1)" >> "$GITHUB_ENV"
+      - name: Model
+        run: curl -L --fail --retry 5 -o model.gguf "https://huggingface.co/${{ matrix.url }}" && ls -l model.gguf
+      - run: pip install --quiet gguf jinja2
+      - name: Translate
+        run: mkdir out && python3 tools/bench-translate/run.py ${{ matrix.key }} ${{ matrix.family }} model.gguf "$SERVER" tests.jsonl out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: out-${{ matrix.key }}
+          path: out/
+
+  score:
+    needs: translate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+      - name: Install COMET
+        run: |
+          pip install --quiet torch --index-url https://download.pytorch.org/whl/cpu
+          pip install --quiet unbabel-comet sacrebleu
+      - name: Score
+        run: python3 tools/bench-translate/score.py art/tests/tests.jsonl art results.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.*

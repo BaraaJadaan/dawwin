@@ -10,6 +10,8 @@ on:
     paths:
       - "engine/**"
       - "src-tauri/src/models.rs"
+      - "src-tauri/src/translate.rs"
+      - "tools/stage-engine.mjs"
       - ".github/workflows/engine.yml"
 
 env:
@@ -81,3 +83,36 @@ jobs:
           $output = $requests | & .\engine-out\dawwin-engine.exe
           $output | ForEach-Object { Write-Host $_ }
           if (@($output | Where-Object { $_ -match '"ok":true' }).Count -ne 4) { throw "the engine failed" }
+
+  translator:
+    # The translator as the app ships it (llama.cpp's official build), with each translation model,
+    # on a machine without a GPU: download with a pause, load, translate Arabic, English and Danish.
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [milmmt-4b, milmmt-12b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The translator, as the app's build stages it
+        run: node tools/stage-engine.mjs --translator-only
+      - name: Download the model, pause, resume, check
+        env:
+          DAWWIN_TEST_MODEL: ${{ matrix.model }}
+          DAWWIN_TEST_DIR: ${{ runner.temp }}\models
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked real_download -- --ignored --nocapture
+      - name: Translate, as it starts by default
+        shell: pwsh
+        run: |
+          $env:DAWWIN_TEST_TRANSLATOR = (Resolve-Path src-tauri\engine-bin\translate\llama-server.exe).Path
+          $env:DAWWIN_TEST_MODEL_FILE = (Get-ChildItem "$env:RUNNER_TEMP\models\*.gguf" | Select-Object -First 1).FullName
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_translation -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Translate, with the GPU kept out
+        shell: pwsh
+        run: |
+          $env:DAWWIN_TEST_TRANSLATOR = (Resolve-Path src-tauri\engine-bin\translate\llama-server.exe).Path
+          $env:DAWWIN_TEST_MODEL_FILE = (Get-ChildItem "$env:RUNNER_TEMP\models\*.gguf" | Select-Object -First 1).FullName
+          $env:DAWWIN_TEST_CPU = "1"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_translation -- --ignored --nocapture

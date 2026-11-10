@@ -33,6 +33,17 @@ pub fn save(dir: &Path, t: &Transcript) -> Result<()> {
     Ok(())
 }
 
+/// Read a transcript, change it and write it back, with no other change in between: an edit in
+/// the window and a translation running in the background both change the same file.
+pub fn modify<T>(dir: &Path, id: &str, f: impl FnOnce(&mut Transcript) -> T) -> Result<(Transcript, T)> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut t = load(dir, id)?;
+    let out = f(&mut t);
+    save(dir, &t)?;
+    Ok((t, out))
+}
+
 pub fn load(dir: &Path, id: &str) -> Result<Transcript> {
     let path = file(dir, id)?;
     let bytes = std::fs::read(&path).with_context(|| format!("no transcript {id}"))?;

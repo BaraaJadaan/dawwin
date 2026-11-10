@@ -160,6 +160,18 @@ pub fn engine_exe() -> Option<PathBuf> {
     exe.is_file().then_some(exe)
 }
 
+/// The translator (llama.cpp's server) ships in a folder of its own inside the engine's.
+pub fn translator_exe() -> Option<PathBuf> {
+    // for trying the app with a stand-in server; not there in release builds
+    if cfg!(debug_assertions) {
+        if let Some(exe) = std::env::var_os("DAWWIN_TEST_TRANSLATOR").map(PathBuf::from).filter(|p| p.is_file()) {
+            return Some(exe);
+        }
+    }
+    let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("translate").join("llama-server.exe");
+    exe.is_file().then_some(exe)
+}
+
 // ---------------------------------------------------------------- settings
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

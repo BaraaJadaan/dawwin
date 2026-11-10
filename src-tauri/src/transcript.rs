@@ -22,6 +22,9 @@ pub struct Segment {
     /// When each word starts: (character offset in `text`, seconds from the start of the recording)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub words: Vec<(u32, f32)>,
+    /// Where the speaker stops in the line (see `audio::pauses`), for subtitles that end when they do
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pauses: Vec<[f32; 3]>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +45,81 @@ pub struct Transcript {
     #[serde(default)]
     pub partial: bool,
     pub segments: Vec<Segment>,
+    /// The transcript in other languages, line by line
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translations: Vec<Translation>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Translation {
+    pub language: String,
+    /// The model that translated it
+    pub model: String,
+    /// One per segment, in the same order: empty where that line is not translated yet
+    pub lines: Vec<TranslatedLine>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct TranslatedLine {
+    pub text: String,
+    /// The line as it was when it was translated: when it reads differently now, it changed since
+    pub from: String,
+    #[serde(default)]
+    pub edited: bool,
+}
+
+impl Translation {
+    pub fn new(language: &str, model: &str) -> Self {
+        Translation { language: language.into(), model: model.into(), lines: Vec::new() }
+    }
+
+    /// Whether line `i` holds a translation of what the line says now.
+    pub fn is_current(&self, i: usize, segment: &Segment) -> bool {
+        self.lines.get(i).is_some_and(|l| !l.text.trim().is_empty() && l.from == segment.text)
+    }
+
+    pub fn text(&self, i: usize) -> &str {
+        self.lines.get(i).map_or("", |l| l.text.trim())
+    }
+}
+
+impl Transcript {
+    pub fn translation(&self, language: &str) -> Option<&Translation> {
+        self.translations.iter().find(|t| t.language == language)
+    }
+
+    /// The same transcript, in that language: what the export formats write for "the translation".
+    pub fn translated(&self, language: &str) -> Option<Transcript> {
+        let tr = self.translation(language)?;
+        let mut t = self.clone();
+        t.language = tr.language.clone();
+        t.model = tr.model.clone();
+        t.translations.clear();
+        for (i, s) in t.segments.iter_mut().enumerate() {
+            s.text = tr.text(i).to_string();
+            s.words.clear();
+            s.flag = None;
+        }
+        Some(t)
+    }
+}
+
+/// What an export holds: the transcript, its translation, or both, line by line.
+#[derive(Clone, Debug, PartialEq)]
+pub enum View {
+    Original,
+    Translation(String),
+    Both(String),
+}
+
+impl View {
+    pub fn parse(view: Option<&str>, language: Option<&str>) -> View {
+        match (view, language) {
+            (Some("translation"), Some(l)) => View::Translation(l.to_string()),
+            (Some("both"), Some(l)) => View::Both(l.to_string()),
+            _ => View::Original,
+        }
+    }
 }
 
 // ---------------------------------------------------------------- loops
@@ -145,43 +223,98 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
     out
 }
 
-/// Subtitle cues: each segment (up to 30 s) is split into lines of about 14 words, timed
-/// by their share of the segment's characters. Timing inside a segment is an estimate.
-pub fn cues(t: &Transcript) -> Vec<(f64, f64, String)> {
-    let mut out = Vec::new();
-    for s in visible(t) {
-        let words: Vec<&str> = s.text.split_whitespace().collect();
-        let dur = (s.end - s.start).max(0.1);
-        let n = ((words.len() as f64 / 14.0).max(dur / 7.0)).ceil().max(1.0) as usize;
-        let n = n.min(words.len().max(1));
-        let per = words.len().div_ceil(n);
-        let groups: Vec<String> = words.chunks(per.max(1)).map(|c| c.join(" ")).collect();
-        let total: usize = groups.iter().map(|g| g.chars().count() + 1).sum();
-        let mut at = s.start;
-        for g in groups {
-            let share = (g.chars().count() + 1) as f64 / total as f64;
-            let end = (at + dur * share).min(s.end);
-            out.push((at, end, g));
-            at = end;
-        }
+fn srt(cues: Vec<crate::captions::Cue>) -> String {
+    let mut out = String::new();
+    for (i, c) in cues.into_iter().enumerate() {
+        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", i + 1, ts_ms(c.start, ','), ts_ms(c.end, ','), c.text()));
     }
     out
 }
 
-pub fn to_srt(t: &Transcript) -> String {
-    let mut out = String::new();
-    for (i, (a, b, text)) in cues(t).into_iter().enumerate() {
-        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", i + 1, ts_ms(a, ','), ts_ms(b, ','), text));
+fn vtt(cues: Vec<crate::captions::Cue>) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for c in cues {
+        out.push_str(&format!("{} --> {}\n{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), c.text()));
     }
     out
+}
+/// Subtitles timed and broken as professional ones are: see `captions`.
+pub fn to_srt(t: &Transcript) -> String {
+    srt(crate::captions::cues(t))
 }
 
 pub fn to_vtt(t: &Transcript) -> String {
-    let mut out = String::from("WEBVTT\n\n");
-    for (a, b, text) in cues(t) {
-        out.push_str(&format!("{} --> {}\n{}\n\n", ts_ms(a, '.'), ts_ms(b, '.'), text));
-    }
-    out
+    vtt(crate::captions::cues(t))
+}
+
+fn no_translation() -> anyhow::Error {
+    anyhow::anyhow!(crate::tr!("There is no translation into that language."))
+}
+
+/// An export of the transcript, its translation, or the two together.
+pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Result<Vec<u8>> {
+    let language = match view {
+        View::Original => return export_bytes(t, ext, stamps),
+        View::Translation(l) => return export_bytes(&t.translated(l).ok_or_else(no_translation)?, ext, stamps),
+        View::Both(l) => l,
+    };
+    let tr = t.translation(language).ok_or_else(no_translation)?;
+    let second: Vec<String> = (0..t.segments.len()).map(|i| tr.text(i).to_string()).collect();
+    let lines = || t.segments.iter().enumerate().filter(|(_, s)| !s.text.trim().is_empty());
+    Ok(match ext {
+        "txt" => {
+            let mut out = String::new();
+            for (i, s) in lines() {
+                if stamps {
+                    out.push_str(&format!("[{} - {}] ", ts(s.start), ts(s.end)));
+                }
+                out.push_str(&format!("{}\n{}\n\n", s.text.trim(), second[i]));
+            }
+            out.into_bytes()
+        }
+        "md" => {
+            let mut out = format!("# {}\n\n", t.title);
+            for (i, s) in lines() {
+                if stamps {
+                    out.push_str(&format!("**[{}]** ", ts(s.start)));
+                }
+                out.push_str(&format!("{}  \n{}\n\n", s.text.trim(), second[i]));
+            }
+            out.into_bytes()
+        }
+        "srt" => srt(crate::captions::bilingual_cues(t, tr)).into_bytes(),
+        "vtt" => vtt(crate::captions::bilingual_cues(t, tr)).into_bytes(),
+        "docx" => to_docx_with(t, Some((&tr.language, &second)), stamps)?,
+        "csv" => {
+            let q = |s: &str| s.trim().replace('"', "\"\"");
+            let mut out = String::from("\u{feff}start,end,text,translation\r\n");
+            for (i, s) in lines() {
+                out.push_str(&format!("{},{},\"{}\",\"{}\"\r\n", secs(s.start), secs(s.end), q(&s.text), q(&second[i])));
+            }
+            out.into_bytes()
+        }
+        "tsv" => {
+            let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut out = String::from("start\tend\ttext\ttranslation\n");
+            for (i, s) in lines() {
+                out.push_str(&format!("{}\t{}\t{}\t{}\n", secs(s.start), secs(s.end), flat(&s.text), flat(&second[i])));
+            }
+            out.into_bytes()
+        }
+        "json" => {
+            let mut doc: serde_json::Value = serde_json::from_str(&to_json(t))?;
+            doc["translation_language"] = tr.language.clone().into();
+            doc["translation_model"] = tr.model.clone().into();
+            let texts: Vec<&String> = lines().map(|(i, _)| &second[i]).collect();
+            if let Some(segs) = doc["segments"].as_array_mut() {
+                for (seg, text) in segs.iter_mut().zip(texts) {
+                    seg["translation"] = text.clone().into();
+                }
+            }
+            (serde_json::to_string_pretty(&doc)? + "\n").into_bytes()
+        }
+        _ => anyhow::bail!("unknown format .{ext}"),
+    })
 }
 
 /// A transcript in one of the export formats, by file extension.
@@ -267,9 +400,22 @@ fn xml(s: &str) -> String {
 
 /// A Word document, with right-to-left paragraphs where the language needs them.
 pub fn to_docx(t: &Transcript, stamps: bool) -> Result<Vec<u8>> {
+    to_docx_with(t, None, stamps)
+}
+
+/// With `second` (a language and one line per segment), each line's translation follows it, in grey.
+fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool) -> Result<Vec<u8>> {
     let rtl = crate::models::is_right_to_left(&t.language);
     let ppr = if rtl { "<w:pPr><w:bidi/><w:spacing w:after=\"160\" w:line=\"312\" w:lineRule=\"auto\"/></w:pPr>" } else { "<w:pPr><w:spacing w:after=\"160\"/></w:pPr>" };
     let text_rpr = if rtl { "<w:rPr><w:rtl/><w:lang w:bidi=\"ar-SY\"/></w:rPr>" } else { "" };
+    // the original keeps its line close to its translation
+    let ppr = if second.is_some() { ppr.replace("w:after=\"160\"", "w:after=\"40\"") } else { ppr.to_string() };
+    let below = second.map(|(language, lines)| {
+        let rtl = crate::models::is_right_to_left(language);
+        let ppr = if rtl { "<w:pPr><w:bidi/><w:spacing w:after=\"220\"/></w:pPr>" } else { "<w:pPr><w:spacing w:after=\"220\"/></w:pPr>" };
+        let rpr = if rtl { "<w:rPr><w:rtl/><w:color w:val=\"4B5563\"/></w:rPr>" } else { "<w:rPr><w:color w:val=\"4B5563\"/></w:rPr>" };
+        (ppr, rpr, lines)
+    });
     let mut body = String::new();
     body.push_str(&format!(
         "<w:p><w:pPr><w:pStyle w:val=\"Title\"/>{}</w:pPr><w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>",
@@ -282,9 +428,9 @@ pub fn to_docx(t: &Transcript, stamps: bool) -> Result<Vec<u8>> {
         if rtl { "<w:bidi/>" } else { "" },
         xml(&crate::tr!("Duration {} · {}", ts(t.duration_s), &t.model))
     ));
-    for s in visible(t) {
+    for (i, s) in t.segments.iter().enumerate().filter(|(_, s)| !s.text.trim().is_empty()) {
         body.push_str("<w:p>");
-        body.push_str(ppr);
+        body.push_str(&ppr);
         if stamps {
             body.push_str(&format!(
                 "<w:r><w:rPr><w:rtl w:val=\"0\"/><w:color w:val=\"0F766E\"/><w:sz w:val=\"18\"/><w:szCs w:val=\"18\"/></w:rPr><w:t xml:space=\"preserve\">[{}]</w:t></w:r><w:r>{}<w:t xml:space=\"preserve\"> </w:t></w:r>",
@@ -294,6 +440,10 @@ pub fn to_docx(t: &Transcript, stamps: bool) -> Result<Vec<u8>> {
         }
         body.push_str(&format!("<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>", text_rpr, xml(s.text.trim())));
         body.push_str("</w:p>");
+        if let Some((ppr, rpr, lines)) = &below {
+            let text = lines.get(i).map_or("", |l| l.trim());
+            body.push_str(&format!("<w:p>{ppr}<w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>", xml(text)));
+        }
     }
     let document = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
@@ -393,10 +543,76 @@ mod tests {
             model: "m".into(),
             partial: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![] },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![] },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
             ],
+            translations: vec![],
         }
+    }
+
+    fn translated_sample() -> Transcript {
+        let mut t = sample();
+        let mut tr = Translation::new("en", "Hy-MT2");
+        tr.lines = vec![
+            TranslatedLine { text: "I mean, at the end you get three buttons".into(), from: t.segments[0].text.clone(), edited: false },
+            TranslatedLine::default(),
+        ];
+        t.translations.push(tr);
+        t
+    }
+
+    #[test]
+    fn a_translation_knows_which_lines_changed_since() {
+        let mut t = translated_sample();
+        let tr = t.translation("en").unwrap().clone();
+        assert!(tr.is_current(0, &t.segments[0]));
+        assert!(!tr.is_current(1, &t.segments[1]), "never translated");
+        t.segments[0].text = "يعني مثلا ثلاث زرار".into();
+        assert!(!tr.is_current(0, &t.segments[0]), "the line was edited after");
+        assert!(t.translation("fr").is_none());
+    }
+
+    #[test]
+    fn the_translation_exports_like_a_transcript_in_that_language() {
+        let t = translated_sample();
+        let en = t.translated("en").unwrap();
+        assert_eq!(en.language, "en");
+        assert_eq!(en.model, "Hy-MT2");
+        assert_eq!(to_txt(&en, false), "I mean, at the end you get three buttons\n\n");
+        let txt = export_view(&t, "txt", false, &View::Translation("en".into())).unwrap();
+        assert_eq!(String::from_utf8(txt).unwrap(), "I mean, at the end you get three buttons\n\n");
+        assert!(export_view(&t, "txt", false, &View::Translation("fr".into())).is_err());
+    }
+
+    #[test]
+    fn both_languages_put_each_translation_under_its_line() {
+        let t = translated_sample();
+        let both = |ext: &str| String::from_utf8(export_view(&t, ext, false, &View::Both("en".into())).unwrap()).unwrap();
+        assert_eq!(both("txt"), "يعني مثلا بيجيك اخر شيء ثلاث زرار\nI mean, at the end you get three buttons\n\n");
+        let srt = both("srt");
+        assert!(srt.starts_with("1\n00:00:00,000 --> "), "{srt}");
+        // every subtitle: a part of the line, and under it the part of the translation that goes with it
+        let cues: Vec<&str> = srt.split("\n\n").filter(|c| !c.is_empty()).collect();
+        assert!(cues.len() >= 2, "22 seconds do not fit in one subtitle: {srt}");
+        for c in &cues {
+            assert_eq!(c.lines().count(), 4, "number, time, the line's part, the translation's: {c}");
+        }
+        assert!(cues[0].contains("يعني") && cues[0].contains("I mean"), "{srt}");
+        assert!(cues.last().unwrap().contains("زرار") && cues.last().unwrap().ends_with("buttons"), "{srt}");
+        assert_eq!(both("csv").lines().nth(1).unwrap(), "0.000,22.000,\"يعني مثلا بيجيك اخر شيء ثلاث زرار\",\"I mean, at the end you get three buttons\"");
+        let json: serde_json::Value = serde_json::from_str(&both("json")).unwrap();
+        assert_eq!(json["segments"][0]["translation"], "I mean, at the end you get three buttons");
+        assert_eq!(json["translation_language"], "en");
+        let docx = export_view(&t, "docx", true, &View::Both("en".into())).unwrap();
+        assert_eq!(&docx[..2], b"PK");
+    }
+
+    #[test]
+    fn transcripts_saved_before_translations_still_load() {
+        let old = r#"{"id":"a","title":"x","source_path":"","created_ms":0,"duration_s":1.0,"language":"ar","segments":[]}"#;
+        let t: Transcript = serde_json::from_str(old).unwrap();
+        assert!(t.translations.is_empty());
+        assert!(!serde_json::to_string(&t).unwrap().contains("translations"), "nothing new in files without one");
     }
 
     #[test]

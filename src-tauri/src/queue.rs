@@ -18,6 +18,7 @@ use crate::folder;
 use crate::history;
 use crate::models::{self, Family};
 use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
+use crate::tools;
 use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
 use crate::translate::TranslatorProcess;
 
@@ -40,11 +41,13 @@ pub struct Steps {
     /// The language to translate into
     pub translate: Option<String>,
     pub video: bool,
+    /// The video's subtitles burned into the picture, rather than added as tracks
+    pub burn: bool,
 }
 
 impl Default for Steps {
     fn default() -> Self {
-        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false }
+        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false, burn: false }
     }
 }
 
@@ -57,7 +60,8 @@ pub struct JobView {
     pub steps: Steps,
     /// The files it saved: the sound, the video with subtitles
     pub outputs: Vec<String>,
-    /// "translate" for translating a finished transcript; empty for transcribing a recording
+    /// "translate" for translating a finished transcript, "burn" for burning subtitles into its
+    /// video; empty for transcribing a recording
     pub kind: String,
     /// What a translation translates: the transcript's id, and the language it goes into
     pub transcript: Option<String>,
@@ -101,8 +105,10 @@ pub struct EngineView {
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct DownloadView {
     pub active: bool,
-    /// Which model, while it downloads
+    /// Which model or tool, while it downloads
     pub model: Option<String>,
+    /// "translator" while the translator downloads before the first translation model
+    pub part: Option<String>,
     pub done: u64,
     pub total: u64,
     /// after a dropped connection: seconds until it resumes, and the attempt number
@@ -131,12 +137,27 @@ pub struct ModelView {
     pub active: bool,
 }
 
+/// One of the tools the app can download (see `tools`).
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct ToolView {
+    pub id: String,
+    pub size: u64,
+    pub on_disk: bool,
+    /// How much of a download that is not finished is there
+    pub partial: u64,
+    /// The one the app uses
+    pub active: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct SetupView {
     pub engine_found: bool,
     /// llama.cpp's server, which runs the translation models
     pub translator_found: bool,
+    /// The ffmpeg in use, and the one that burns subtitles in, when there are
     pub ffmpeg: Option<String>,
+    pub burner: Option<String>,
+    pub tools: Vec<ToolView>,
     /// The model file in use of each family, by its key
     pub families: BTreeMap<String, ModelStatus>,
     pub models: Vec<ModelView>,
@@ -171,6 +192,8 @@ enum Msg {
     Restart,
     /// Stop the engine, which may be using this file, and delete it
     DeleteFile(PathBuf),
+    /// Stop the translator, and delete it
+    RemoveTool(tools::Tool),
 }
 
 pub struct Core {
@@ -255,8 +278,23 @@ impl Core {
     /// Re-read what is installed (engine, tools, models) and tell the UI.
     pub fn refresh_setup(&self) {
         let engine_found = setup::engine_exe().is_some();
-        let translator_found = setup::translator_exe().is_some();
-        let ffmpeg = setup::find_exe("ffmpeg").map(|p| p.display().to_string());
+        let translator_found = setup::translator_exe(&self.paths).is_some();
+        let ffmpeg = setup::ffmpeg(&self.paths);
+        let burner = setup::burner(&self.paths).map(|p| p.display().to_string());
+        let tool_views = tools::TOOLS
+            .iter()
+            .map(|t| {
+                let exe = tools::exe(&self.paths, t);
+                ToolView {
+                    id: t.id.into(),
+                    size: t.size,
+                    on_disk: exe.is_some(),
+                    partial: tools::partial(&self.paths, t),
+                    active: exe.is_some() && (t.id == tools::TRANSLATOR.id || exe == ffmpeg),
+                }
+            })
+            .collect();
+        let ffmpeg = ffmpeg.map(|p| p.display().to_string());
         let (families, run_on, ui_lang, check_updates, folder_formats, dir) = {
             let st = self.settings.lock().unwrap();
             let families: BTreeMap<String, ModelStatus> =
@@ -286,6 +324,8 @@ impl Core {
             st.engine_found = engine_found;
             st.translator_found = translator_found;
             st.ffmpeg = ffmpeg;
+            st.burner = burner;
+            st.tools = tool_views;
             st.families = families;
             st.models = models;
             st.download_dir = dir.display().to_string();
@@ -345,8 +385,18 @@ impl Core {
         Ok(())
     }
 
-    /// Delete a downloaded model, and what is there of an unfinished download of it.
+    /// Delete a downloaded model or tool, and what is there of an unfinished download of it.
     pub fn delete_model(&self, id: &str) -> Result<()> {
+        if let Some(t) = tools::tool(id) {
+            if t == tools::TRANSLATOR {
+                // it may be running: the engine thread stops it first
+                self.send(Msg::RemoveTool(t));
+            } else {
+                tools::remove(&self.paths, &t)?;
+                self.refresh_setup();
+            }
+            return Ok(());
+        }
         let v = models::variant(id).ok_or_else(|| anyhow!("unknown model {id}"))?;
         let dir = self.settings.lock().unwrap().download_dir(&self.paths);
         let file = dir.join(v.file);
@@ -396,31 +446,40 @@ impl Core {
 
     // ------------------------------------------------------------ model download
 
-    /// Start or continue downloading a model. It stays wanted until it finishes or is paused,
-    /// so closing the app does not stop it for good.
+    /// Start or continue downloading a model or a tool. It stays wanted until it finishes or is
+    /// paused, so closing the app does not stop it for good. The first translation model brings
+    /// the translator along, before it.
     pub fn download_model(self: &Arc<Self>, id: &str) {
-        let Some(v) = models::variant(id) else { return };
-        if self.snapshot().setup.download.active {
+        let tool = tools::tool(id);
+        let variant = models::variant(id);
+        if (tool.is_none() && variant.is_none()) || self.snapshot().setup.download.active {
             return;
         }
-        let dest = self.settings.lock().unwrap().download_dir(&self.paths).join(v.file);
+        let dest = variant.map(|v| self.settings.lock().unwrap().download_dir(&self.paths).join(v.file));
+        let translator_first = variant.is_some_and(|v| v.family == Family::Translator) && setup::translator_exe(&self.paths).is_none();
         let _ = self.change_settings(|s| s.resume_model = Some(id.to_string()));
         self.download_stop.store(false, Ordering::SeqCst);
+        let (done, total) = match (tool, variant, &dest) {
+            (Some(t), _, _) => (tools::partial(&self.paths, &t), t.size),
+            _ if translator_first => (tools::partial(&self.paths, &tools::TRANSLATOR), tools::TRANSLATOR.size),
+            (_, Some(v), Some(dest)) => (models::downloaded(dest), v.size),
+            _ => (0, 0),
+        };
         self.update(|s| {
             s.setup.download = DownloadView {
                 active: true,
                 model: Some(id.to_string()),
-                done: models::downloaded(&dest),
-                total: v.size,
+                part: translator_first.then(|| tools::TRANSLATOR.id.to_string()),
+                done,
+                total,
                 ..Default::default()
             };
         });
         let core = self.clone();
         std::thread::spawn(move || {
             let _awake = KeepAwake::new();
-            let job = models::Download { url: models::url(v), dest: dest.clone(), size: v.size, sha256: v.sha256.to_string() };
             let stop = core.download_stop.clone();
-            let result = models::download(&job, &stop, &mut |event| {
+            let mut on_event = |event: models::Event| {
                 core.update(|s| {
                     let d = &mut s.setup.download;
                     match event {
@@ -439,12 +498,32 @@ impl Core {
                         }
                     }
                 });
-            });
+            };
+            let result = (|| -> Result<models::Finished> {
+                if let Some(t) = tool {
+                    return tools::install(&core.paths, &t, &stop, &mut on_event);
+                }
+                let (v, dest) = (variant.unwrap(), dest.clone().unwrap());
+                if translator_first && tools::install(&core.paths, &tools::TRANSLATOR, &stop, &mut on_event)? == models::Finished::Paused {
+                    return Ok(models::Finished::Paused);
+                }
+                core.refresh_setup();
+                core.update(|s| {
+                    let d = &mut s.setup.download;
+                    d.part = None;
+                    d.verifying = false;
+                    d.done = models::downloaded(&dest);
+                    d.total = v.size;
+                });
+                models::download(&models::Download { url: models::url(v), dest, size: v.size, sha256: v.sha256.to_string() }, &stop, &mut on_event)
+            })();
             let finished = matches!(result, Ok(models::Finished::Complete));
             let error = result.err().map(|e| format!("{e:#}"));
             if finished {
                 let _ = core.change_settings(|s| {
-                    s.choose_model(v.family, Some(&dest));
+                    if let (Some(v), Some(dest)) = (variant, &dest) {
+                        s.choose_model(v.family, Some(dest));
+                    }
                     s.resume_model = None;
                 });
             } else if error.is_some() {
@@ -453,13 +532,14 @@ impl Core {
             core.update(|s| {
                 let d = &mut s.setup.download;
                 d.active = false;
+                d.part = None;
                 d.verifying = false;
                 d.retry_wait = None;
                 d.retry_attempt = None;
                 d.error = error;
             });
             core.refresh_setup();
-            if finished {
+            if finished && variant.is_some() {
                 core.send(Msg::Restart);
             }
         });
@@ -558,11 +638,12 @@ impl Core {
     /// already have a translation of what they say now are kept, so this also brings a translation
     /// up to date after edits, or finishes one that was stopped.
     pub fn translate(&self, transcript: &str, language: &str) -> Result<String> {
-        self.translate_then(transcript, language, false)
+        self.translate_then(transcript, language, false, false)
     }
 
-    /// The same; with `video`, the video gets the subtitles in both languages after it.
-    pub fn translate_then(&self, transcript: &str, language: &str, video: bool) -> Result<String> {
+    /// The same; with `video`, the video gets the subtitles in both languages after it, burned in
+    /// with `burn`.
+    pub fn translate_then(&self, transcript: &str, language: &str, video: bool, burn: bool) -> Result<String> {
         if !models::can_translate_into(language) {
             return Err(anyhow!(crate::tr!("Dawwin cannot translate into that language.")));
         }
@@ -575,6 +656,9 @@ impl Core {
         }
         if !setup::model_status(&self.paths, &self.settings.lock().unwrap(), Family::Translator).found {
             return Err(anyhow!(crate::tr!("There is no translation model yet. Download one in Settings.")));
+        }
+        if setup::translator_exe(&self.paths).is_none() {
+            return Err(anyhow!(crate::tr!("The translator is not downloaded. Download it in Settings.")));
         }
         let running = self.snapshot().queue.into_iter().find(|j| {
             j.kind == "translate" && j.transcript.as_deref() == Some(transcript) && j.target.as_deref() == Some(language) && ACTIVE_JOB.contains(&j.status.as_str())
@@ -595,7 +679,7 @@ impl Core {
             path: t.source_path.clone(),
             language: t.language.clone(),
             kind: "translate".into(),
-            steps: Steps { transcribe: false, video, ..Default::default() },
+            steps: Steps { transcribe: false, video, burn, ..Default::default() },
             transcript: Some(transcript.to_string()),
             target: Some(language.to_string()),
             status: "queued".into(),
@@ -603,6 +687,67 @@ impl Core {
         };
         self.update(|s| s.queue.push(job));
         self.send(Msg::Translate(id.clone()));
+        Ok(id)
+    }
+
+    /// Burn a transcript's subtitles (`view`: its own, its translation's, or both) into its video,
+    /// saved as `dest`: a job in the list, which runs at once on a thread of its own, since it does
+    /// not need the speech engine.
+    pub fn burn(self: &Arc<Self>, transcript: &str, view: &crate::transcript::View, dest: PathBuf) -> Result<String> {
+        let ffmpeg = setup::burner(&self.paths).ok_or_else(|| anyhow!(crate::tr!("Burning subtitles in needs the video ffmpeg. Download it in Settings.")))?;
+        let t = self.transcript(transcript)?;
+        let source = PathBuf::from(&t.source_path);
+        if !source.is_file() {
+            return Err(anyhow!(crate::tr!("The video is not at {} any more.", source.display())));
+        }
+        let srt = String::from_utf8(crate::transcript::export_view(&t, "srt", false, view)?)?;
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!("{}-{:03}", now_ms(), n % 1000);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancels.lock().unwrap().insert(id.clone(), cancel.clone());
+        let job = JobView {
+            id: id.clone(),
+            title: t.title.clone(),
+            path: t.source_path.clone(),
+            language: t.language.clone(),
+            kind: "burn".into(),
+            steps: Steps { transcribe: false, video: true, burn: true, ..Default::default() },
+            transcript: Some(transcript.to_string()),
+            status: "saving_video".into(),
+            ..Default::default()
+        };
+        self.update(|s| s.queue.push(job));
+        let core = self.clone();
+        let job_id = id.clone();
+        std::thread::spawn(move || {
+            let _awake = KeepAwake::new();
+            let started = Instant::now();
+            let result = crate::video::burn_subtitles(&ffmpeg, &source, &srt, &dest, &core.paths.cache_dir(), &cancel, &mut |f| {
+                core.update_job(&job_id, |j| {
+                    let spent = started.elapsed().as_secs_f64();
+                    j.progress = f;
+                    j.elapsed_s = spent;
+                    j.eta_s = (f > 0.02).then(|| spent / f * (1.0 - f));
+                });
+            });
+            let cancelled = cancel.load(Ordering::SeqCst);
+            core.update_job(&job_id, |j| {
+                j.eta_s = None;
+                j.elapsed_s = started.elapsed().as_secs_f64();
+                match &result {
+                    Ok(()) => {
+                        j.status = "done".into();
+                        j.outputs.push(dest.display().to_string());
+                    }
+                    Err(_) if cancelled => j.status = "cancelled".into(),
+                    Err(e) => {
+                        j.status = "failed".into();
+                        j.error = Some(format!("{e:#}"));
+                    }
+                }
+            });
+            core.cancels.lock().unwrap().remove(&job_id);
+        });
         Ok(id)
     }
 
@@ -712,7 +857,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     });
                 }
             },
-            Msg::Restart | Msg::DeleteFile(_) => {
+            Msg::Restart | Msg::DeleteFile(_) | Msg::RemoveTool(_) => {
                 if let Some(e) = engine.take() {
                     e.shutdown();
                 }
@@ -727,6 +872,12 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 if let Msg::DeleteFile(file) = &msg {
                     if let Err(err) = std::fs::remove_file(file) {
                         core.update(|s| s.setup.download.error = Some(format!("{}: {err}", file.display())));
+                    }
+                    core.refresh_setup();
+                }
+                if let Msg::RemoveTool(tool) = &msg {
+                    if let Err(err) = tools::remove(&core.paths, tool) {
+                        core.update(|s| s.setup.download.error = Some(format!("{err:#}")));
                     }
                     core.refresh_setup();
                 }
@@ -825,7 +976,7 @@ fn ensure_translator<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProces
         }
     }
     if slot.is_none() {
-        let exe = setup::translator_exe().ok_or_else(|| anyhow!(crate::tr!("The translator is missing. Please install Dawwin again.")))?;
+        let exe = setup::translator_exe(&core.paths).ok_or_else(|| anyhow!(crate::tr!("The translator is not downloaded. Download it in Settings.")))?;
         // the GPU the speech engine found best: a dedicated one before one in the processor
         let gpu = core.snapshot().engine.gpu;
         *slot = Some(TranslatorProcess::spawn(&exe, &core.paths, model, cpu_only, gpu.as_deref())?);
@@ -939,12 +1090,15 @@ fn run_translation(core: &Arc<Core>, translator: &mut Option<TranslatorProcess>,
     if job.steps.video && !cancelled {
         let t = history::load(&core.paths.history_dir(), &transcript)?;
         if crate::video::is_video(Path::new(&t.source_path)) {
-            match subtitle_video(core, id, &t, &crate::transcript::View::Both(language.clone())) {
+            match subtitle_video(core, id, &t, &crate::transcript::View::Both(language.clone()), job.steps.burn) {
                 Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                // stopped while it burned the subtitles in: that is not a failure
+                Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(e) => next_error = Some(format!("{e:#}")),
             }
         }
     }
+    let cancelled = cancel.load(Ordering::SeqCst);
     core.update_job(id, |j| {
         j.status = if next_error.is_some() { "failed".into() } else if cancelled { "cancelled".into() } else { "done".into() };
         j.eta_s = None;
@@ -973,13 +1127,30 @@ fn to_original(mut s: Segment, spans: &[(usize, usize)]) -> Segment {
     s
 }
 
-/// The video a transcript was made from, with its subtitles added as tracks, next to it.
-fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::transcript::View) -> Result<PathBuf> {
-    let ffmpeg = setup::find_exe("ffmpeg").ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Install it (winget install Gyan.FFmpeg), then try again.")))?;
+/// The video a transcript was made from, with its subtitles added as tracks, or burned into the
+/// picture with `burn`, next to it.
+fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::transcript::View, burn: bool) -> Result<PathBuf> {
     let tracks = crate::video::tracks(t, view).map_err(|e| anyhow!(e))?;
     let source = PathBuf::from(&t.source_path);
-    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks));
     core.update_job(id, |j| j.status = "saving_video".into());
+    if burn {
+        let ffmpeg = setup::burner(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Burning subtitles in needs the video ffmpeg. Download it in Settings.")))?;
+        let srt = String::from_utf8(crate::transcript::export_view(t, "srt", false, view)?)?;
+        let dest = audio::unique_path(&crate::video::burned_dest(&source, &tracks));
+        let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
+        let started = Instant::now();
+        core.update_job(id, |j| j.progress = 0.0);
+        crate::video::burn_subtitles(&ffmpeg, &source, &srt, &dest, &core.paths.cache_dir(), &cancel, &mut |f| {
+            core.update_job(id, |j| {
+                let spent = started.elapsed().as_secs_f64();
+                j.progress = f;
+                j.eta_s = (f > 0.02).then(|| spent / f * (1.0 - f));
+            });
+        })?;
+        return Ok(dest);
+    }
+    let ffmpeg = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Download it in Settings.")))?;
+    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks));
     crate::video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &core.paths.cache_dir())?;
     Ok(dest)
 }
@@ -1007,7 +1178,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         model_in_use = Some((family, model));
     }
 
-    let ffmpeg = setup::find_exe("ffmpeg");
+    let ffmpeg = setup::ffmpeg(&core.paths);
     let samples = audio::decode(&source, ffmpeg.as_ref(), &cancel)?;
     let duration_s = samples.len() as f64 / SR as f64;
     core.update_job(id, |j| j.duration_s = duration_s);
@@ -1167,16 +1338,18 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let mut next_error = None;
     if saved && !cancelled {
         if let Some(language) = steps.translate.as_deref().filter(|l| *l != t.language) {
-            if let Err(e) = core.translate_then(id, language, steps.video) {
+            if let Err(e) = core.translate_then(id, language, steps.video, steps.burn) {
                 next_error = Some(format!("{e:#}"));
             }
         } else if steps.video && crate::video::is_video(&source) {
-            match subtitle_video(core, id, &t, &crate::transcript::View::Original) {
+            match subtitle_video(core, id, &t, &crate::transcript::View::Original, steps.burn) {
                 Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(e) => next_error = Some(format!("{e:#}")),
             }
         }
     }
+    let cancelled = cancel.load(Ordering::SeqCst);
     core.update_job(id, |j| {
         j.status = if next_error.is_some() { "failed".into() } else if cancelled { "cancelled".into() } else { "done".into() };
         j.error = next_error;

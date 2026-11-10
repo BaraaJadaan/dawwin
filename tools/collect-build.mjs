@@ -27,7 +27,8 @@ rmSync(staging, { recursive: true, force: true });
 const folder = join(staging, "Dawwin");
 mkdirSync(join(folder, "engine"), { recursive: true });
 copyFileSync(join(release, "dawwin.exe"), join(folder, "dawwin.exe"));
-cpSync(engine, join(folder, "engine"), { recursive: true });
+// the translator downloads when it is wanted: not in the portable version either
+cpSync(engine, join(folder, "engine"), { recursive: true, filter: (src) => !/[\\/]translate([\\/]|$)/.test(src.slice(engine.length)) });
 // Windows' own tar: it makes zip files, and another tar on the PATH may take "D:" for a host name
 const tar = join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe");
 execFileSync(tar, ["-a", "-cf", join(dist, portable), "-C", staging, "Dawwin"], { stdio: "inherit" });

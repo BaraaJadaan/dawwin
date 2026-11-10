@@ -16,7 +16,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
-const DEFAULT_STEPS = { remove_silence: false, save_audio: false, transcribe: true, translate: false, target: "", video: false };
+const DEFAULT_STEPS = { remove_silence: false, save_audio: false, transcribe: true, translate: false, target: "", video: false, burn: false };
 function loadSteps() {
   try { return { ...DEFAULT_STEPS, ...JSON.parse(store.get("steps", "{}")) }; } catch { return { ...DEFAULT_STEPS }; }
 }
@@ -162,7 +162,8 @@ function stepsForJob() {
     save_audio: s.save_audio || (s.remove_silence && !s.transcribe),
     transcribe: s.transcribe,
     translate: s.transcribe && s.translate ? stepTarget() : null,
-    video: s.transcribe && s.video && !!S.snap?.setup.ffmpeg,
+    video: s.transcribe && s.video,
+    burn: s.transcribe && s.video && s.burn,
   };
 }
 
@@ -186,15 +187,15 @@ function setStep(key, on) {
 }
 
 function paintSteps() {
-  const s = S.steps, ffmpeg = !!S.snap?.setup.ffmpeg;
+  const s = S.steps;
   $("step-silence").checked = s.remove_silence;
   $("step-save-audio").checked = s.save_audio || (s.remove_silence && !s.transcribe);
   $("step-save-audio").disabled = s.remove_silence && !s.transcribe;
   $("step-transcribe").checked = s.transcribe;
   $("step-translate").checked = s.transcribe && s.translate;
-  $("step-video").checked = s.transcribe && s.video && ffmpeg;
-  $("step-video").disabled = !ffmpeg;
-  $("step-video-note").hidden = ffmpeg;
+  $("step-video").checked = s.transcribe && s.video;
+  $("step-video-how").value = s.burn ? "burn" : "tracks";
+  $("step-video-how").disabled = !(s.transcribe && s.video);
   $("spoken").disabled = !s.transcribe;
   const menu = $("step-target");
   const key = `${UI_LANG}:${S.spoken}`;
@@ -214,6 +215,7 @@ function wireSteps() {
   const keys = { "step-silence": "remove_silence", "step-save-audio": "save_audio", "step-transcribe": "transcribe", "step-translate": "translate", "step-video": "video" };
   for (const [id, key] of Object.entries(keys)) $(id).onchange = () => setStep(key, $(id).checked);
   $("step-target").onchange = () => { S.steps.target = $("step-target").value; store.set("steps", JSON.stringify(S.steps)); };
+  $("step-video-how").onchange = () => { S.steps.burn = $("step-video-how").value === "burn"; store.set("steps", JSON.stringify(S.steps)); };
 }
 
 /** Whether what is about to start can: a model for each step that needs one. False after saying what is missing. */
@@ -228,7 +230,29 @@ function stepsReady(steps) {
     toast(t("toast.needTranslator"), { label: t("toast.getTranslator"), run: openTranslationSettings });
     return false;
   }
+  if (steps.translate && !S.snap.setup.translator_found) return offerTool("translator", "toast.needTranslatorTool");
+  if (steps.video && steps.burn && !S.snap.setup.burner) return offerTool("ffmpeg-video", "toast.needBurner");
+  if (steps.video && !S.snap.setup.ffmpeg) return offerTool("ffmpeg-audio", "toast.needFfmpeg");
   return true;
+}
+
+/** A tool that what was asked for needs is not here: say so, with its download a press away. False. */
+function offerTool(id, message) {
+  const tool = S.snap.setup.tools.find((x) => x.id === id);
+  const name = t(`tool.${id}.long`);
+  toast(t(message, { size: sizeText(tool?.size || 0) }), {
+    label: t("dl.download"),
+    run: () => {
+      invoke("download_model", { id });
+      toast(t("toast.toolDownloading", { name }));
+    },
+  });
+  return false;
+}
+
+/** "1.3 MB", or "2.5 GB" for a model. */
+function sizeText(bytes) {
+  return bytes < 1e9 ? t("set.sizeMb", { size: (bytes / 1e6).toFixed(1) }) : t("set.modelSize", { size: gb(bytes) });
 }
 
 function setupComplete(snap) {
@@ -289,7 +313,9 @@ function renderChips() {
   if (e.state === "error") return setChip(chip, "bad", t("chip.error"));
   if (d.active) {
     const pct = d.total ? Math.floor((100 * d.done) / d.total) : 0;
-    return setChip(chip, "busy", t("chip.downloading", { pct }));
+    // a tool, or the translator before the first translation model, says what it is
+    const tool = st.tools.find((x) => x.id === (d.part || d.model));
+    return setChip(chip, "busy", tool ? t("chip.downloadingTool", { name: t(`tool.${tool.id}.long`), pct }) : t("chip.downloading", { pct }));
   }
   const tj = S.snap.queue.find((j) => j.kind === "translate" && j.status === "translating");
   if (tj) return setChip(chip, "busy", t("chip.translating", { pct: Math.floor(tj.progress * 100) }));
@@ -315,7 +341,7 @@ function jobLine(j) {
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "saving_audio": return t("job.savingAudio");
-    case "saving_video": return t("job.savingVideo");
+    case "saving_video": return j.steps?.burn ? `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}` : t("job.savingVideo");
     case "done": return t("job.done", { dur: dur(j.elapsed_s) });
     case "cancelled": return t(j.kind === "translate" ? "job.cancelledKept" : j.saved ? "job.cancelledSaved" : "job.cancelled");
     case "failed": return t("job.failed", { err: (j.error || t("job.unknown")).split("\n")[0] });
@@ -334,8 +360,10 @@ function renderQueue() {
     const li = document.createElement("li");
     const of = j.transcript || j.id;
     li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
-    const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status);
-    const what = j.kind === "translate" ? `<div class="sub">${esc(t("job.translating", { lang: langName(j.target) }))}</div>` : "";
+    // burning the subtitles in takes a while, and says how far it is
+    const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
+    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
+    const what = doing ? `<div class="sub">${esc(doing)}</div>` : "";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
       ${what}
@@ -343,7 +371,7 @@ function renderQueue() {
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     // a job that only saves the sound has no transcript: it shows the file
-    li.onclick = () => (j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
+    li.onclick = () => (j.kind === "burn" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
       if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
@@ -383,12 +411,19 @@ function renderHistory() {
 const STEPS = ["choose", "download", "ready"];
 function firstOpenStep(st) {
   if (spokenModel(st)) return "ready";
-  return st.download.active || modelsFor(st).some((m) => m.partial > 0) ? "download" : "choose";
+  return speechDownload(st).active || modelsFor(st).some((m) => m.partial > 0) ? "download" : "choose";
+}
+
+/** The download as setting up sees it: one of a tool or a translation model is not its business. */
+function speechDownload(st) {
+  const d = st.download;
+  const speech = st.models.some((m) => m.id === d.model && m.family !== "translator");
+  return speech ? d : { ...d, active: false, verifying: false, retry_wait: null, error: null };
 }
 
 /** The model the download step is about: the one downloading, one left paused, or the one picked. */
 function downloadingModel(st) {
-  const id = st.download.active ? st.download.model : modelsFor(st).find((m) => m.partial > 0 && !m.on_disk)?.id;
+  const id = speechDownload(st).active ? st.download.model : modelsFor(st).find((m) => m.partial > 0 && !m.on_disk)?.id;
   return st.models.find((m) => m.id === (id || S.pick)) || modelsFor(st)[0];
 }
 
@@ -418,7 +453,7 @@ function rateText(r) {
 
 function renderSetup() {
   const { setup: st, engine: e } = S.snap;
-  const found = !!spokenModel(st), d = st.download, choices = modelsFor(st);
+  const found = !!spokenModel(st), d = speechDownload(st), choices = modelsFor(st);
   const started = d.active || choices.some((x) => x.partial > 0);
   const done = { choose: found || started, download: found, ready: found && st.engine_found };
   const busy = { choose: false, download: d.active, ready: false };
@@ -515,7 +550,10 @@ function renderSettings() {
   let detail = st.run_on === "cpu" ? t("runon.d.cpu") : e.gpu ? t("runon.d.gpu", { gpu: shortGpu(e.gpu) }) : t("runon.d.nogpu");
   if (e.note) detail += " " + t(`note.${e.note}`);
   $("runon-detail").textContent = detail;
-  $("ffmpeg-detail").innerHTML = st.ffmpeg ? tHtml("ffmpeg.yes", { path: ltr(st.ffmpeg) }) : tHtml("ffmpeg.no");
+  // an ffmpeg of the computer's own is named; one of Dawwin's says "In use" in its row
+  const ours = st.tools.some((x) => x.active && x.id.startsWith("ffmpeg"));
+  $("ffmpeg-detail").innerHTML = ours ? "" : st.ffmpeg ? tHtml("ffmpeg.yes", { path: ltr(st.ffmpeg) }) : tHtml("ffmpeg.no");
+  $("ffmpeg-detail").hidden = ours;
 
   // model
   renderModelRows(st);
@@ -555,21 +593,28 @@ function renderSettings() {
   $("set-about").textContent = t("set.aboutText", { v: st.app_version });
 }
 
+/** The tools as rows like the models': `family` keeps the two ffmpegs a choice of one. */
+function toolRows(st, ids) {
+  return st.tools.filter((x) => ids.includes(x.id)).map((x) => ({ ...x, family: x.id.startsWith("ffmpeg") ? "tool-ffmpeg" : "tool-" + x.id, tool: true }));
+}
+
 function renderModelRows(st) {
   renderRows($("set-models"), st, st.models.filter((m) => m.family !== "translator"));
   renderRows($("set-translators"), st, st.models.filter((m) => m.family === "translator"));
-  $("set-no-translator").hidden = st.translator_found;
+  renderRows($("set-translator-tool"), st, toolRows(st, ["translator"]));
+  renderRows($("set-tools"), st, toolRows(st, ["ffmpeg-audio", "ffmpeg-video"]));
 }
 
 function renderRows(box, st, models) {
   const d = st.download;
+  const all = [...st.models, ...toolRows(st, st.tools.map((x) => x.id))];
   if (box.dataset.lang !== UI_LANG || box.children.length !== models.length) {
     box.dataset.lang = UI_LANG;
     box.innerHTML = models.map((m) => `
       <div class="setting" data-id="${m.id}">
         <div class="setting-text">
-          <h3>${esc(t(`model.${m.id}.long`))} <span class="muted small">${esc(t("set.modelSize", { size: gb(m.size) }))}</span></h3>
-          <p class="muted small">${esc(t(`model.${m.id}.detail`))}</p>
+          <h3>${esc(t(`${m.tool ? "tool" : "model"}.${m.id}.long`))} <span class="muted small">${esc(sizeText(m.size))}</span></h3>
+          <p class="muted small">${esc(t(`${m.tool ? "tool" : "model"}.${m.id}.detail`))}</p>
           <p class="muted small status"></p>
         </div>
         <button class="btn btn-sm use" >${esc(t("set.modelUse"))}</button>
@@ -583,24 +628,28 @@ function renderRows(box, st, models) {
       };
       row.querySelector(".get").onclick = () => {
         const dl = S.snap.setup.download;
-        invoke(dl.active && dl.model === id ? "stop_download" : "download_model", { id });
+        invoke(dl.active && (dl.model === id || dl.part === id) ? "stop_download" : "download_model", { id });
       };
       row.querySelector(".del").onclick = () => deleteModel(id, row.querySelector(".del"));
     }
   }
   for (const row of box.children) {
-    const m = st.models.find((x) => x.id === row.dataset.id);
-    const going = d.active && d.model === m.id;
-    const pctOf = (n) => Math.floor((100 * n) / m.size);
+    const m = all.find((x) => x.id === row.dataset.id);
+    // the translator also downloads as the first part of a translation model
+    const going = d.active && (d.model === m.id || d.part === m.id);
+    const first = d.active && d.model === m.id && d.part;
+    const pctOf = (n, of = m.size) => Math.floor((100 * n) / of);
     // "use" only means something where there is a choice of file for the same languages
-    const choice = st.models.filter((x) => x.family === m.family).length > 1;
-    row.querySelector(".status").textContent = going
+    const choice = all.filter((x) => x.family === m.family).length > 1;
+    row.querySelector(".status").textContent = first
+      ? t("dl.translatorFirst", { pct: pctOf(d.done, d.total) })
+      : going
       ? (d.verifying ? t("dl.verifying") : t("set.modelGoing", { pct: pctOf(d.done) }))
       : m.active && choice ? t("set.modelInUse")
       : m.on_disk ? t("set.modelOnDisk")
       : m.partial > 0 ? t("set.modelPaused", { pct: pctOf(m.partial) })
       : t("set.modelNone");
-    row.querySelector(".use").hidden = !m.on_disk || m.active || !choice;
+    row.querySelector(".use").hidden = m.tool || !m.on_disk || m.active || !choice;
     const get = row.querySelector(".get");
     get.hidden = m.on_disk;
     get.disabled = d.active && !going;
@@ -769,7 +818,7 @@ function paintTranslationMenu() {
       + line + first.map(opt).join("") + others.map(([c]) => opt(c)).join("");
   }
   menu.value = S.shown;
-  menu.disabled = isLive(cur.id) || !S.snap?.setup.translator_found;
+  menu.disabled = isLive(cur.id);
   $("btn-retranslate").hidden = !S.shown || !!translateJob(cur.id, S.shown) || !untranslated(cur, S.shown);
 }
 
@@ -791,6 +840,7 @@ async function startTranslation(lang) {
     toast(t("toast.needTranslator"), { label: t("toast.getTranslator"), run: openTranslationSettings });
     return false;
   }
+  if (!S.snap.setup.translator_found) return offerTool("translator", "toast.needTranslatorTool");
   try {
     await invoke("translate", { id: S.current.id, language: lang });
     onState(await invoke("get_state"));
@@ -1409,9 +1459,9 @@ const VIDEO_EXT = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "3gp
 
 function paintExportScope() {
   const box = $("export-scope");
-  // subtitles into the video it was made from, when it is a video and ffmpeg is there to do it
+  // subtitles into the video it was made from, when it is a video
   const ext = (S.current?.source_path || "").split(".").pop().toLowerCase();
-  $("export-video").hidden = !VIDEO_EXT.includes(ext) || !S.snap?.setup.ffmpeg;
+  $("export-video").hidden = $("export-burn").hidden = !VIDEO_EXT.includes(ext);
   box.hidden = !exportView().language;
   for (const b of box.querySelectorAll("button")) {
     const on = b.dataset.scope === S.scope;
@@ -1442,9 +1492,21 @@ async function exportAudio(withoutSilences) {
 
 async function exportVideo() {
   $("export-menu").hidden = true;
+  if (!S.snap.setup.ffmpeg) return offerTool("ffmpeg-audio", "toast.needFfmpeg");
   try {
     const path = await invoke("export_video", { id: S.current.id, ...exportView() });
     if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
+  } catch (err) {
+    toast(t("toast.exportFailed", { err }));
+  }
+}
+
+/** The subtitles burned into the picture: a job in the list, which says when the file is saved. */
+async function exportBurned() {
+  $("export-menu").hidden = true;
+  if (!S.snap.setup.burner) return offerTool("ffmpeg-video", "toast.needBurner");
+  try {
+    if (await invoke("export_burned", { id: S.current.id, ...exportView() })) toast(t("toast.burning"));
   } catch (err) {
     toast(t("toast.exportFailed", { err }));
   }
@@ -1533,6 +1595,11 @@ function onState(snap) {
       S.shown = begun.target;
       renderTranscript();
     }
+  }
+  // a tool that finished downloading is ready for what it was wanted for
+  const was = prev?.setup.download, now = snap.setup.download;
+  if (was?.active && !now.active && !now.error && snap.setup.tools.some((x) => x.id === was.model && x.on_disk)) {
+    toast(t("toast.toolReady", { name: t(`tool.${was.model}.long`) }));
   }
   // the files a job saved: said once, with the way to them
   for (const j of snap.queue) {
@@ -1685,6 +1752,7 @@ function wire() {
   };
   for (const b of $("export-menu").querySelectorAll("button[data-fmt]")) b.onclick = () => exportAs(b.dataset.fmt);
   $("export-video").onclick = exportVideo;
+  $("export-burn").onclick = exportBurned;
   $("export-audio").onclick = () => exportAudio(false);
   $("export-audio-short").onclick = () => exportAudio(true);
   listen("video-saving", () => toast(t("toast.videoSaving")));

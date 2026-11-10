@@ -1,12 +1,13 @@
-// Puts the speech engine (dawwin-engine.exe and its DLLs) in src-tauri/engine-bin, and the
-// translator (llama.cpp's server, from its official release) in src-tauri/engine-bin/translate,
-// where the app's build picks them up.
+// Puts the speech engine (dawwin-engine.exe and its DLLs) in src-tauri/engine-bin, where the app's
+// build picks it up. The translator (llama.cpp's server) is not in the app: it downloads with the
+// first translation model (src-tauri/src/tools.rs). --translator-only puts it in
+// src-tauri/engine-bin/translate, for the Tools workflow to pack and the Engine workflow to test.
 //
 //   node tools/stage-engine.mjs               build the engine here: with GPU support when the Vulkan
 //                                             SDK is installed (VULKAN_SDK is set), else CPU only
 //   node tools/stage-engine.mjs --from-ci     take the newest engine build from GitHub Actions instead
 //   node tools/stage-engine.mjs --from-ci ID  take the engine build of that workflow run
-//   --translator-only                         only the translator
+//   --translator-only                         the translator, and nothing else
 //   --translator-zip FILE                     the llama.cpp zip from this file instead of downloading it
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -99,4 +100,4 @@ async function stageTranslator() {
 }
 
 if (process.argv.includes("--translator-only")) await stageTranslator();
-else { stageEngine(); await stageTranslator(); }
+else stageEngine();

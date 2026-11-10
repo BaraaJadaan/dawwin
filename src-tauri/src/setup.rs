@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{self, Family};
+use crate::tools;
 
 #[cfg(windows)]
 pub fn no_window(cmd: &mut Command) {
@@ -160,16 +161,55 @@ pub fn engine_exe() -> Option<PathBuf> {
     exe.is_file().then_some(exe)
 }
 
-/// The translator (llama.cpp's server) ships in a folder of its own inside the engine's.
-pub fn translator_exe() -> Option<PathBuf> {
+/// The translator (llama.cpp's server), downloaded with the first translation model.
+pub fn translator_exe(paths: &Paths) -> Option<PathBuf> {
     // for trying the app with a stand-in server; not there in release builds
     if cfg!(debug_assertions) {
         if let Some(exe) = std::env::var_os("DAWWIN_TEST_TRANSLATOR").map(PathBuf::from).filter(|p| p.is_file()) {
             return Some(exe);
         }
     }
-    let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("translate").join("llama-server.exe");
-    exe.is_file().then_some(exe)
+    tools::exe(paths, &tools::TRANSLATOR)
+}
+
+/// The ffmpeg to use: Dawwin's own, the larger first, else one installed on the computer.
+pub fn ffmpeg(paths: &Paths) -> Option<PathBuf> {
+    [tools::FFMPEG_VIDEO, tools::FFMPEG_AUDIO].iter().find_map(|t| tools::exe(paths, t)).or_else(installed_ffmpeg)
+}
+
+/// An ffmpeg that can burn subtitles into the picture: Dawwin's larger one, or an installed one
+/// built with libass and an H.264 encoder.
+pub fn burner(paths: &Paths) -> Option<PathBuf> {
+    tools::exe(paths, &tools::FFMPEG_VIDEO).or_else(|| installed_ffmpeg().filter(|f| can_burn(f)))
+}
+
+fn installed_ffmpeg() -> Option<PathBuf> {
+    // for trying the app as it is on a computer without ffmpeg; not there in release builds
+    if cfg!(debug_assertions) && std::env::var_os("DAWWIN_TEST_NO_FFMPEG").is_some() {
+        return None;
+    }
+    find_exe("ffmpeg")
+}
+
+/// What an ffmpeg lists, by name: its filters or its encoders (`what` is "-filters" or "-encoders").
+pub fn ffmpeg_lists(ffmpeg: &Path, what: &str) -> Vec<String> {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-hide_banner", what]).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    no_window(&mut cmd);
+    let Ok(out) = cmd.output() else { return Vec::new() };
+    // " V....D h264_nvenc   NVIDIA NVENC ...", " ... subtitles  V->V  Render text ..."
+    String::from_utf8_lossy(&out.stdout).lines().filter_map(|l| l.split_whitespace().nth(1).map(String::from)).collect()
+}
+
+fn can_burn(ffmpeg: &Path) -> bool {
+    static SEEN: std::sync::Mutex<BTreeMap<PathBuf, bool>> = std::sync::Mutex::new(BTreeMap::new());
+    if let Some(&known) = SEEN.lock().unwrap().get(ffmpeg) {
+        return known;
+    }
+    let can = ffmpeg_lists(ffmpeg, "-filters").iter().any(|f| f == "subtitles")
+        && ffmpeg_lists(ffmpeg, "-encoders").iter().any(|e| crate::video::H264_ENCODERS.contains(&e.as_str()));
+    SEEN.lock().unwrap().insert(ffmpeg.to_path_buf(), can);
+    can
 }
 
 // ---------------------------------------------------------------- settings

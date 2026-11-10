@@ -28,7 +28,8 @@ subscription, no limit on hours.
 - **Colleagues who speak another language.** Translate the transcript and share it on its own, or as a
   bilingual document with each line and its translation under it.
 - **Videos, courses and YouTube.** Subtitles timed the way professional ones are. Translate them to
-  reach viewers in 46 languages, and add them to the video as tracks the viewer turns on and off.
+  reach viewers in 46 languages, and add them to the video as tracks the viewer turns on and off, or
+  burn them into the picture for WhatsApp, Instagram and players that show no tracks.
 - **Films and series.** Subtitles for a film that has none, or none in your language. Dawwin writes
   them into the film's MKV, next to the tracks it already has.
 - **Interviews and research.** Exact quotes with their time, every word searchable, and an export to
@@ -48,15 +49,16 @@ subscription, no limit on hours.
 **One drop, several steps** (new in 1.3)
 
 - Choose on the start page what happens to what you drop, in order: take the long silences out and
-  save the sound, transcribe, translate, and add the subtitles to the video. Turn on only what you
-  need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
+  save the sound, transcribe, translate, and add the subtitles to the video, as tracks or burned in.
+  Turn on only what you need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
 
 ![The start page: a drop area, and under it four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
 
 **Transcribe**
 
-- Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg
-  installed, also WhatsApp voice notes, webm, avi and any other format. Several files queue up.
+- Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg, also
+  WhatsApp voice notes, webm, avi and any other format: Dawwin offers it when a file needs it (a
+  download of 1.3 MB), or uses one already on the PC. Several files queue up.
 - Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
   recordings that are already done are skipped, so a stopped run picks up where it left off.
 - Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
@@ -85,7 +87,13 @@ subscription, no limit on hours.
 - SRT and WebVTT files of the transcript, of the translation, or of both.
 - **Video with subtitles**: the video itself, with a subtitle track for each language. The picture and
   sound are copied untouched, so it takes seconds, even for a long film. MP4 and MOV videos give an
-  MP4, everything else an MKV. This needs ffmpeg.
+  MP4, everything else an MKV.
+- **Video with subtitles burned in**: the subtitles drawn on the picture, for WhatsApp, Instagram, TVs
+  and players that show no tracks. Arabic is joined and runs right to left, and the picture is encoded
+  again on the graphics chip (NVIDIA, AMD or Intel, or Windows' own encoder): about 5 seconds for a
+  minute of 1080p video on an RTX 4060 laptop. The list on the side shows how far it is.
+- Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.2 MB
+  for burning in. Both are in **Settings**, to download or delete by hand.
 
 **Sound** (new in 1.3)
 
@@ -138,7 +146,8 @@ subscription, no limit on hours.
    GGUF file works.
 3. Drop a recording or a video on the window.
 4. To translate, pick a language in the menu above the transcript. The first time, Dawwin asks for a
-   translation model, which you download in **Settings → Translation**:
+   translation model, which you download in **Settings → Translation**. The translator that runs it
+   (llama.cpp, 14 MB) comes along with the first one:
 
    | Model | Download | |
    | --- | --- | --- |
@@ -152,8 +161,8 @@ ran about 7 times faster than real time, and Whisper about as fast as real time.
 translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation model without a
-GPU), and room for the models. For WhatsApp voice notes, videos other than MP4, MOV and MKV, and
-adding subtitles to a video, install ffmpeg: `winget install Gyan.FFmpeg`.
+GPU), and room for the models. The installer is small (about 10 MB): the translator and ffmpeg download
+only for those who use them.
 
 ## How the translation models were chosen
 
@@ -205,7 +214,8 @@ If Dawwin is useful to you, a star on GitHub helps other people find it.
 ## Privacy
 
 Dawwin goes online only when you ask it to: to download a model (from
-[Hugging Face](https://huggingface.co)), and to check for updates (from GitHub; also at startup if you
+[Hugging Face](https://huggingface.co)) or a tool (the translator and ffmpeg, from this repository's
+[releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for updates (from GitHub; also at startup if you
 turn that on in Settings). Recordings, transcripts and translations stay on your computer. The
 translator listens only to Dawwin on the same computer, with a key it is given at start.
 
@@ -217,7 +227,7 @@ the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). Four things are not part of this repository and have their own terms:
+[MIT](LICENSE). Five things are not part of this repository and have their own terms:
 
 - **The speech models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC
   BY 4.0, and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
@@ -227,10 +237,16 @@ the model folder, if you chose another place for it).
   [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) project.
 - **The translation models**: Xiaomi's [MiLMMT-46](https://huggingface.co/collections/xiaomi-research/milmmt-46)
   is built on Google's Gemma 3 and published under the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
-  Dawwin downloads GGUF conversions of the [12B](https://huggingface.co/mradermacher/MiLMMT-46-12B-v1.0-GGUF)
-  and the [4B](https://huggingface.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF) made by mradermacher.
+  Dawwin downloads GGUF conversions of the [12B](https://huggingface.co/mradermacher/MiLMMT-46-12B-v1.0-GGUF),
+  the [4B](https://huggingface.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF) and the
+  [1B](https://huggingface.co/mradermacher/MiLMMT-46-1B-v1.0-GGUF) made by mradermacher.
 - **The engines**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and
   [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license.
+- **ffmpeg**: Dawwin's own builds of [FFmpeg](https://ffmpeg.org), under the LGPL 2.1, made by
+  [tools/ffmpeg/build.sh](tools/ffmpeg/build.sh) from FFmpeg's source. The one for video also holds
+  [libass](https://github.com/libass/libass), [FreeType](https://freetype.org),
+  [HarfBuzz](https://github.com/harfbuzz/harfbuzz) and [FriBidi](https://github.com/fribidi/fribidi).
+  Each download carries their licenses and says where their source is.
 - **The font**: official builds embed [Thmanyah Sans](https://font.thmanyah.com), © Thmanyah Publishing
   and Distribution. Its license does not allow sharing the font files, so builds from this repository
   use the system font instead.

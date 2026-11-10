@@ -91,7 +91,10 @@
           <section class="step" data-step="video">
             <h2><span class="step-no">4</span><span data-i18n="steps.video"></span></h2>
             <label class="toggle"><input type="checkbox" id="step-video"> <span data-i18n="steps.subtitles"></span></label>
-            <p class="muted small" id="step-video-note" data-i18n="steps.needsFfmpeg" hidden></p>
+            <select id="step-video-how" class="input select" data-i18n-aria="steps.video">
+              <option value="tracks" data-i18n="steps.asTracks"></option>
+              <option value="burn" data-i18n="steps.burn"></option>
+            </select>
           </section>
         </div>
         <div id="home-note" class="home-note"></div>
@@ -200,6 +203,7 @@
                 <p class="muted small" id="ffmpeg-detail"></p>
               </div>
             </div>
+            <div id="set-tools"></div>
           </section>
 
           <section class="card group">
@@ -217,7 +221,7 @@
           <section class="card group">
             <h2 data-i18n="set.translation"></h2>
             <div id="set-translators"></div>
-            <div class="setting" id="set-no-translator" hidden><div class="setting-text"><p class="small error-text" data-i18n="set.noTranslator"></p></div></div>
+            <div id="set-translator-tool"></div>
           </section>
 
           <section class="card group" id="set-old-box" hidden>
@@ -321,6 +325,7 @@
                 <button data-fmt="tsv" data-i18n="exp.tsv"></button>
                 <button data-fmt="json" data-i18n="exp.json"></button>
                 <button id="export-video" data-i18n="exp.video" hidden></button>
+                <button id="export-burn" data-i18n="exp.burn" hidden></button>
                 <button id="export-audio" data-i18n="exp.audio"></button>
                 <button id="export-audio-short" data-i18n="exp.audioShort"></button>
               </div>

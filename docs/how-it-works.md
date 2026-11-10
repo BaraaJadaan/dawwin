@@ -8,20 +8,22 @@ Three programs. The app is Rust ([Tauri 2](https://tauri.app)) with a plain HTML
 `ui/` (no bundler). The speech engine is a small Rust program around
 [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp), and the translator is the official
 build of [llama.cpp](https://github.com/ggml-org/llama.cpp)'s server. Each runs in a process of its
-own, so a crash in a GPU driver costs a retry on the CPU instead of the whole app.
+own, so a crash in a GPU driver costs a retry on the CPU instead of the whole app. The translator and
+ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see **Tools** below).
 
 | Path | What it does |
 | --- | --- |
 | `engine/src/main.rs` | `dawwin-engine.exe`: loads one model, talks JSON lines over stdin/stdout. Picks a dedicated GPU first, and falls back on the CPU. `--cpu` keeps the GPU driver out of the process. |
 | `src-tauri/src/engine.rs` | The `Engine` interface, and `EngineProcess`, which runs the engine and notices when it dies. |
 | `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, save. |
-| `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when installed, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise). Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
+| `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when there is one, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise). Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
 | `src-tauri/src/models.rs` | The models, their pinned revisions and checksums, which model each language goes to, and the download. |
 | `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
 | `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time. |
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
-| `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language. |
+| `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
+| `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 
@@ -53,7 +55,7 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
   because the engine memory-maps it. `HF_ENDPOINT` selects a mirror.
 - **Translation.** A finished transcript is translated a line at a time, in the queue, by Xiaomi's
   [MiLMMT-46](https://huggingface.co/collections/xiaomi-research/milmmt-46) through llama.cpp's server
-  (`engine\translate`, staged by `npm run engine` from the official release, checksum pinned). The
+  (downloaded with the first translation model, see **Tools**). The
   speech engine and the translator take turns: both want the GPU's memory. Each translated line keeps
   the text it was translated from, so a line edited later shows as out of date, and translating again
   only does the lines that need it. The server runs in a Windows job object, so it ends with the app
@@ -68,6 +70,11 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
   since 1.3), and a translation by the same share of its text. **Video with subtitles** runs ffmpeg with
   `-c copy`: MP4 and MOV give an MP4 with `mov_text` tracks, anything else an MKV that keeps all its
   streams. Each track has its ISO 639-2 language and a name, and the first one added is on by default.
+  **Burned in**, the subtitles go through libass in Segoe UI (Windows' Arial draws ث before لا as a box),
+  with an outline and a soft shadow, and the picture is encoded again into an MP4: at a quarter above its
+  own bitrate, capped by its size, with the first H.264 encoder that starts (NVIDIA, AMD, Intel, then
+  Windows' Media Foundation, which uses any chip or software, then x264 of a full ffmpeg). Sound an MP4
+  can hold is copied, the rest becomes AAC. About 5 seconds a minute of 1080p on an RTX 4060 laptop.
 - **Steps.** A job carries the steps chosen on the start page (`queue::Steps`): silences out, sound
   saved, transcribe, translate, video. Translating is a job of its own that the transcription starts
   when it ends, and the video comes after the translation, or right after the transcription without
@@ -75,6 +82,18 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
   the recording's own quietest level, or 35 dB under its loud parts); the model hears only the kept
   parts, and `audio::original_time` takes every time back to the original recording. The sound is
   saved through ffmpeg (decoded at 48 kHz, cut, encoded as AAC), or as WAV without it.
+- **Tools.** The translator (llama.cpp's official Windows build, the files its server needs) and two
+  builds of ffmpeg are not in the installer. `tools.rs` pins each as a `.tar.xz` on a release, with its
+  size and SHA-256. It downloads like a model (resumable, checked), then unpacks (xz and tar, plain files
+  at the top level only) into a folder of its own under `%LOCALAPPDATA%\Dawwin\tools`. The first
+  translation model brings the translator along. ffmpeg is built by `tools/ffmpeg/build.sh`, LGPL only,
+  cross-compiled with mingw: **audio** reads every common format, saves the sound as M4A and adds subtitle
+  tracks; **video** adds libass (with FreeType, HarfBuzz and FriBidi, so Arabic is shaped and runs right
+  to left), the video decoders and the encoders of NVIDIA, AMD and Windows. The app uses Dawwin's own
+  ffmpeg, the larger first, else one on the PATH; burning in takes the video one, or an installed ffmpeg
+  that has libass. The **Tools** workflow builds and packs them (`tools/pack.py`), tries them on Windows
+  with the app's own unpacking on files of the kinds people bring, and, run by hand with a tag, puts
+  them on that release.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 
 ## Where the app keeps things
@@ -82,6 +101,7 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
 | What | Where |
 | --- | --- |
 | Models | `%LOCALAPPDATA%\Dawwin\models`, or the folder chosen |
+| The translator and ffmpeg | `%LOCALAPPDATA%\Dawwin\tools` |
 | Engine and translator logs | `%LOCALAPPDATA%\Dawwin\logs\engine.log`, `translate.log` |
 | Transcripts | `%APPDATA%\Dawwin\history\*.json` |
 | Settings | `%APPDATA%\Dawwin\settings.json` |
@@ -101,8 +121,7 @@ npm run engine       # builds the engine into src-tauri/engine-bin
 npm run build        # the installer and a portable zip land in dist/
 ```
 
-`npm run engine` also stages the translator: llama.cpp's official Windows build, downloaded once into
-`src-tauri/engine-cache` and checked against its SHA-256. It builds the engine with GPU support when `VULKAN_SDK` is set (install the
+`npm run engine` builds the engine with GPU support when `VULKAN_SDK` is set (install the
 [Vulkan SDK](https://vulkan.lunarg.com)), and for the CPU otherwise. `npm run engine -- --from-ci`
 takes the newest engine GitHub Actions built instead (needs the `gh` command).
 
@@ -121,8 +140,13 @@ releases are built on the maintainer's PC, with the engine from GitHub Actions.
    `engine/Cargo.toml`.
 2. Put `thmanyahsans-Regular.otf`, `-Medium.otf` and `-Bold.otf` in `ui/fonts/`.
 3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads every real model
-   with a pause in the middle and loads them, and translates with both translation models through the
-   translator as it ships.
-4. `npm run engine -- --from-ci`, then `npm run build`. The last line it prints must say yes to both GPU
+   with a pause in the middle and loads them, and translates with each translation model through the
+   translator Dawwin downloads.
+4. If a tool changes (llama.cpp, ffmpeg): create the release as a draft
+   (`gh release create vX.Y.Z --draft --target <commit>`), run the **Tools** workflow by hand with the
+   tag, and put the sizes and SHA-256 it prints, with the new file names and `RELEASE`, into `tools.rs`.
+   Otherwise the app keeps downloading them from the release that has them.
+5. `npm run engine -- --from-ci`, then `npm run build`. The last line it prints must say yes to both GPU
    support and the font.
-5. `gh release create vX.Y.Z dist/* --title "Dawwin X.Y.Z" --notes-file notes.md`
+6. Upload `dist/*` to the release and publish it (`gh release edit vX.Y.Z --draft=false --latest`), or
+   `gh release create vX.Y.Z dist/* --title "Dawwin X.Y.Z" --notes-file notes.md` when no tool changed.

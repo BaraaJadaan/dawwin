@@ -4,9 +4,13 @@
 //!
 //! An MP4 or MOV gives an MP4, with its subtitles as `mov_text` (what MP4 players read); anything
 //! else gives an MKV, which takes every stream the video has, its own subtitles and fonts included.
+//!
+//! Or the subtitles are burned into the picture, for players and sites that show no tracks: the
+//! picture is encoded again (on the graphics chip when there is one), into an MP4.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{bail, Context, Result};
 
@@ -150,6 +154,194 @@ pub fn add_subtitles(ffmpeg: &Path, video: &Path, tracks: &[Track], dest: &Path,
     Ok(())
 }
 
+// ---------------------------------------------------------------- burned in
+
+/// The H.264 encoders burning tries, in this order: NVIDIA's, AMD's and Intel's chips, Windows' own
+/// (Media Foundation, which uses whatever the computer has, or software), and x264 of a full ffmpeg.
+pub const H264_ENCODERS: &[&str] = &["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf", "libx264"];
+
+/// How the subtitles look: Segoe UI (Windows' Arial breaks Arabic: ث before لا comes out as a box),
+/// a little larger than ffmpeg's default, with an outline and a soft shadow to read on any picture.
+const STYLE: &str = "FontName=Segoe UI,FontSize=18,Outline=1.6,Shadow=0.8,MarginV=18";
+
+/// What `ffmpeg -i` says about a video, as much as burning needs.
+#[derive(Debug, Default, PartialEq)]
+struct Probe {
+    duration_s: f64,
+    /// Of the first video stream
+    pixels: u64,
+    video_kbps: Option<u64>,
+    /// The audio streams' codecs
+    audio: Vec<String>,
+}
+
+fn parse_probe(text: &str) -> Probe {
+    let mut p = Probe::default();
+    let mut seen_video = false;
+    for line in text.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("Duration: ") {
+            let stamp = rest.split(',').next().unwrap_or("");
+            let parts: Vec<f64> = stamp.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+            if let [h, m, s] = parts[..] {
+                p.duration_s = h * 3600.0 + m * 60.0 + s;
+            }
+        } else if line.starts_with("Stream #") {
+            if let Some((_, rest)) = line.split_once(": Video: ") {
+                if seen_video {
+                    continue;
+                }
+                seen_video = true;
+                for part in rest.split([',', ' ']) {
+                    if let Some((w, h)) = part.split_once('x') {
+                        if let (Ok(w), Ok(h)) = (w.parse::<u64>(), h.parse::<u64>()) {
+                            if w > 0 && h > 0 && p.pixels == 0 {
+                                p.pixels = w * h;
+                            }
+                        }
+                    }
+                }
+                let items: Vec<&str> = rest.split(',').map(str::trim).collect();
+                p.video_kbps = items.iter().find_map(|i| i.strip_suffix(" kb/s")?.trim().parse().ok());
+            } else if let Some((_, rest)) = line.split_once(": Audio: ") {
+                let codec = rest.split([' ', ',']).next().unwrap_or("").to_string();
+                p.audio.push(codec);
+            }
+        }
+    }
+    p
+}
+
+fn probe(ffmpeg: &Path, video: &Path) -> Probe {
+    let mut cmd = Command::new(ffmpeg);
+    cmd.args(["-nostdin", "-hide_banner", "-i"]).arg(video).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    no_window(&mut cmd);
+    cmd.output().map(|o| parse_probe(&String::from_utf8_lossy(&o.stderr))).unwrap_or_default()
+}
+
+/// The bitrate to encode at, in kb/s: a little above the video's own, so the picture keeps what it
+/// had, and never more than its size needs.
+fn bitrate(p: &Probe) -> u64 {
+    let most = match p.pixels {
+        0..=500_000 => 2_500,
+        500_001..=1_000_000 => 5_000,
+        1_000_001..=2_100_000 => 8_000,
+        2_100_001..=3_700_000 => 14_000,
+        _ => 25_000,
+    };
+    p.video_kbps.map_or(most, |k| (k * 5 / 4).clamp(1_500.min(most), most))
+}
+
+/// The arguments for ffmpeg: the video, with `subtitles` (a file in the folder ffmpeg runs in) on
+/// the picture, encoded with `encoder`, into the MP4 `dest`.
+fn burn_arguments(video: &Path, subtitles: &str, encoder: &str, p: &Probe, dest: &Path) -> Vec<std::ffi::OsString> {
+    let mut a: Vec<std::ffi::OsString> = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"].iter().map(Into::into).collect();
+    a.push(video.into());
+    let filter = format!("subtitles={subtitles}:force_style='{STYLE}',format=nv12");
+    for x in ["-map", "0:v:0", "-map", "0:a?", "-vf", &filter, "-c:v", encoder] {
+        a.push(x.into());
+    }
+    match encoder {
+        "h264_nvenc" => a.extend(["-preset".into(), "p5".into()]),
+        "libx264" => a.extend(["-preset".into(), "faster".into()]),
+        _ => {}
+    }
+    let k = bitrate(p);
+    for x in ["-b:v".to_string(), format!("{k}k"), "-maxrate".into(), format!("{}k", k * 3 / 2), "-bufsize".into(), format!("{}k", k * 2)] {
+        a.push(x.into());
+    }
+    // sound MP4 holds goes in as it is; the rest becomes AAC
+    const KEPT: &[&str] = &["aac", "mp3", "ac3", "eac3", "alac", "flac", "opus"];
+    if p.audio.iter().all(|c| KEPT.contains(&c.as_str())) {
+        a.extend(["-c:a".into(), "copy".into()]);
+    } else {
+        a.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
+    }
+    for x in ["-movflags", "+faststart", "-progress", "pipe:1", "-nostats"] {
+        a.push(x.into());
+    }
+    a.push(dest.into());
+    a
+}
+
+/// What "name (English, burned in).mp4" says after the names of the languages.
+pub fn burned_dest(video: &Path, tracks: &[Track]) -> PathBuf {
+    let stem = video.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let names = tracks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>().join(", ");
+    video.with_file_name(format!("{stem} ({names}, {}).mp4", crate::tr!("burned in")))
+}
+
+/// Write `video` to the MP4 `dest` with the subtitles `srt` drawn on its picture. The picture is
+/// encoded again, on the graphics chip when there is one; `on_progress` hears how far it is (0 to 1).
+pub fn burn_subtitles(ffmpeg: &Path, video: &Path, srt: &str, dest: &Path, scratch: &Path, cancel: &AtomicBool, on_progress: &mut dyn FnMut(f64)) -> Result<()> {
+    if same_file(video, dest) {
+        bail!(crate::tr!("Choose another name: the video itself cannot be written over."));
+    }
+    std::fs::create_dir_all(scratch)?;
+    let name = format!("burn-{}-{}.srt", std::process::id(), crate::queue::now_ms());
+    std::fs::write(scratch.join(&name), srt)?;
+    let result = burn_with_any(ffmpeg, video, &name, dest, scratch, cancel, on_progress);
+    let _ = std::fs::remove_file(scratch.join(&name));
+    result
+}
+
+fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scratch: &Path, cancel: &AtomicBool, on_progress: &mut dyn FnMut(f64)) -> Result<()> {
+    let p = probe(ffmpeg, video);
+    let has = crate::setup::ffmpeg_lists(ffmpeg, "-encoders");
+    let encoders: Vec<&str> = H264_ENCODERS.iter().copied().filter(|e| has.iter().any(|h| h == e)).collect();
+    if encoders.is_empty() {
+        bail!(crate::tr!("This ffmpeg cannot burn subtitles in. Download the video ffmpeg in Settings."));
+    }
+    let part = dest.with_extension("part.mp4");
+    let mut why = String::new();
+    for encoder in encoders {
+        let mut cmd = Command::new(ffmpeg);
+        cmd.args(burn_arguments(video, subtitles, encoder, &p, &part)).current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        no_window(&mut cmd);
+        let mut child = cmd.spawn().with_context(|| crate::tr!("could not start ffmpeg"))?;
+        let mut err = child.stderr.take().unwrap();
+        let err_thread = std::thread::spawn(move || {
+            let mut s = String::new();
+            let _ = std::io::Read::read_to_string(&mut err, &mut s);
+            s
+        });
+        let mut moved = false;
+        let mut cancelled = false;
+        for line in std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap())).map_while(|l| l.ok()) {
+            if cancel.load(Ordering::Relaxed) {
+                cancelled = true;
+                let _ = child.kill();
+                break;
+            }
+            if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
+                if us > 0.0 {
+                    moved = true;
+                    if p.duration_s > 0.0 {
+                        on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
+                    }
+                }
+            }
+        }
+        let status = child.wait()?;
+        let stderr = err_thread.join().unwrap_or_default();
+        if cancelled || cancel.load(Ordering::Relaxed) {
+            let _ = std::fs::remove_file(&part);
+            bail!("cancelled");
+        }
+        if status.success() {
+            std::fs::rename(&part, dest)?;
+            on_progress(1.0);
+            return Ok(());
+        }
+        let _ = std::fs::remove_file(&part);
+        why = stderr.trim().to_string();
+        // an encoder that could not even start (no such chip, an old driver): the next one
+        if moved {
+            break;
+        }
+    }
+    bail!(crate::tr!("ffmpeg could not burn the subtitles in: {}", why))
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
         (Ok(x), Ok(y)) => x == y,
@@ -194,6 +386,71 @@ mod tests {
         assert!(line.contains("-disposition:s:1 default") && line.contains("-disposition:s:2 0"), "{line}");
         let mp4: String = arguments(Path::new("in.mp4"), &files[..1], &tracks[..1], 0, Path::new("out.mp4")).iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
         assert!(mp4.contains("-map 0:v? -map 0:a? -map 0:s? -map 1:0 -c copy -c:s mov_text"), "{mp4}");
+    }
+
+    const PROBE: &str = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'in.mp4':
+  Duration: 00:01:02.50, start: 0.000000, bitrate: 4521 kb/s
+  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(tv, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 4387 kb/s, 30 fps, 30 tbr, 15360 tbn (default)
+  Stream #0:1[0x2](eng): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 128 kb/s (default)
+  Stream #0:2[0x3](ara): Audio: vorbis, 44100 Hz, stereo, fltp
+  Stream #0:3: Video: mjpeg (Baseline), yuvj420p(pc, bt470bg/unknown/unknown), 300x300, 90k tbr (attached pic)";
+
+    #[test]
+    fn what_burning_needs_is_read_from_ffmpeg() {
+        let p = parse_probe(PROBE);
+        assert_eq!(p, Probe { duration_s: 62.5, pixels: 1920 * 1080, video_kbps: Some(4387), audio: vec!["aac".into(), "vorbis".into()] });
+        assert_eq!(bitrate(&p), 5483, "a quarter above its own");
+        assert_eq!(bitrate(&Probe { pixels: 1920 * 1080, video_kbps: Some(40_000), ..Default::default() }), 8_000, "no more than 1080p needs");
+        assert_eq!(bitrate(&Probe { pixels: 1920 * 1080, video_kbps: Some(300), ..Default::default() }), 1_500, "a meeting recorded at a trickle");
+        assert_eq!(bitrate(&Probe { pixels: 640 * 360, ..Default::default() }), 2_500, "unknown: by its size");
+    }
+
+    #[test]
+    fn burning_draws_the_subtitles_and_keeps_the_sound_mp4_can_hold() {
+        let line = |audio: &[&str], enc: &str| {
+            let p = Probe { duration_s: 10.0, pixels: 1280 * 720, video_kbps: Some(2000), audio: audio.iter().map(|s| s.to_string()).collect() };
+            burn_arguments(Path::new("in.mkv"), "burn-1.srt", enc, &p, Path::new("out.mp4")).iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
+        };
+        let l = line(&["aac"], "h264_nvenc");
+        assert!(l.contains("-map 0:v:0 -map 0:a? -vf subtitles=burn-1.srt:force_style='FontName=Segoe UI,"), "{l}");
+        assert!(l.contains(",format=nv12 -c:v h264_nvenc -preset p5 -b:v 2500k -maxrate 3750k -bufsize 5000k -c:a copy"), "{l}");
+        assert!(l.ends_with("-progress pipe:1 -nostats out.mp4"), "{l}");
+        assert!(line(&["opus", "ac3"], "h264_mf").contains("-c:v h264_mf -b:v 2500k") && line(&["opus"], "h264_mf").contains("-c:a copy"));
+        assert!(line(&["aac", "vorbis"], "h264_amf").contains("-c:a aac -b:a 192k"), "Vorbis does not go into an MP4");
+        assert!(line(&[], "libx264").contains("-preset faster"));
+    }
+
+    /// With an ffmpeg that can burn (Dawwin's video one, or a full one): Arabic and English on the picture.
+    #[test]
+    fn a_real_video_gets_subtitles_burned_in() {
+        let ffmpeg = std::env::var_os("DAWWIN_TEST_BURNER").map(PathBuf::from).or_else(|| crate::setup::find_exe("ffmpeg"));
+        let Some(ffmpeg) = ffmpeg.filter(|f| crate::setup::ffmpeg_lists(f, "-filters").iter().any(|x| x == "subtitles")) else { return };
+        let dir = std::env::temp_dir().join(format!("dawwin-burn-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let video = dir.join("in.mkv");
+        let made = Command::new(&ffmpeg)
+            .args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=4", "-f", "lavfi", "-i", "sine=duration=4"])
+            .args(["-c:v", "mpeg4", "-c:a", "libvorbis"])
+            .arg(&video)
+            .status();
+        if !made.is_ok_and(|s| s.success()) {
+            return; // an ffmpeg without these
+        }
+        let srt = "1\n00:00:00,500 --> 00:00:03,000\nثلاثة لاعبين\nThree players\n\n";
+        let dest = dir.join("out.mp4");
+        let mut seen = Vec::new();
+        burn_subtitles(&ffmpeg, &video, srt, &dest, &dir, &AtomicBool::new(false), &mut |f| seen.push(f)).unwrap();
+        assert!(dest.is_file() && !dir.join("out.part.mp4").exists());
+        assert_eq!(seen.last(), Some(&1.0));
+        let p = probe(&ffmpeg, &dest);
+        assert!((p.duration_s - 4.0).abs() < 0.3 && p.pixels == 320 * 180 && p.audio == ["aac"], "{p:?}");
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|f| !f.file_name().to_string_lossy().ends_with(".srt")), "the subtitles file is gone");
+
+        let stop = AtomicBool::new(true);
+        let err = burn_subtitles(&ffmpeg, &video, srt, &dir.join("stopped.mp4"), &dir, &stop, &mut |_| {}).unwrap_err();
+        assert!(err.to_string().contains("cancelled") && !dir.join("stopped.mp4").exists() && !dir.join("stopped.part.mp4").exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// With ffmpeg installed: a short video made on the spot gets two subtitle tracks.

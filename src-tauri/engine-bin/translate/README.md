@@ -1,1 +1,1 @@
-The translator that ships with the app: llama.cpp's server, from its official release, and its DLLs. `npm run engine` puts them here.
+The translator, llama.cpp's server, is not part of the app: it downloads with the first translation model. `node tools/stage-engine.mjs --translator-only` puts it here for the Tools workflow, which packs it, and for the Engine workflow's tests.

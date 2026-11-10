@@ -5,12 +5,17 @@ name: Tools
 # subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
 # llama.cpp's official server. Each is built or taken, packed (tools/pack.py), and tried on Windows
 # with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
-# tag, the files go on that release, where the app downloads them from.
+# tag, the files go on that release, where the app downloads them from. With the id of an earlier
+# run, its files are tried and uploaded instead of new ones: the app pins their exact bytes.
 on:
   workflow_dispatch:
     inputs:
       release:
         description: "Upload the files to this release (its tag, for example v1.3.0). Empty: only build and try."
+        required: false
+        default: ""
+      from_run:
+        description: "Take the packed files of this earlier run instead of building them again"
         required: false
         default: ""
   push:
@@ -23,9 +28,11 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   ffmpeg:
+    if: inputs.from_run == ''
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -49,6 +56,7 @@ jobs:
           path: packs/
 
   translator:
+    if: inputs.from_run == ''
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +95,7 @@ jobs:
 
   try:
     needs: [ffmpeg, translator, samples]
+    if: ${{ !failure() && !cancelled() }}
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -99,6 +108,8 @@ jobs:
           pattern: pack-*
           merge-multiple: true
           path: packs
+          run-id: ${{ inputs.from_run || github.run_id }}
+          github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           name: samples
@@ -106,20 +117,20 @@ jobs:
       - name: Unpack each with the app's own code, and start it
         shell: pwsh
         run: |
+          Get-ChildItem packs | ForEach-Object { "{0} {1} {2}" -f $_.Name, $_.Length, (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
           $env:DAWWIN_TEST_TOOLS = (Resolve-Path packs).Path
+          # what the app unpacks is what the next steps run
+          $env:DAWWIN_TEST_TOOLS_OUT = "$PWD\unpacked"
           cargo test --manifest-path src-tauri/Cargo.toml --locked real_tools_unpack_and_start -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Read the sound, save it, add subtitle tracks
         shell: pwsh
         run: |
           foreach ($variant in "audio", "video") {
-            New-Item -ItemType Directory -Force "ff-$variant" | Out-Null
-            # Windows' own tar, not Git's
-            & "$env:SystemRoot\System32\tar.exe" -xf "packs\dawwin-ffmpeg-$variant-8.1.2.tar.xz" -C "ff-$variant"
-            $ff = "ff-$variant\ffmpeg.exe"
+            $ff = "unpacked\tools\ffmpeg-$variant\ffmpeg.exe"
             Write-Host "== $variant"
             foreach ($f in "meeting.mp4", "obs.mkv", "film.mkv", "browser.webm", "whatsapp.ogg", "phone.mp4") {
-              & $ff -nostdin -loglevel error -i "s\$f" -vn -ac 1 -ar 16000 -f f32le "out-$f.f32"
+              & $ff -nostdin -loglevel error -y -i "s\$f" -vn -ac 1 -ar 16000 -f f32le "out-$f.f32"
               $n = (Get-Item "out-$f.f32").Length / 4 / 16000
               Write-Host ("read {0}: {1:N1} s of sound" -f $f, $n)
               if ($LASTEXITCODE -ne 0 -or $n -lt 4.5) { throw "$variant could not read $f" }
@@ -135,7 +146,7 @@ jobs:
       - name: Burn subtitles into the picture (video only), as the app does
         shell: pwsh
         run: |
-          $ff = (Resolve-Path "ff-video\ffmpeg.exe").Path
+          $ff = (Resolve-Path "unpacked\tools\ffmpeg-video\ffmpeg.exe").Path
           Copy-Item "s\subtitles.srt" burn.srt
           $style = "subtitles=burn.srt:force_style='FontName=Segoe UI,FontSize=18,Outline=1.6,Shadow=0.8,MarginV=18',format=nv12"
           foreach ($f in "meeting.mp4", "film.mkv", "browser.webm", "phone.mp4") {
@@ -156,7 +167,7 @@ jobs:
 
   release:
     needs: try
-    if: github.event_name == 'workflow_dispatch' && inputs.release != ''
+    if: ${{ !failure() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.release != '' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@v4
@@ -164,6 +175,8 @@ jobs:
           pattern: pack-*
           merge-multiple: true
           path: packs
+          run-id: ${{ inputs.from_run || github.run_id }}
+          github-token: ${{ github.token }}
       - name: Put them on the release
         env:
           GH_TOKEN: ${{ github.token }}

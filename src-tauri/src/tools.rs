@@ -35,8 +35,8 @@ const RELEASE: &str = "v1.3.0";
 pub const TRANSLATOR: Tool = Tool {
     id: "translator",
     file: "dawwin-translator-llama.cpp-b12237.tar.xz",
-    size: 0,
-    sha256: "",
+    size: 14_115_908,
+    sha256: "f66c4406f39a8eeb37d77b76a9c7ed07055295e2f1266fd06a14f90cd540864f",
     folder: "translate",
     exe: "llama-server.exe",
 };
@@ -44,8 +44,8 @@ pub const TRANSLATOR: Tool = Tool {
 pub const FFMPEG_AUDIO: Tool = Tool {
     id: "ffmpeg-audio",
     file: "dawwin-ffmpeg-audio-8.1.2.tar.xz",
-    size: 0,
-    sha256: "",
+    size: 1_332_460,
+    sha256: "02d8a17aa61f3a09a8a80cdf84f26f65ceebe3f8c08e765190c57b8b25d00379",
     folder: "ffmpeg-audio",
     exe: "ffmpeg.exe",
 };
@@ -53,8 +53,8 @@ pub const FFMPEG_AUDIO: Tool = Tool {
 pub const FFMPEG_VIDEO: Tool = Tool {
     id: "ffmpeg-video",
     file: "dawwin-ffmpeg-video-8.1.2.tar.xz",
-    size: 0,
-    sha256: "",
+    size: 3_219_168,
+    sha256: "c60e43a640f7cdf681f6d92574d2d1d15d87d37e924111df591c9d611ff90d59",
     folder: "ffmpeg-video",
     exe: "ffmpeg.exe",
 };
@@ -185,6 +185,16 @@ mod tests {
     }
 
     #[test]
+    fn every_tool_is_pinned_and_has_a_name_of_its_own() {
+        for t in TOOLS {
+            assert!(t.size > 0 && t.sha256.len() == 64, "{} has no size or checksum", t.id);
+            assert!(t.file.ends_with(".tar.xz") && url(&t).starts_with("https://github.com/BaraaJadaan/dawwin/releases/download/"));
+            assert_eq!(TOOLS.iter().filter(|o| o.folder == t.folder || o.file == t.file).count(), 1);
+            assert_eq!(tool(t.id), Some(t));
+        }
+    }
+
+    #[test]
     fn a_tool_unpacks_into_its_folder_in_place_of_the_old_one() {
         let dir = folder("unpack");
         let file = dir.join("t.tar.xz");
@@ -284,12 +294,14 @@ mod tests {
     }
 
     /// The real files of the release: DAWWIN_TEST_TOOLS is a folder holding them. Each unpacks,
-    /// and its program starts.
+    /// and its program starts. With DAWWIN_TEST_TOOLS_OUT, what they unpack to stays there, in the
+    /// folders the app uses, for other tests to run.
     #[test]
     #[ignore]
     fn real_tools_unpack_and_start() {
         let from = PathBuf::from(std::env::var("DAWWIN_TEST_TOOLS").expect("DAWWIN_TEST_TOOLS"));
-        let dir = folder("real");
+        let keep = std::env::var_os("DAWWIN_TEST_TOOLS_OUT").map(PathBuf::from);
+        let dir = keep.clone().unwrap_or_else(|| folder("real"));
         let paths = Paths { local: dir.clone(), roaming: dir.clone() };
         for t in TOOLS {
             let file = from.join(t.file);
@@ -303,6 +315,8 @@ mod tests {
             println!("{}: unpacked in {:.1} s, {}", t.id, started.elapsed().as_secs_f64(), text.lines().next().unwrap_or(""));
             assert!(out.status.success(), "{} does not start: {text}", t.id);
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        if keep.is_none() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

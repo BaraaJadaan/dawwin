@@ -332,16 +332,27 @@
         </div>
         <div id="segments" class="segments"></div>
         <div class="player" id="player" hidden>
-          <audio id="audio" controls preload="metadata"></audio>
-          <div class="volume" id="volume" dir="ltr">
-            <button class="icon-btn" id="btn-mute" data-i18n-aria="player.mute">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M4 9.500v5h3.500L12 19V5L7.500 9.500H4Z" fill="currentColor"/>
-                <path class="on" d="M15.500 9a4 4 0 0 1 0 6M18 6.500a8 8 0 0 1 0 11"/>
-                <path class="off" d="m16 9.500 5 5m0-5-5 5"/>
-              </svg>
+          <audio id="audio" preload="metadata"></audio>
+          <!-- the app's own player: time runs left to right in either language -->
+          <div class="controls" id="controls" dir="ltr">
+            <button class="play" id="btn-play" data-i18n-aria="player.play">
+              <svg class="i-play" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z"/></svg>
+              <svg class="i-pause" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>
             </button>
-            <input type="range" id="volume-bar" min="0" max="100" step="1" data-i18n-aria="player.volume">
+            <span class="clock" id="clock-now">0:00</span>
+            <input type="range" class="seek" id="seek" min="0" max="1000" step="1" value="0" data-i18n-aria="player.seek">
+            <span class="clock" id="clock-total">0:00</span>
+            <button class="speed" id="btn-speed" data-i18n-aria="player.speed">1×</button>
+            <div class="volume" id="volume">
+              <button class="icon-btn" id="btn-mute" data-i18n-aria="player.mute">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.800" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M4 9.500v5h3.500L12 19V5L7.500 9.500H4Z" fill="currentColor"/>
+                  <path class="on" d="M15.500 9a4 4 0 0 1 0 6M18 6.500a8 8 0 0 1 0 11"/>
+                  <path class="off" d="m16 9.500 5 5m0-5-5 5"/>
+                </svg>
+              </button>
+              <div class="volume-pop"><input type="range" id="volume-bar" min="0" max="100" step="1" data-i18n-aria="player.volume"></div>
+            </div>
           </div>
           <span id="player-note" class="muted small"></span>
         </div>

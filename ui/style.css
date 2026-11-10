@@ -399,17 +399,51 @@ mark { background: var(--mark); color: inherit; border-radius: 3px; padding: 0 1
 mark.current { background: var(--mark-current); color: #1c1203; }
 .empty-live { text-align: center; color: var(--muted); padding: 60px 20px; font-size: 14px; }
 
+/* the player: the app's own, in its colours */
 .player { border-top: 1px solid var(--line); background: var(--panel); padding: 8px 20px; display: flex; align-items: center; gap: 12px; }
-.player audio { flex: 1; min-width: 0; height: 36px; }
-/* the app's own, longer volume bar takes the place of the player's small one */
-.player audio::-webkit-media-controls-mute-button,
-.player audio::-webkit-media-controls-volume-control-container,
-.player audio::-webkit-media-controls-volume-slider { display: none; }
-.player audio[hidden] ~ .volume { display: none; }
-.volume { flex: 0 1 240px; min-width: 120px; display: flex; align-items: center; gap: 6px; }
-.volume input { flex: 1; min-width: 0; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.controls { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; }
+.play {
+  width: 38px; height: 38px; flex: none; display: grid; place-items: center; border-radius: 50%; border: 0; cursor: pointer;
+  background: var(--accent); color: var(--accent-text); transition: background .15s, transform .1s;
+}
+.play:hover { background: var(--accent-hover); }
+.play:active { transform: scale(.94); }
+.play .i-pause, .player.playing .play .i-play { display: none; }
+.player.playing .play .i-pause { display: block; }
+.clock { font: 12.5px/1 Consolas, "Cascadia Mono", monospace; color: var(--muted); min-width: 44px; text-align: center; }
+.speed {
+  height: 28px; min-width: 46px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg);
+  color: var(--muted); font: 600 12.5px/1 var(--ui-font); cursor: pointer;
+}
+.speed:hover { color: var(--text); border-color: var(--line-strong); }
+/* a track that fills with the accent colour up to --pct, with a round handle that grows on hover */
+.player input[type="range"] { -webkit-appearance: none; appearance: none; background: transparent; margin: 0; cursor: pointer; --pct: 0%; }
+.player input[type="range"]::-webkit-slider-runnable-track {
+  height: 6px; border-radius: 99px; background: linear-gradient(to right, var(--accent) var(--pct), var(--line-strong) var(--pct));
+}
+.player input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; margin-top: -4px; border-radius: 50%; background: var(--accent);
+  border: 2px solid var(--panel); transform: scale(.6); transition: transform .12s;
+}
+.player input[type="range"]:hover::-webkit-slider-thumb, .player input[type="range"]:focus-visible::-webkit-slider-thumb { transform: scale(1); }
+.seek { flex: 1; min-width: 80px; height: 20px; }
+/* the volume: the speaker, and over it on hover an upright bar as long as the old one lay */
+.volume { position: relative; flex: none; display: flex; align-items: center; }
 .volume .off, .volume.silent .on { display: none; }
 .volume.silent .off { display: inline; }
+.volume-pop {
+  position: absolute; bottom: 100%; left: 50%; transform: translate(-50%, 6px); padding-bottom: 8px;
+  opacity: 0; visibility: hidden; transition: opacity .15s, transform .15s, visibility .15s; z-index: 30;
+}
+.volume:hover .volume-pop, .volume:focus-within .volume-pop { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+.volume-pop input[type="range"] {
+  writing-mode: vertical-lr; direction: rtl; width: 34px; height: 220px; padding: 12px 0;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
+}
+.volume-pop input[type="range"]::-webkit-slider-runnable-track {
+  width: 6px; height: auto; margin: 0 auto; background: linear-gradient(to top, var(--accent) var(--pct), var(--line-strong) var(--pct));
+}
+.volume-pop input[type="range"]::-webkit-slider-thumb { margin-top: 0; margin-left: -4px; }
 #player-note:empty { display: none; }
 
 /* ------------------------------------------------------------ overlays */

@@ -1047,12 +1047,64 @@ async function setupAudio(live) {
   if (S.current?.id !== c.id) return;
   player.hidden = false;
   if (!p) {
-    a.hidden = true;
+    $("controls").hidden = true;
     note.innerHTML = tHtml("audio.missing", { path: c.source_path ? ltr(c.source_path) : t("audio.oldPlace") });
     return;
   }
-  a.hidden = false;
+  $("controls").hidden = false;
   a.src = fileSrc(p);
+  paintPlayer();
+}
+
+// ------------------------------------------------------------------ the player
+
+const SPEEDS = [1, 1.25, 1.5, 1.75, 2, 0.75];
+
+/** A range input's filled part, for the track's colours. */
+function fillTo(input) {
+  const pct = (100 * (Number(input.value) - Number(input.min))) / (Number(input.max) - Number(input.min) || 1);
+  input.style.setProperty("--pct", `${pct}%`);
+}
+
+let seeking = false;
+function paintPlayer() {
+  const a = $("audio"), seek = $("seek");
+  const total = isFinite(a.duration) ? a.duration : 0;
+  $("clock-now").textContent = ts(a.currentTime);
+  $("clock-total").textContent = ts(total);
+  if (!seeking) seek.value = total ? Math.round((1000 * a.currentTime) / total) : 0;
+  fillTo(seek);
+  $("player").classList.toggle("playing", !a.paused);
+  $("btn-speed").textContent = `${a.playbackRate}×`;
+}
+
+function wirePlayer() {
+  const a = $("audio"), seek = $("seek");
+  a.playbackRate = Number(store.get("speed", "1")) || 1;
+  a.defaultPlaybackRate = a.playbackRate;
+  $("btn-play").onclick = () => (a.paused ? a.play().catch(() => {}) : a.pause());
+  seek.addEventListener("input", () => {
+    seeking = true;
+    if (isFinite(a.duration)) a.currentTime = (Number(seek.value) / 1000) * a.duration;
+    fillTo(seek);
+  });
+  seek.addEventListener("change", () => { seeking = false; });
+  $("btn-speed").onclick = () => {
+    const next = SPEEDS[(SPEEDS.indexOf(a.playbackRate) + 1) % SPEEDS.length] || 1;
+    a.playbackRate = a.defaultPlaybackRate = next;
+    store.set("speed", String(next));
+    paintPlayer();
+  };
+  for (const ev of ["timeupdate", "play", "pause", "durationchange", "loadedmetadata", "ratechange", "emptied"]) a.addEventListener(ev, paintPlayer);
+  // the space bar plays and pauses, except where it types a space
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== " " || S.view !== "transcript" || $("player").hidden || $("controls").hidden) return;
+    const el = ev.target;
+    if (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(el.tagName)) return;
+    ev.preventDefault();
+    $("btn-play").click();
+  });
+  paintPlayer();
 }
 
 // ------------------------------------------------------------------ volume
@@ -1069,6 +1121,7 @@ function wireVolume() {
   a.muted = store.get("muted", "0") === "1";
   const paint = () => {
     bar.value = a.muted ? 0 : volumeToBar(a.volume);
+    fillTo(bar);
     $("volume").classList.toggle("silent", a.muted || a.volume === 0);
   };
   bar.oninput = () => { a.muted = false; a.volume = barToVolume(Number(bar.value)); };
@@ -1266,7 +1319,7 @@ $("audio").addEventListener("error", async () => {
 
 function playFrom(sec) {
   const a = $("audio");
-  if ($("player").hidden || a.hidden || !a.getAttribute("src")) {
+  if ($("player").hidden || $("controls").hidden || !a.getAttribute("src")) {
     toast(t(isLive(S.current.id) ? "toast.notFinished" : "toast.noRecording"));
     return;
   }
@@ -1514,6 +1567,7 @@ function onSegment({ id, segment }) {
 function wire() {
   wireListen();
   wireVolume();
+  wirePlayer();
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => {
     if (ev.target.closest("#home-folder")) chooseFolder();

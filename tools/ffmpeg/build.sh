@@ -76,7 +76,7 @@ if [ "$VARIANT" = video ]; then
   mkdir -p "$PREFIX/include/AMF" && cp -r "$WORK/src/AMF/amf/public/include/." "$PREFIX/include/AMF/"
   EXTRA=(
     --enable-swscale --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz
-    --enable-mediafoundation --enable-ffnvcodec --enable-nvenc --enable-amf
+    --enable-mediafoundation --enable-d3d11va --enable-ffnvcodec --enable-nvenc --enable-amf
     --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,mjpeg,prores,h263,msmpeg4v3,wmv3,vc1
     --enable-encoder=h264_mf,hevc_mf,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf
     --enable-filter=subtitles,ass,scale,format,null,setsar,pad,fps

@@ -68,8 +68,9 @@ if [ "$VARIANT" = video ]; then
   fetch "https://github.com/libass/libass/releases/download/$LIBASS/libass-$LIBASS.tar.xz" "libass-$LIBASS"
   (cd "$WORK/src/libass-$LIBASS" && ./configure --host="$HOST" --prefix="$PREFIX" --enable-static --disable-shared \
     --disable-fontconfig --enable-directwrite --disable-require-system-font-provider && make -j "$JOBS" && make install)
-  # NVIDIA's and AMD's encoder headers: headers only, MIT
-  git clone --depth 1 https://github.com/FFmpeg/nv-codec-headers "$WORK/src/nv-codec-headers"
+  # NVIDIA's and AMD's encoder headers: headers only, MIT. NVIDIA's at 12.1, which drivers from 530 on run;
+  # the newest ask for drivers newer than most computers have
+  git clone --depth 1 --branch n12.1.14.0 https://github.com/FFmpeg/nv-codec-headers "$WORK/src/nv-codec-headers"
   make -C "$WORK/src/nv-codec-headers" install PREFIX="$PREFIX"
   git clone --depth 1 --filter=blob:none --sparse https://github.com/GPUOpen-LibrariesAndSDKs/AMF "$WORK/src/AMF"
   (cd "$WORK/src/AMF" && git sparse-checkout set amf/public/include)

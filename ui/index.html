@@ -9,6 +9,9 @@
 <body>
   <header class="topbar">
     <div class="brand">
+      <button class="icon-btn side-toggle" id="btn-side" data-i18n-aria="side.toggle" aria-expanded="true">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Zm0 2v12h5V6H4Zm7 0v12h9V6h-9Z"/></svg>
+      </button>
       <img src="icon.png" alt="" width="26" height="26">
       <span class="name" data-i18n="app.name"></span>
       <span class="tag" data-i18n="app.tag"></span>
@@ -42,6 +45,10 @@
         <p id="history-empty" class="muted small" data-i18n="side.empty" hidden></p>
       </section>
 
+      <button class="btn btn-ghost side-settings side-guide" id="btn-guide">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 1 0 20 10 10 0 0 1 0-20Zm0 2a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm-1 11h2v2h-2v-2Zm1-9a3.5 3.5 0 0 1 1.9 6.44c-.6.39-.9.7-.9 1.56h-2c0-1.7.8-2.5 1.8-3.14A1.5 1.5 0 1 0 10.5 9.5h-2A3.5 3.5 0 0 1 12 6Z"/></svg>
+        <span data-i18n="guide.title"></span>
+      </button>
       <button class="btn btn-ghost side-settings" id="btn-settings">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7 7 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54a7 7 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.8a.5.5 0 0 0 .49-.42l.36-2.54a7 7 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
         <span data-i18n="set.title"></span>
@@ -63,10 +70,29 @@
           </div>
           <h1 data-i18n="home.drop"></h1>
           <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
-          <div class="lang">
-            <label class="muted small" for="spoken" data-i18n="home.spoken"></label>
-            <select id="spoken" class="input select"></select>
-          </div>
+        </div>
+        <!-- what happens to what is dropped: four steps, one after the other -->
+        <div class="steps" id="steps">
+          <section class="step" data-step="sound">
+            <h2><span class="step-no">1</span><span data-i18n="steps.sound"></span></h2>
+            <label class="toggle"><input type="checkbox" id="step-silence"> <span data-i18n="steps.silence"></span></label>
+            <label class="toggle"><input type="checkbox" id="step-save-audio"> <span data-i18n="steps.saveAudio"></span></label>
+          </section>
+          <section class="step" data-step="text">
+            <h2><span class="step-no">2</span><span data-i18n="steps.text"></span></h2>
+            <label class="toggle"><input type="checkbox" id="step-transcribe"> <span data-i18n="steps.transcribe"></span></label>
+            <select id="spoken" class="input select" data-i18n-aria="home.spoken"></select>
+          </section>
+          <section class="step" data-step="translate">
+            <h2><span class="step-no">3</span><span data-i18n="steps.translation"></span></h2>
+            <label class="toggle"><input type="checkbox" id="step-translate"> <span data-i18n="steps.translate"></span></label>
+            <select id="step-target" class="input select" data-i18n-aria="steps.translate"></select>
+          </section>
+          <section class="step" data-step="video">
+            <h2><span class="step-no">4</span><span data-i18n="steps.video"></span></h2>
+            <label class="toggle"><input type="checkbox" id="step-video"> <span data-i18n="steps.subtitles"></span></label>
+            <p class="muted small" id="step-video-note" data-i18n="steps.needsFfmpeg" hidden></p>
+          </section>
         </div>
         <div id="home-note" class="home-note"></div>
       </section>
@@ -122,6 +148,23 @@
             <h2 data-i18n="ready.title"></h2>
             <p class="muted" id="ready-text"></p>
             <div class="row"><button class="btn btn-primary" id="btn-start" data-i18n="ready.start"></button></div>
+          </section>
+        </div>
+      </section>
+
+      <!-- how to use -->
+      <section id="view-guide" class="view" hidden>
+        <div class="setup guide">
+          <div class="setup-head"><h1 data-i18n="guide.title"></h1></div>
+          <div id="guide-items" class="guide-items"></div>
+          <section class="card guide-contact">
+            <h2 data-i18n="guide.contactTitle"></h2>
+            <p class="muted" data-i18n="guide.contactText"></p>
+            <div class="row">
+              <button class="btn btn-primary" id="guide-mail"><span dir="ltr">braajad1@gmail.com</span></button>
+              <button class="btn btn-ghost" id="guide-github" data-i18n="set.github"></button>
+              <button class="btn btn-ghost" id="guide-issue" data-i18n="set.report"></button>
+            </div>
           </section>
         </div>
       </section>
@@ -221,6 +264,10 @@
           <section class="card group">
             <h2 data-i18n="set.about"></h2>
             <div class="setting"><div class="setting-text"><p class="muted small" id="set-about"></p></div></div>
+            <div class="setting">
+              <div class="setting-text"><h3 data-i18n="set.contact"></h3><p class="muted small" data-i18n="guide.contactText"></p></div>
+              <button class="btn btn-sm" id="set-mail"><span dir="ltr">braajad1@gmail.com</span></button>
+            </div>
             <div class="setting actions">
               <button class="btn btn-sm btn-ghost" id="set-github" data-i18n="set.github"></button>
               <button class="btn btn-sm btn-ghost" id="set-issue" data-i18n="set.report"></button>
@@ -274,6 +321,8 @@
                 <button data-fmt="tsv" data-i18n="exp.tsv"></button>
                 <button data-fmt="json" data-i18n="exp.json"></button>
                 <button id="export-video" data-i18n="exp.video" hidden></button>
+                <button id="export-audio" data-i18n="exp.audio"></button>
+                <button id="export-audio-short" data-i18n="exp.audioShort"></button>
               </div>
             </div>
             <button class="icon-btn danger" id="btn-delete" data-i18n-aria="t.delete">

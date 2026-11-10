@@ -103,6 +103,14 @@ static AR: &[(&str, &str)] = &[
     ("Video", "فيديو"),
     ("Choose another name: the video itself cannot be written over.", "اختر اسمًا آخر: لا يمكن الكتابة فوق الفيديو نفسه."),
     ("ffmpeg could not add the subtitles: {}", "تعذّر على ffmpeg إضافة النص: {}"),
+    // sound
+    ("ffmpeg could not save the sound: {}", "تعذّر على ffmpeg حفظ الصوت: {}"),
+    ("There is no speech in this recording.", "لا يوجد كلام في هذا التسجيل."),
+    ("without silences", "دون فترات الصمت"),
+    ("The recording is not at {} any more.", "لم يعد التسجيل في {}."),
+    ("Choose another name: the recording itself cannot be written over.", "اختر اسمًا آخر: لا يمكن الكتابة فوق التسجيل نفسه."),
+    ("Save the sound", "حفظ الصوت"),
+    ("Sound", "صوت"),
     // updates
     ("Could not reach GitHub. Check the connection and try again.", "تعذّر الوصول إلى GitHub. تحقّق من الاتصال وحاول مجددًا."),
     ("No version has been published yet.", "لم يُنشر أي إصدار بعد."),

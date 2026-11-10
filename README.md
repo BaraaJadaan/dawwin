@@ -35,7 +35,8 @@ subscription, no limit on hours.
   CSV or JSON for analysis. Journalists, researchers and students keep their sources private.
 - **Lectures, lessons and sermons.** University lectures, Arabic lessons, khutbahs and Quran
   recitations become text you can search and quote, with the recording a click away from any word.
-- **Podcasts.** Transcripts and show notes for listeners and for search engines.
+- **Podcasts.** Transcripts and show notes for listeners and for search engines, and the long silences
+  cut out of the sound.
 - **Voice notes.** WhatsApp voice notes to text.
 - **Accessibility.** Captions for people who are deaf or hard of hearing.
 - **Learning a language.** Read along with **Follow words**, with the translation under each line.
@@ -44,10 +45,18 @@ subscription, no limit on hours.
 
 ## Features
 
+**One drop, several steps** (new in 1.3)
+
+- Choose on the start page what happens to what you drop, in order: take the long silences out and
+  save the sound, transcribe, translate, and add the subtitles to the video. Turn on only what you
+  need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
+
+![The start page: a drop area, and under it four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+
 **Transcribe**
 
-- Drop recordings and videos on the window: m4a, mp3, wav, WhatsApp voice notes, flac, mp4 and mov.
-  With ffmpeg installed, also mkv, webm, avi and any other format. Several files queue up.
+- Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg
+  installed, also WhatsApp voice notes, webm, avi and any other format. Several files queue up.
 - Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
   recordings that are already done are skipped, so a stopped run picks up where it left off.
 - Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
@@ -78,11 +87,18 @@ subscription, no limit on hours.
   sound are copied untouched, so it takes seconds, even for a long film. MP4 and MOV videos give an
   MP4, everything else an MKV. This needs ffmpeg.
 
+**Sound** (new in 1.3)
+
+- **Remove silences**: every pause longer than 0.7 seconds is shortened, and the silence before and
+  after the speech goes. Transcribing what is left is faster, and the transcript still has the times
+  of the original recording, so playback, Follow words and subtitles stay in step.
+- Save the sound as a file of its own (M4A): from a video, or without its silences.
+
 **Edit, search and export**
 
 - Correct lines in place, and search with Arabic in mind: أ/إ/ا, ة/ه and ى/ي match.
 - Export to Word, text, Markdown, subtitles (SRT, VTT) or data (CSV, TSV, JSON).
-- English or Arabic interface.
+- English or Arabic interface, and a **How to use** page with pictures of every part of the app.
 
 <table>
   <tr>
@@ -90,15 +106,14 @@ subscription, no limit on hours.
     <td width="50%"><img src="docs/screenshots/export-video.png" alt="The export menu with a choice of original, translation or both, and Video with subtitles at the bottom."><br>Export the original, the translation or both, or add them to the video.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/home.png" alt="The start page with a drop area for recordings and a choice of spoken language."><br>Drop recordings on the window, or choose a whole folder.</td>
     <td><img src="docs/screenshots/transcribing.png" alt="A recording being transcribed, with its text appearing and two more recordings waiting in the queue."><br>Read the text while it is being written. The rest of the queue waits its turn.</td>
-  </tr>
-  <tr>
     <td><img src="docs/screenshots/search-export.png" alt="A search with every match highlighted, and the export menu open."><br>Search the transcript and export it in eight formats.</td>
-    <td><img src="docs/screenshots/play-from-here.png" alt="A selected word with a right-click menu offering Play from here."><br>Select a word and right-click to hear it being said.</td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/play-from-here.png" alt="A selected word with a right-click menu offering Play from here."><br>Select a word and right-click to hear it being said.</td>
     <td><img src="docs/screenshots/arabic.png" alt="The same transcript with the interface in Arabic, laid out right to left."><br>The whole interface also comes in Arabic, right to left.</td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/setup.png" alt="The first-run page with three steps, a language menu set to Danish, and a choice of two models with a short description of each."><br>Choose a language and a model. The download survives pausing, closing the app and a lost connection.</td>
   </tr>
 </table>
@@ -136,8 +151,8 @@ ran about 7 times faster than real time, and Whisper about as fast as real time.
 translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation model without a
-GPU), and room for the models. For WhatsApp voice notes, videos other than MP4 and MOV, and adding
-subtitles to a video, install ffmpeg: `winget install Gyan.FFmpeg`.
+GPU), and room for the models. For WhatsApp voice notes, videos other than MP4, MOV and MKV, and
+adding subtitles to a video, install ffmpeg: `winget install Gyan.FFmpeg`.
 
 ## How the translation models were chosen
 
@@ -178,8 +193,11 @@ How the app is put together, and how to release it: [docs/how-it-works.md](docs/
 
 Contributions are welcome: bug reports, fixes, translations of the interface and new features. Please
 contact me before starting on something bigger, so we can agree on the approach: open an
-[issue](https://github.com/BaraaJadaan/dawwin/issues) or reach me on GitHub
+[issue](https://github.com/BaraaJadaan/dawwin/issues), email me at
+[braajad1@gmail.com](mailto:braajad1@gmail.com), or reach me on GitHub
 ([@BaraaJadaan](https://github.com/BaraaJadaan)). Then send a pull request.
+
+Questions, ideas and problems are welcome by email too: [braajad1@gmail.com](mailto:braajad1@gmail.com).
 
 If Dawwin is useful to you, a star on GitHub helps other people find it.
 

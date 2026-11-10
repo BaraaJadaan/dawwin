@@ -86,8 +86,14 @@ fn decode_symphonia(path: &Path) -> Result<Vec<f32>> {
         .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
         .map_err(|e| anyhow!(crate::tr!("unsupported format ({}); install ffmpeg for this file type", e)))?;
     let mut format = probed.format;
+    // in a video the default track is the picture: the first sound track it can decode, else that
+    let codecs = symphonia::default::get_codecs();
     let track = format
-        .default_track()
+        .tracks()
+        .iter()
+        .filter(|t| t.codec_params.sample_rate.is_some())
+        .find(|t| codecs.make(&t.codec_params, &DecoderOptions::default()).is_ok())
+        .or_else(|| format.default_track())
         .ok_or_else(|| anyhow!(crate::tr!("no audio track")))?;
     let track_id = track.id;
     let rate = track.codec_params.sample_rate.ok_or_else(|| anyhow!("unknown sample rate"))? as usize;
@@ -307,9 +313,208 @@ pub fn pauses(audio: &[f32], a: usize, b: usize) -> Vec<[f32; 3]> {
     out
 }
 
+/// The parts of a recording to keep when its silences are taken out: every pause longer than
+/// `min_gap_s` is shortened to `keep_s` (half of it at each side, so speech never starts or ends
+/// abruptly), and the silence before the first word and after the last goes too. Silence is what
+/// stays near the recording's own quietest level (a room's hum, a fan) or 35 dB under its loud
+/// parts, whichever is higher; only a whole `min_gap_s` of it counts, so a quiet word is never cut.
+/// As sample ranges of `audio`.
+pub fn speech_spans(audio: &[f32], min_gap_s: f32, keep_s: f32) -> Vec<(usize, usize)> {
+    let frame = SR / 50;
+    let rms = smoothed_rms(audio);
+    if rms.is_empty() {
+        return Vec::new();
+    }
+    let db: Vec<f32> = rms.iter().map(|r| 20.0 * r.max(1e-6).log10()).collect();
+    let mut sorted = db.clone();
+    sorted.sort_by(|x, y| x.total_cmp(y));
+    let loud = sorted[sorted.len() * 9 / 10];
+    if loud < -60.0 {
+        return Vec::new(); // nothing but silence
+    }
+    // the hum of a room is 30 dB or so under the voices: "35 dB under" alone would keep it all
+    let floor = sorted[sorted.len() / 20];
+    let line = (loud - 35.0).max(floor + 0.4 * (loud - floor));
+    let silent: Vec<bool> = db.iter().map(|d| *d < line).collect();
+    let min_gap = (min_gap_s * 50.0).round() as usize;
+    let half = ((keep_s / 2.0) * SR as f32) as usize;
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    let mut speech_from: Option<usize> = None;
+    while i < silent.len() {
+        if !silent[i] {
+            speech_from.get_or_insert(i);
+            i += 1;
+            continue;
+        }
+        let run = i;
+        while i < silent.len() && silent[i] {
+            i += 1;
+        }
+        let (Some(from), at_end) = (speech_from, i >= silent.len()) else { continue };
+        if i - run >= min_gap || at_end {
+            spans.push((from * frame, run * frame));
+            speech_from = None;
+        }
+    }
+    if let Some(from) = speech_from {
+        spans.push((from * frame, audio.len()));
+    }
+    // a little of each silence stays, at both sides
+    spans
+        .into_iter()
+        .map(|(a, b)| (a.saturating_sub(half), (b + half).min(audio.len())))
+        .fold(Vec::new(), |mut out: Vec<(usize, usize)>, (a, b)| {
+            match out.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => out.push((a, b)),
+            }
+            out
+        })
+}
+
+/// The kept parts, one after the other.
+pub fn join_spans(audio: &[f32], spans: &[(usize, usize)]) -> Vec<f32> {
+    let mut out = Vec::with_capacity(spans.iter().map(|(a, b)| b - a).sum());
+    for &(a, b) in spans {
+        out.extend_from_slice(&audio[a..b]);
+    }
+    out
+}
+
+/// From a time in the shortened recording back to the same moment in the original. `end`: a time
+/// that ends something, which at a join stays before the silence that was taken out.
+pub fn original_time(spans: &[(usize, usize)], seconds: f64, end: bool) -> f64 {
+    let mut at = (seconds * SR as f64).round().max(0.0) as usize;
+    for &(a, b) in spans {
+        let len = b - a;
+        if at < len || (end && at == len) {
+            return (a + at) as f64 / SR as f64;
+        }
+        at -= len;
+    }
+    spans.last().map_or(seconds, |&(_, b)| b as f64 / SR as f64)
+}
+
 /// Digital silence (or near it): nothing for the model to hear.
 pub fn is_silent(audio: &[f32]) -> bool {
     audio.iter().fold(0f32, |m, x| m.max(x.abs())) < 1e-3
+}
+
+/// `path`, or "name (2).ext", "name (3).ext"… when a file of that name is there already.
+pub fn unique_path(path: &Path) -> PathBuf {
+    if !path.exists() {
+        return path.to_path_buf();
+    }
+    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    (2..).map(|n| path.with_file_name(format!("{stem} ({n}){ext}"))).find(|p| !p.exists()).unwrap()
+}
+
+/// Save the sound of `source` (a recording or a video) to `dest`. With ffmpeg: an M4A; only
+/// `spans` of it when given (as 16 kHz sample ranges, from [`speech_spans`]), cut sample-exact at
+/// 48 kHz; otherwise its own sound track, copied as it is when it already is AAC. Without ffmpeg:
+/// a WAV at 16 kHz from `samples`, the decoded recording. Returns the file written, whose extension
+/// may differ from `dest`'s.
+pub fn save_sound(source: &Path, dest: &Path, spans: Option<&[(usize, usize)]>, samples: &[f32], ffmpeg: Option<&PathBuf>, cancel: &AtomicBool) -> Result<PathBuf> {
+    let Some(ff) = ffmpeg else {
+        let dest = unique_path(&dest.with_extension("wav"));
+        match spans {
+            Some(s) => write_wav(&dest, &join_spans(samples, s))?,
+            None => write_wav(&dest, samples)?,
+        }
+        return Ok(dest);
+    };
+    let dest = unique_path(&dest.with_extension("m4a"));
+    let part = dest.with_extension("part.m4a");
+    let run = |args: &[&str], src: &Path| -> Result<std::process::Output> {
+        let mut cmd = Command::new(ff);
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(src).args(args).arg(&part);
+        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+        no_window(&mut cmd);
+        Ok(cmd.output()?)
+    };
+    let result = match spans {
+        None => {
+            // the sound track as it is, else made AAC
+            let copied = run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-c:a", "copy"], source)?;
+            if copied.status.success() {
+                Ok(())
+            } else {
+                let made = run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-c:a", "aac", "-b:a", "128k"], source)?;
+                if made.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&made.stderr).trim().to_string()) }
+            }
+        }
+        Some(spans) => cut_with_ffmpeg(ff, source, &part, spans, cancel),
+    };
+    if let Err(why) = result {
+        let _ = std::fs::remove_file(&part);
+        bail!(crate::tr!("ffmpeg could not save the sound: {}", why));
+    }
+    std::fs::rename(&part, &dest)?;
+    Ok(dest)
+}
+
+/// One ffmpeg reads the sound at 48 kHz, this keeps the spans, and a second one writes them as AAC.
+fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize)], cancel: &AtomicBool) -> std::result::Result<(), String> {
+    use std::io::Write;
+    const RATE: usize = 48_000;
+    let scale = RATE / SR;
+    let mut read = Command::new(ff);
+    read.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"]).arg(source);
+    read.args(["-vn", "-sn", "-dn", "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "-"]);
+    read.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    no_window(&mut read);
+    let mut write = Command::new(ff);
+    write.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "f32le", "-ar", "48000", "-ac", "1", "-i", "-"]);
+    write.args(["-c:a", "aac", "-b:a", "96k"]).arg(dest);
+    write.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+    no_window(&mut write);
+    let mut reader = read.spawn().map_err(|e| e.to_string())?;
+    let mut writer = write.spawn().map_err(|e| e.to_string())?;
+    let mut input = reader.stdout.take().unwrap();
+    let mut output = writer.stdin.take().unwrap();
+    let mut buf = vec![0u8; 1 << 16];
+    let mut carry: Vec<u8> = Vec::new();
+    let mut at = 0usize; // samples read so far, at 48 kHz
+    let mut span = 0usize;
+    let failed = loop {
+        if cancel.load(Ordering::Relaxed) {
+            break Some("cancelled".to_string());
+        }
+        let n = match input.read(&mut buf) {
+            Ok(0) => break None,
+            Ok(n) => n,
+            Err(e) => break Some(e.to_string()),
+        };
+        carry.extend_from_slice(&buf[..n]);
+        let whole = carry.len() / 4 * 4;
+        let mut keep: Vec<u8> = Vec::with_capacity(whole);
+        for sample in carry[..whole].chunks_exact(4) {
+            while span < spans.len() && at >= spans[span].1 * scale {
+                span += 1;
+            }
+            if span < spans.len() && at >= spans[span].0 * scale {
+                keep.extend_from_slice(sample);
+            }
+            at += 1;
+        }
+        carry.drain(..whole);
+        if output.write_all(&keep).is_err() {
+            break Some("the encoder stopped".to_string());
+        }
+    };
+    drop(output);
+    let _ = reader.wait();
+    let done = writer.wait_with_output().map_err(|e| e.to_string())?;
+    match failed {
+        Some(why) => {
+            let _ = std::fs::remove_file(dest);
+            Err(why)
+        }
+        None if !done.status.success() => Err(String::from_utf8_lossy(&done.stderr).trim().to_string()),
+        None => Ok(()),
+    }
 }
 
 pub fn write_raw_f32(path: &Path, samples: &[f32]) -> Result<()> {
@@ -408,6 +613,99 @@ mod tests {
         assert!((share - 0.4).abs() < 0.05, "2 of 5 s of speech came before it: {share}");
         assert!((start - 3.0).abs() < 0.2 && (end - 3.6).abs() < 0.2, "{start}..{end}");
         assert!(pauses(&vec![0.0; 3 * SR], 0, 3 * SR).is_empty());
+    }
+
+    /// Speech-like tone where `spans` says, silence elsewhere.
+    fn speech_at(total_s: f32, spans: &[(f32, f32)]) -> Vec<f32> {
+        (0..(total_s * SR as f32) as usize)
+            .map(|i| {
+                let t = i as f32 / SR as f32;
+                if spans.iter().any(|(a, b)| t >= *a && t < *b) { (i as f32 * 0.07).sin() * 0.3 } else { 0.0 }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn long_silences_go_and_short_pauses_stay() {
+        // silence, speech, a 1.5 s pause, speech, a 0.3 s pause, speech, silence
+        let audio = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5), (6.8, 7.8)]);
+        let spans = speech_spans(&audio, 0.7, 0.3);
+        let s: Vec<(f32, f32)> = spans.iter().map(|(a, b)| (*a as f32 / SR as f32, *b as f32 / SR as f32)).collect();
+        assert_eq!(s.len(), 2, "the 0.3 s pause is speech's own rhythm: {s:?}");
+        assert!((s[0].0 - 0.85).abs() < 0.2 && (s[0].1 - 3.15).abs() < 0.2, "{s:?}");
+        assert!((s[1].0 - 4.35).abs() < 0.2 && (s[1].1 - 7.95).abs() < 0.2, "{s:?}");
+        let kept: f32 = s.iter().map(|(a, b)| b - a).sum();
+        assert!(kept > 5.0 && kept < 6.5, "from 9.8 s to about 5.9: {kept}");
+        assert_eq!(join_spans(&audio, &spans).len(), spans.iter().map(|(a, b)| b - a).sum::<usize>());
+        assert!(speech_spans(&vec![0.0; 3 * SR], 0.7, 0.3).is_empty(), "silence only: nothing to keep");
+    }
+
+    #[test]
+    fn the_hum_of_a_room_counts_as_silence() {
+        // the same, with a steady noise 30 dB under the speech all through, as a meeting room has
+        let clean = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5), (6.8, 7.8)]);
+        let noisy: Vec<f32> = clean.iter().enumerate().map(|(i, x)| x + ((i as f32 * 1.7).sin() * (i as f32 * 0.013).cos()) * 0.0095).collect();
+        let s = speech_spans(&noisy, 0.7, 0.3);
+        assert_eq!(s.len(), 2, "{s:?}");
+        let kept: f32 = s.iter().map(|(a, b)| (b - a) as f32 / SR as f32).sum();
+        assert!(kept > 5.0 && kept < 6.6, "{kept}");
+    }
+
+    #[test]
+    fn times_in_the_shortened_recording_lead_back_to_the_original() {
+        let spans = [(SR, 3 * SR), (5 * SR, 6 * SR)]; // 1–3 s and 5–6 s: 3 s kept
+        assert_eq!(original_time(&spans, 0.0, false), 1.0);
+        assert_eq!(original_time(&spans, 1.5, false), 2.5);
+        assert_eq!(original_time(&spans, 2.0, true), 3.0, "an end at the join stays before the cut");
+        assert_eq!(original_time(&spans, 2.0, false), 5.0, "a start at the join is after it");
+        assert_eq!(original_time(&spans, 2.5, false), 5.5);
+        assert_eq!(original_time(&spans, 9.0, true), 6.0, "past the end: the end");
+    }
+
+    /// With ffmpeg installed: the silences really leave the saved file.
+    #[test]
+    fn the_shortened_sound_is_saved() {
+        let Some(ff) = crate::setup::find_exe("ffmpeg") else { return };
+        let dir = std::env::temp_dir().join(format!("dawwin-sound-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let audio = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5), (6.8, 7.8)]);
+        let source = dir.join("talk.wav");
+        write_wav(&source, &audio).unwrap();
+        let spans = speech_spans(&audio, 0.7, 0.3);
+        let stop = AtomicBool::new(false);
+        let short = save_sound(&source, &dir.join("talk (without silences).m4a"), Some(&spans), &audio, Some(&ff), &stop).unwrap();
+        assert_eq!(short.extension().unwrap(), "m4a");
+        let back = decode(&short, Some(&ff), &stop).unwrap();
+        let kept = spans.iter().map(|(a, b)| b - a).sum::<usize>() as f32 / SR as f32;
+        let got = back.len() as f32 / SR as f32;
+        assert!((got - kept).abs() < 0.1, "saved {got} s, kept {kept} s");
+        // the whole sound, again under the same name: a new name
+        let whole = save_sound(&source, &dir.join("talk (without silences).m4a"), None, &audio, Some(&ff), &stop).unwrap();
+        assert!(whole.file_name().unwrap().to_string_lossy().ends_with("(2).m4a"), "{whole:?}");
+        let wav = save_sound(&source, &dir.join("talk.m4a"), Some(&spans), &audio, None, &stop).unwrap();
+        assert_eq!(wav.extension().unwrap(), "wav", "without ffmpeg: a WAV");
+    }
+
+    /// An MKV video (OBS, films) is read by the built-in decoder, without ffmpeg. ffmpeg only makes the file.
+    #[test]
+    fn an_mkv_is_read_without_ffmpeg() {
+        let Some(ff) = crate::setup::find_exe("ffmpeg") else { return };
+        let dir = std::env::temp_dir().join(format!("dawwin-mkv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mkv = dir.join("clip.mkv");
+        let made = Command::new(&ff)
+            .args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10:duration=4", "-f", "lavfi", "-i", "sine=duration=4"])
+            .args(["-c:v", "mpeg4", "-c:a", "aac", "-shortest"])
+            .arg(&mkv)
+            .status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let samples = decode(&mkv, None, &AtomicBool::new(false)).unwrap();
+        let secs = samples.len() as f32 / SR as f32;
+        assert!((secs - 4.0).abs() < 0.2, "{secs}");
     }
 
     #[test]

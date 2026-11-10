@@ -29,17 +29,18 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// Netflix's numbers: 20 characters a second for English, 17 for the other languages.
+    /// Netflix's numbers: 20 characters a second for adults in English and Arabic (its English and
+    /// Arabic guides), 17 for the other languages; off half a second after the speech ends.
     pub fn for_language(language: &str) -> Rules {
         Rules {
             max_line: 42,
             max_lines: 2,
             min_s: 5.0 / 6.0,
             max_s: 7.0,
-            cps: if language == "en" { 20.0 } else { 17.0 },
+            cps: if matches!(language, "en" | "ar") { 20.0 } else { 17.0 },
             gap_s: 2.0 / 24.0,
             chain_s: 0.5,
-            linger_s: 0.4,
+            linger_s: 0.5,
         }
     }
 
@@ -465,9 +466,10 @@ mod tests {
     }
 
     #[test]
-    fn arabic_reads_slower_than_english() {
-        assert_eq!(Rules::for_language("ar").cps, 17.0);
+    fn reading_speeds_are_netflixs() {
+        assert_eq!(Rules::for_language("ar").cps, 20.0);
         assert_eq!(Rules::for_language("en").cps, 20.0);
+        assert_eq!(Rules::for_language("da").cps, 17.0);
     }
 
     #[test]
@@ -478,7 +480,7 @@ mod tests {
         assert!((c[0].end - 0.833).abs() < 0.01, "at least 5/6 s on screen: {:?}", c[0]);
         assert!((c[1].end - (2.6 - rules.gap_s)).abs() < 0.01, "a gap under half a second is closed: {:?}", c[1]);
         assert!(c[3].start - c[2].end >= rules.gap_s - 1e-9, "two frames between: {c:?}");
-        assert!((c[3].end - 6.4).abs() < 0.01, "the last one stays a moment after the speech: {:?}", c[3]);
+        assert!((c[3].end - 6.5).abs() < 0.01, "the last one stays half a second after the speech: {:?}", c[3]);
     }
 
     #[test]

@@ -68,6 +68,13 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
   since 1.3), and a translation by the same share of its text. **Video with subtitles** runs ffmpeg with
   `-c copy`: MP4 and MOV give an MP4 with `mov_text` tracks, anything else an MKV that keeps all its
   streams. Each track has its ISO 639-2 language and a name, and the first one added is on by default.
+- **Steps.** A job carries the steps chosen on the start page (`queue::Steps`): silences out, sound
+  saved, transcribe, translate, video. Translating is a job of its own that the transcription starts
+  when it ends, and the video comes after the translation, or right after the transcription without
+  one. **Silences**: `audio::speech_spans` keeps everything but the pauses over 0.7 s (silent means near
+  the recording's own quietest level, or 35 dB under its loud parts); the model hears only the kept
+  parts, and `audio::original_time` takes every time back to the original recording. The sound is
+  saved through ffmpeg (decoded at 48 kHz, cut, encoded as AAC), or as WAV without it.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 
 ## Where the app keeps things

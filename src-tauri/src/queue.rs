@@ -25,9 +25,28 @@ const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
 /// Save a translation that is under way at least this often, so closing the app keeps it.
 const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
+
+/// What to do with a recording, in this order: take the long silences out, save its sound,
+/// transcribe it, translate the transcript, and add the subtitles to the video.
+#[derive(Clone, Debug, Serialize, serde::Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Steps {
+    pub remove_silence: bool,
+    pub save_audio: bool,
+    pub transcribe: bool,
+    /// The language to translate into
+    pub translate: Option<String>,
+    pub video: bool,
+}
+
+impl Default for Steps {
+    fn default() -> Self {
+        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct JobView {
@@ -35,6 +54,9 @@ pub struct JobView {
     pub title: String,
     pub path: String,
     pub language: String,
+    pub steps: Steps,
+    /// The files it saved: the sound, the video with subtitles
+    pub outputs: Vec<String>,
     /// "translate" for translating a finished transcript; empty for transcribing a recording
     pub kind: String,
     /// What a translation translates: the transcript's id, and the language it goes into
@@ -451,13 +473,13 @@ impl Core {
 
     // ------------------------------------------------------------ queue
 
-    pub fn enqueue(&self, paths: Vec<String>, language: String) -> Vec<String> {
-        self.add_jobs(paths, language, false)
+    pub fn enqueue(&self, paths: Vec<String>, language: String, steps: Steps) -> Vec<String> {
+        self.add_jobs(paths, language, steps, false)
     }
 
     /// Every recording under `dir` that has no finished transcript yet. One that has gets
     /// any file it is missing next to it, without being transcribed again.
-    pub fn enqueue_folder(&self, dir: &std::path::Path, language: String) -> FolderScan {
+    pub fn enqueue_folder(&self, dir: &std::path::Path, language: String, steps: Steps) -> FolderScan {
         let finished: std::collections::HashMap<String, String> = history::list(&self.paths.history_dir())
             .into_iter()
             .filter(|h| !h.partial)
@@ -490,10 +512,10 @@ impl Core {
                 todo.push(path);
             }
         }
-        FolderScan { added: self.add_jobs(todo, language, true), already }
+        FolderScan { added: self.add_jobs(todo, language, steps, true), already }
     }
 
-    fn add_jobs(&self, paths: Vec<String>, language: String, from_folder: bool) -> Vec<String> {
+    fn add_jobs(&self, paths: Vec<String>, language: String, steps: Steps, from_folder: bool) -> Vec<String> {
         let mut ids = Vec::new();
         for p in paths {
             let path = PathBuf::from(&p);
@@ -509,6 +531,7 @@ impl Core {
                 title,
                 path: p,
                 language: language.clone(),
+                steps: steps.clone(),
                 status: "queued".into(),
                 folder: from_folder,
                 ..Default::default()
@@ -535,6 +558,11 @@ impl Core {
     /// already have a translation of what they say now are kept, so this also brings a translation
     /// up to date after edits, or finishes one that was stopped.
     pub fn translate(&self, transcript: &str, language: &str) -> Result<String> {
+        self.translate_then(transcript, language, false)
+    }
+
+    /// The same; with `video`, the video gets the subtitles in both languages after it.
+    pub fn translate_then(&self, transcript: &str, language: &str, video: bool) -> Result<String> {
         if !models::can_translate_into(language) {
             return Err(anyhow!(crate::tr!("Dawwin cannot translate into that language.")));
         }
@@ -567,6 +595,7 @@ impl Core {
             path: t.source_path.clone(),
             language: t.language.clone(),
             kind: "translate".into(),
+            steps: Steps { transcribe: false, video, ..Default::default() },
             transcript: Some(transcript.to_string()),
             target: Some(language.to_string()),
             status: "queued".into(),
@@ -905,12 +934,23 @@ fn run_translation(core: &Arc<Core>, translator: &mut Option<TranslatorProcess>,
         return Err(e);
     }
     let cancelled = cancel.load(Ordering::SeqCst);
+    // the step after: the video, with the translation on and the transcript a click away
+    let mut next_error = None;
+    if job.steps.video && !cancelled {
+        let t = history::load(&core.paths.history_dir(), &transcript)?;
+        if crate::video::is_video(Path::new(&t.source_path)) {
+            match subtitle_video(core, id, &t, &crate::transcript::View::Both(language.clone())) {
+                Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                Err(e) => next_error = Some(format!("{e:#}")),
+            }
+        }
+    }
     core.update_job(id, |j| {
-        j.status = if cancelled { "cancelled".into() } else { "done".into() };
+        j.status = if next_error.is_some() { "failed".into() } else if cancelled { "cancelled".into() } else { "done".into() };
         j.eta_s = None;
         j.elapsed_s = started.elapsed().as_secs_f64();
         j.saved = true;
-        j.error = None;
+        j.error = next_error;
         if !cancelled {
             j.progress = 1.0;
         }
@@ -918,34 +958,98 @@ fn run_translation(core: &Arc<Core>, translator: &mut Option<TranslatorProcess>,
     Ok(())
 }
 
+/// A line's times, from the shortened recording back to the original (see `audio::original_time`).
+fn to_original(mut s: Segment, spans: &[(usize, usize)]) -> Segment {
+    s.start = audio::original_time(spans, s.start, false);
+    s.end = audio::original_time(spans, s.end, true);
+    let last = s.voice.len().saturating_sub(1);
+    for (k, v) in s.voice.iter_mut().enumerate() {
+        *v = audio::original_time(spans, *v as f64, k == last) as f32;
+    }
+    for p in s.pauses.iter_mut() {
+        p[1] = audio::original_time(spans, p[1] as f64, true) as f32;
+        p[2] = audio::original_time(spans, p[2] as f64, false) as f32;
+    }
+    s
+}
+
+/// The video a transcript was made from, with its subtitles added as tracks, next to it.
+fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::transcript::View) -> Result<PathBuf> {
+    let ffmpeg = setup::find_exe("ffmpeg").ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Install it (winget install Gyan.FFmpeg), then try again.")))?;
+    let tracks = crate::video::tracks(t, view).map_err(|e| anyhow!(e))?;
+    let source = PathBuf::from(&t.source_path);
+    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks));
+    core.update_job(id, |j| j.status = "saving_video".into());
+    crate::video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &core.paths.cache_dir())?;
+    Ok(dest)
+}
+
 fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Result<()> {
     let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
     if job.status != "queued" {
         return Ok(());
     }
+    let steps = job.steps.clone();
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
     let started = Instant::now();
     let _awake = KeepAwake::new();
+    let source = PathBuf::from(&job.path);
     core.update_job(id, |j| j.status = "decoding".into());
 
-    let found = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &job.language);
-    let Some((family, model)) = found else {
-        return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
-    };
-    let w = ensure_engine(core, engine, Some(&model.path))?;
-    w.start_loading()?; // the model loads while the audio decodes
+    let mut model_in_use = None;
+    if steps.transcribe {
+        let found = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &job.language);
+        let Some((family, model)) = found else {
+            return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
+        };
+        let w = ensure_engine(core, engine, Some(&model.path))?;
+        w.start_loading()?; // the model loads while the audio decodes
+        model_in_use = Some((family, model));
+    }
 
     let ffmpeg = setup::find_exe("ffmpeg");
-    let samples = audio::decode(PathBuf::from(&job.path).as_path(), ffmpeg.as_ref(), &cancel)?;
-    let total = samples.len();
-    let duration_s = total as f64 / SR as f64;
-    let chunks = audio::split_points(&samples, MAX_CHUNK_S, SEARCH_S);
-    let audio = Audio { id: id.to_string(), samples };
-    core.update_job(id, |j| {
-        j.duration_s = duration_s;
-        j.status = "loading".into();
-    });
+    let samples = audio::decode(&source, ffmpeg.as_ref(), &cancel)?;
+    let duration_s = samples.len() as f64 / SR as f64;
+    core.update_job(id, |j| j.duration_s = duration_s);
 
+    // the long silences out: from the sound saved, and from what the model has to read
+    let spans = if steps.remove_silence {
+        let spans = audio::speech_spans(&samples, 0.7, 0.3);
+        if spans.is_empty() {
+            return Err(anyhow!(crate::tr!("There is no speech in this recording.")));
+        }
+        Some(spans)
+    } else {
+        None
+    };
+    // a retry (on the CPU, after the GPU failed) does not save the sound twice
+    if (steps.save_audio || (steps.remove_silence && !steps.transcribe)) && job.outputs.is_empty() {
+        core.update_job(id, |j| j.status = "saving_audio".into());
+        let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| job.title.clone());
+        let name = if spans.is_some() { format!("{stem} ({}).m4a", crate::tr!("without silences")) } else { format!("{stem}.m4a") };
+        let dest = source.with_file_name(name);
+        let saved = audio::save_sound(&source, &dest, spans.as_deref(), &samples, ffmpeg.as_ref(), &cancel)?;
+        core.update_job(id, |j| j.outputs.push(saved.display().to_string()));
+    }
+    let Some((family, model)) = model_in_use else {
+        core.update_job(id, |j| {
+            j.status = if cancel.load(Ordering::SeqCst) { "cancelled".into() } else { "done".into() };
+            j.progress = 1.0;
+            j.elapsed_s = started.elapsed().as_secs_f64();
+        });
+        return Ok(());
+    };
+
+    let heard = match &spans {
+        Some(s) => audio::join_spans(&samples, s),
+        None => samples,
+    };
+    let total = heard.len();
+    let heard_s = total as f64 / SR as f64;
+    let chunks = audio::split_points(&heard, MAX_CHUNK_S, SEARCH_S);
+    let audio = Audio { id: id.to_string(), samples: heard };
+    core.update_job(id, |j| j.status = "loading".into());
+    let w = ensure_engine(core, engine, Some(&model.path))?;
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
     let device = match &info.gpu {
@@ -995,13 +1099,16 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                         }
                     };
                 }
-                {
-                    for s in lines {
-                        let _ = core.app.emit("segment", serde_json::json!({ "id": id, "segment": &s }));
-                        t.segments.push(s.clone());
-                        if let Some(lt) = core.live.lock().unwrap().get_mut(id) {
-                            lt.segments.push(s);
-                        }
+                for s in lines {
+                    // the times of the original recording, whatever the model was given
+                    let s = match &spans {
+                        Some(sp) => to_original(s, sp),
+                        None => s,
+                    };
+                    let _ = core.app.emit("segment", serde_json::json!({ "id": id, "segment": &s }));
+                    t.segments.push(s.clone());
+                    if let Some(lt) = core.live.lock().unwrap().get_mut(id) {
+                        lt.segments.push(s);
                     }
                 }
                 if failure.is_some() {
@@ -1011,7 +1118,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                 let done = chunks[i - 1].1;
                 let done_s = done as f64 / SR as f64;
                 let spent = t_start.elapsed().as_secs_f64();
-                let eta = if done_s > 0.0 { Some(spent / done_s * (duration_s - done_s)) } else { None };
+                let eta = if done_s > 0.0 { Some(spent / done_s * (heard_s - done_s)) } else { None };
                 core.update_job(id, |j| {
                     j.progress = done as f64 / total.max(1) as f64;
                     j.eta_s = eta;
@@ -1056,8 +1163,23 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
             return Err(anyhow!(crate::tr!("Transcribed, but the files could not be saved next to the recording: {}", e)));
         }
     }
+    // the next steps: a translation (which then does the video), or straight to the video
+    let mut next_error = None;
+    if saved && !cancelled {
+        if let Some(language) = steps.translate.as_deref().filter(|l| *l != t.language) {
+            if let Err(e) = core.translate_then(id, language, steps.video) {
+                next_error = Some(format!("{e:#}"));
+            }
+        } else if steps.video && crate::video::is_video(&source) {
+            match subtitle_video(core, id, &t, &crate::transcript::View::Original) {
+                Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                Err(e) => next_error = Some(format!("{e:#}")),
+            }
+        }
+    }
     core.update_job(id, |j| {
-        j.status = if cancelled { "cancelled".into() } else { "done".into() };
+        j.status = if next_error.is_some() { "failed".into() } else if cancelled { "cancelled".into() } else { "done".into() };
+        j.error = next_error;
         j.eta_s = None;
         j.elapsed_s = started.elapsed().as_secs_f64();
         if !cancelled {

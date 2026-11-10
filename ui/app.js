@@ -7,7 +7,7 @@ const listen = T.event.listen;
 const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
-const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating"]);
+const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 const MEDIA_EXT = ["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
 
@@ -15,6 +15,11 @@ const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
+
+const DEFAULT_STEPS = { remove_silence: false, save_audio: false, transcribe: true, translate: false, target: "", video: false };
+function loadSteps() {
+  try { return { ...DEFAULT_STEPS, ...JSON.parse(store.get("steps", "{}")) }; } catch { return { ...DEFAULT_STEPS }; }
+}
 
 const S = {
   snap: null,
@@ -25,6 +30,8 @@ const S = {
   targets: new Map(),   // the languages a transcript can be translated into, by code
   shown: "",            // the translation shown under the lines of the transcript on screen ("": none)
   scope: store.get("scope", "translation"), // what export and copy take while a translation is shown
+  steps: loadSteps(),   // what happens to recordings dropped on the window
+  told: new Set(),      // jobs whose saved files were announced
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
@@ -101,12 +108,127 @@ function toast(msg, action) {
 
 function showView(v) {
   S.view = v;
-  for (const id of ["home", "setup", "settings", "transcript"]) $("view-" + id).hidden = id !== v;
+  for (const id of ["home", "setup", "settings", "transcript", "guide"]) $("view-" + id).hidden = id !== v;
   $("btn-settings").classList.toggle("active", v === "settings");
+  $("btn-guide").classList.toggle("active", v === "guide");
   if (v === "settings") { renderSettings(); checkOldEngine(); }
+  if (v === "guide") renderGuide();
+  if (v === "home") paintSteps();
   renderHistory();
   renderQueue();
   if (v !== "transcript") stopAudio();
+}
+
+// ------------------------------------------------------------------ how to use
+
+/** Each part of the app: a picture of it (in the interface language), and what to do with it. */
+const GUIDE = ["drop", "steps", "live", "listen", "translate", "export", "settings"];
+
+function renderGuide() {
+  const box = $("guide-items");
+  if (box.dataset.lang === UI_LANG) return;
+  box.dataset.lang = UI_LANG;
+  box.innerHTML = GUIDE.map((g, i) => `
+    <section class="card guide-item">
+      <img src="guide/${UI_LANG}/${g}.webp" alt="${esc(t(`guide.${g}Title`))}">
+      <div class="guide-text">
+        <h2><span class="step-no">${i + 1}</span>${esc(t(`guide.${g}Title`))}</h2>
+        <p>${esc(t(`guide.${g}Text`))}</p>
+      </div>
+    </section>`).join("");
+  for (const img of box.querySelectorAll("img")) img.onerror = () => img.remove();
+}
+
+const writeToMe = () => invoke("open_url", { url: "mailto:braajad1@gmail.com?subject=Dawwin" });
+
+/** Fold the side panel into a rail of icons, or open it again; remembered for next time. */
+function foldSidebar(folded) {
+  document.querySelector(".sidebar").classList.toggle("collapsed", folded);
+  $("btn-side").setAttribute("aria-expanded", String(!folded));
+  for (const b of [$("btn-new"), $("btn-guide"), $("btn-settings")]) {
+    if (folded) b.setAttribute("aria-label", b.querySelector("span").textContent);
+    else b.removeAttribute("aria-label");
+  }
+  store.set("sideFolded", folded ? "1" : "0");
+}
+
+// ------------------------------------------------------------------ steps
+
+/** The steps as a job takes them: the language to translate into, and a sound saved when it is all there is. */
+function stepsForJob() {
+  const s = S.steps;
+  return {
+    remove_silence: s.remove_silence,
+    save_audio: s.save_audio || (s.remove_silence && !s.transcribe),
+    transcribe: s.transcribe,
+    translate: s.transcribe && s.translate ? stepTarget() : null,
+    video: s.transcribe && s.video && !!S.snap?.setup.ffmpeg,
+  };
+}
+
+/** The language to translate into: the one chosen, else English, or Arabic for recordings in English. */
+function stepTarget() {
+  const t = S.steps.target;
+  if (t && S.targets.has(t) && t !== S.spoken) return t;
+  return S.spoken === "en" ? "ar" : "en";
+}
+
+/** Turn a step on or off, and the ones that go with it: translating and the video need a transcript. */
+function setStep(key, on) {
+  const s = S.steps;
+  s[key] = on;
+  if ((key === "translate" || key === "video") && on) s.transcribe = true;
+  if (key === "transcribe" && !on) { s.translate = false; s.video = false; }
+  // with nothing else to do, taking the silences out means saving the sound
+  if (s.remove_silence && !s.transcribe) s.save_audio = true;
+  store.set("steps", JSON.stringify(s));
+  paintSteps();
+}
+
+function paintSteps() {
+  const s = S.steps, ffmpeg = !!S.snap?.setup.ffmpeg;
+  $("step-silence").checked = s.remove_silence;
+  $("step-save-audio").checked = s.save_audio || (s.remove_silence && !s.transcribe);
+  $("step-save-audio").disabled = s.remove_silence && !s.transcribe;
+  $("step-transcribe").checked = s.transcribe;
+  $("step-translate").checked = s.transcribe && s.translate;
+  $("step-video").checked = s.transcribe && s.video && ffmpeg;
+  $("step-video").disabled = !ffmpeg;
+  $("step-video-note").hidden = ffmpeg;
+  $("spoken").disabled = !s.transcribe;
+  const menu = $("step-target");
+  const key = `${UI_LANG}:${S.spoken}`;
+  if (menu.dataset.key !== key) {
+    menu.dataset.key = key;
+    const codes = [...S.targets.keys()].filter((c) => c !== S.spoken);
+    const first = ["en", "ar"].filter((c) => codes.includes(c));
+    const rest = codes.filter((c) => !first.includes(c)).sort((a, b) => langName(a).localeCompare(langName(b), I18N[UI_LANG].locale));
+    menu.innerHTML = [...first, ...rest].map((c) => `<option value="${c}">${esc(langName(c))}</option>`).join("");
+  }
+  menu.value = stepTarget();
+  menu.disabled = !(s.transcribe && s.translate);
+  for (const box of document.querySelectorAll(".step")) box.classList.toggle("on", !!box.querySelector("input:checked"));
+}
+
+function wireSteps() {
+  const keys = { "step-silence": "remove_silence", "step-save-audio": "save_audio", "step-transcribe": "transcribe", "step-translate": "translate", "step-video": "video" };
+  for (const [id, key] of Object.entries(keys)) $(id).onchange = () => setStep(key, $(id).checked);
+  $("step-target").onchange = () => { S.steps.target = $("step-target").value; store.set("steps", JSON.stringify(S.steps)); };
+}
+
+/** Whether what is about to start can: a model for each step that needs one. False after saying what is missing. */
+function stepsReady(steps) {
+  if (!steps.transcribe && !steps.save_audio) { toast(t("toast.noSteps")); return false; }
+  if (steps.transcribe && !setupComplete(S.snap)) {
+    toast(t("toast.setupFirst"));
+    showView("setup");
+    return false;
+  }
+  if (steps.translate && !S.snap.setup.families.translator?.found) {
+    toast(t("toast.needTranslator"), { label: t("toast.getTranslator"), run: openTranslationSettings });
+    return false;
+  }
+  return true;
 }
 
 function setupComplete(snap) {
@@ -192,6 +314,8 @@ function jobLine(j) {
     case "loading": return t(j.kind === "translate" ? "job.loadingTranslator" : "job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
+    case "saving_audio": return t("job.savingAudio");
+    case "saving_video": return t("job.savingVideo");
     case "done": return t("job.done", { dur: dur(j.elapsed_s) });
     case "cancelled": return t(j.kind === "translate" ? "job.cancelledKept" : j.saved ? "job.cancelledSaved" : "job.cancelled");
     case "failed": return t("job.failed", { err: (j.error || t("job.unknown")).split("\n")[0] });
@@ -210,7 +334,7 @@ function renderQueue() {
     const li = document.createElement("li");
     const of = j.transcript || j.id;
     li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
-    const indet = j.status === "decoding" || j.status === "loading";
+    const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status);
     const what = j.kind === "translate" ? `<div class="sub">${esc(t("job.translating", { lang: langName(j.target) }))}</div>` : "";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
@@ -218,7 +342,8 @@ function renderQueue() {
       <div class="sub">${esc(jobLine(j))}</div>
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
-    li.onclick = () => openTranscript(of, j.target);
+    // a job that only saves the sound has no transcript: it shows the file
+    li.onclick = () => (j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
       if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
@@ -1191,15 +1316,12 @@ async function addFiles(paths) {
   }
   if (skipped) toast(t("toast.skipped", { n: skipped }));
   if (!ok.length) return;
-  if (!setupComplete(S.snap)) {
-    toast(t("toast.setupFirst"));
-    showView("setup");
-    return;
-  }
-  const ids = await invoke("enqueue", { paths: ok, language: S.spoken });
+  const steps = stepsForJob();
+  if (!stepsReady(steps)) return;
+  const ids = await invoke("enqueue", { paths: ok, language: S.spoken, steps });
   S.snap = await invoke("get_state");
   renderQueue();
-  if (ids.length) openTranscript(ids[0]);
+  if (ids.length && steps.transcribe) openTranscript(ids[0]);
 }
 
 async function chooseFiles() {
@@ -1208,12 +1330,9 @@ async function chooseFiles() {
 }
 
 async function addFolder(path) {
-  if (!setupComplete(S.snap)) {
-    toast(t("toast.setupFirst"));
-    showView("setup");
-    return;
-  }
-  const { added, already } = await invoke("enqueue_folder", { path, language: S.spoken });
+  const steps = stepsForJob();
+  if (!stepsReady(steps)) return;
+  const { added, already } = await invoke("enqueue_folder", { path, language: S.spoken, steps });
   S.snap = await invoke("get_state");
   renderQueue();
   const parts = [];
@@ -1252,6 +1371,16 @@ async function exportAs(fmt) {
   $("export-menu").hidden = true;
   try {
     const path = await invoke("export_transcript", { id: S.current.id, format: fmt, stamps: S.stamps, ...exportView() });
+    if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
+  } catch (err) {
+    toast(t("toast.exportFailed", { err }));
+  }
+}
+
+async function exportAudio(withoutSilences) {
+  $("export-menu").hidden = true;
+  try {
+    const path = await invoke("export_audio", { id: S.current.id, withoutSilences });
     if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
   } catch (err) {
     toast(t("toast.exportFailed", { err }));
@@ -1345,7 +1474,22 @@ function onState(snap) {
       for (const y of ended) if (y?.status === "failed") toast(t("toast.translateFailed", { err: (y.error || t("job.unknown")).split("\n")[0] }));
       reloadCurrent();
     } else paintTranslationMenu();
+    // a translation the steps started: shown under the lines as it comes
+    const begun = snap.queue.find((x) => x.kind === "translate" && x.transcript === S.current.id && ACTIVE.has(x.status) && !prev?.queue.some((y) => y.id === x.id));
+    if (begun && !S.shown) {
+      S.shown = begun.target;
+      renderTranscript();
+    }
   }
+  // the files a job saved: said once, with the way to them
+  for (const j of snap.queue) {
+    if (j.outputs?.length && !ACTIVE.has(j.status) && !S.told.has(j.id)) {
+      S.told.add(j.id);
+      const path = j.outputs[j.outputs.length - 1];
+      toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
+    }
+  }
+  if (S.view === "home") paintSteps();
   // finished jobs live in History; drop them from "In progress"
   for (const j of snap.queue) if (j.status === "done") invoke("dismiss_job", { id: j.id });
 }
@@ -1390,8 +1534,16 @@ function wire() {
   for (const li of document.querySelectorAll(".stepper li")) {
     li.querySelector("button").onclick = () => { S.setupStep = li.dataset.step; renderSetup(); };
   }
+  $("btn-side").onclick = () => foldSidebar(!document.querySelector(".sidebar").classList.contains("collapsed"));
+  foldSidebar(store.get("sideFolded", "0") === "1");
   $("btn-start").onclick = () => showView("home");
   $("btn-settings").onclick = () => showView("settings");
+  $("btn-guide").onclick = () => showView("guide");
+  $("guide-mail").onclick = writeToMe;
+  $("set-mail").onclick = writeToMe;
+  $("guide-github").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url });
+  $("guide-issue").onclick = () => invoke("open_url", { url: S.snap.setup.repo_url + "/issues/new" });
+  wireSteps();
   $("set-lang").onchange = () => setUiLang($("set-lang").value);
 
   $("set-import").onclick = () => importModel($("set-import-error"));
@@ -1479,7 +1631,10 @@ function wire() {
   };
   for (const b of $("export-menu").querySelectorAll("button[data-fmt]")) b.onclick = () => exportAs(b.dataset.fmt);
   $("export-video").onclick = exportVideo;
+  $("export-audio").onclick = () => exportAudio(false);
+  $("export-audio-short").onclick = () => exportAudio(true);
   listen("video-saving", () => toast(t("toast.videoSaving")));
+  listen("audio-saving", () => toast(t("toast.audioSaving")));
   for (const b of $("export-scope").querySelectorAll("button")) {
     b.onclick = (ev) => {
       ev.stopPropagation(); // the menu stays open for the format
@@ -1508,6 +1663,7 @@ function wire() {
       ev.preventDefault(); $("search").focus(); $("search").select();
     }
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "o") { ev.preventDefault(); chooseFiles(); }
+    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "b") { ev.preventDefault(); $("btn-side").click(); }
   });
 
   const overlay = $("drop-overlay");
@@ -1532,13 +1688,16 @@ async function setUiLang(lang, tellApp = true) {
   store.set("uiLang", UI_LANG);
   applyI18n();
   paintSpoken();
+  foldSidebar(document.querySelector(".sidebar").classList.contains("collapsed"));
   if (S.snap) {
     renderChips();
     renderQueue();
     renderHistory();
     renderHomeNote();
+    paintSteps();
     if (S.view === "setup") renderSetup();
     if (S.view === "settings") renderSettings();
+    if (S.view === "guide") renderGuide();
     if (S.view === "transcript" && S.current) renderTranscript();
   }
   if (tellApp) {
@@ -1567,6 +1726,7 @@ function setSpoken(code) {
   S.setupStep = null;
   store.set("lang", code);
   paintSpoken();
+  paintSteps();
   renderChips();
   renderHomeNote();
   if (S.view === "setup") renderSetup();

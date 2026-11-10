@@ -153,7 +153,9 @@ fn set_run_on(core: C, value: String) -> R<Snapshot> {
 /// Open a Hugging Face page in the browser.
 #[tauri::command]
 fn open_url(url: String) -> R<()> {
-    if !url.starts_with("https://huggingface.co/") && !url.starts_with("https://github.com/") {
+    // the two sites, and writing to the maker
+    let mail = url == "mailto:braajad1@gmail.com" || url.starts_with("mailto:braajad1@gmail.com?");
+    if !url.starts_with("https://huggingface.co/") && !url.starts_with("https://github.com/") && !mail {
         return Err("not an allowed link".into());
     }
     std::process::Command::new("explorer.exe").arg(&url).spawn().map_err(|x| x.to_string())?;
@@ -214,13 +216,13 @@ fn spoken_languages() -> Vec<SpokenLanguage> {
 }
 
 #[tauri::command]
-fn enqueue(core: C, paths: Vec<String>, language: String) -> Vec<String> {
-    core.enqueue(paths, spoken(&language))
+fn enqueue(core: C, paths: Vec<String>, language: String, steps: Option<queue::Steps>) -> Vec<String> {
+    core.enqueue(paths, spoken(&language), steps.unwrap_or_default())
 }
 
 #[tauri::command]
-fn enqueue_folder(core: C, path: String, language: String) -> queue::FolderScan {
-    core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language))
+fn enqueue_folder(core: C, path: String, language: String, steps: Option<queue::Steps>) -> queue::FolderScan {
+    core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language), steps.unwrap_or_default())
 }
 
 /// What a dropped path is: a model to import, a folder to transcribe, or something else.
@@ -419,14 +421,58 @@ fn write_export(t: &Transcript, ext: &str, stamps: bool, view: &View, dest: &std
     std::fs::write(dest, bytes).map_err(|x| x.to_string())
 }
 
-/// The name of a language in English, for a subtitle track.
-fn track_title(code: &str) -> String {
-    models::translation_targets().find(|(c, _)| *c == code).map_or_else(|| models::language_name(code).to_string(), |(_, n)| n.to_string())
+/// Save the sound of a transcript's recording to `dest`, with or without its long silences. The
+/// file written, whose extension may differ (a WAV when there is no ffmpeg).
+fn save_sound_of(t: &Transcript, without_silences: bool, dest: &std::path::Path) -> R<PathBuf> {
+    let source = PathBuf::from(&t.source_path);
+    if !source.is_file() {
+        return Err(crate::tr!("The recording is not at {} any more.", source.display()));
+    }
+    if std::fs::canonicalize(&source).ok() == std::fs::canonicalize(dest).ok() {
+        return Err(crate::tr!("Choose another name: the recording itself cannot be written over."));
+    }
+    let ffmpeg = setup::find_exe("ffmpeg");
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let samples = audio::decode(&source, ffmpeg.as_ref(), &stop).map_err(e)?;
+    let spans = without_silences.then(|| audio::speech_spans(&samples, 0.7, 0.3));
+    if spans.as_ref().is_some_and(|s| s.is_empty()) {
+        return Err(crate::tr!("There is no speech in this recording."));
+    }
+    // the save dialog already asked before replacing a file
+    let _ = std::fs::remove_file(dest);
+    audio::save_sound(&source, dest, spans.as_deref(), &samples, ffmpeg.as_ref(), &stop).map_err(e)
 }
 
-/// The video the transcript was made from, with its subtitles added as tracks players can turn on
-/// and off: the transcript's, the translation's, or both (see `video`).
-/// What adding subtitles to a transcript's video needs: the video, ffmpeg, and the tracks.
+/// The recording's sound as a file of its own: from a video, or without its silences.
+#[tauri::command]
+async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<Option<String>> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let t = core.transcript(&id).map_err(e)?;
+    let source = PathBuf::from(&t.source_path);
+    let ext = if setup::find_exe("ffmpeg").is_some() { "m4a" } else { "wav" };
+    let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
+    let name = if without_silences { format!("{} ({}).{ext}", safe_name(&stem), crate::tr!("without silences")) } else { format!("{}.{ext}", safe_name(&stem)) };
+    let mut dlg = app.dialog().file().set_title(crate::tr!("Save the sound")).set_file_name(name).add_filter(crate::tr!("Sound"), &[ext]);
+    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+        dlg = dlg.set_directory(dir);
+    }
+    let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
+    let dest = dest.into_path().map_err(|x| x.to_string())?;
+    let _ = app.emit("audio-saving", dest.display().to_string());
+    let saved = tauri::async_runtime::spawn_blocking(move || save_sound_of(&t, without_silences, &dest)).await.map_err(|x| x.to_string())??;
+    Ok(Some(saved.display().to_string()))
+}
+
+/// The same, to `path` without asking where.
+#[tauri::command]
+async fn export_audio_to_path(app: AppHandle, id: String, path: String, without_silences: bool) -> R<String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let t = core.transcript(&id).map_err(e)?;
+    let saved = tauri::async_runtime::spawn_blocking(move || save_sound_of(&t, without_silences, std::path::Path::new(&path))).await.map_err(|x| x.to_string())??;
+    Ok(saved.display().to_string())
+}
+
+/// What adding subtitles to a transcript's video needs: the video, ffmpeg, and the tracks (see `video`).
 fn video_job(t: &Transcript, view: Option<&str>, language: Option<&str>) -> R<(PathBuf, PathBuf, Vec<video::Track>)> {
     let source = PathBuf::from(&t.source_path);
     if !video::is_video(&source) {
@@ -436,17 +482,9 @@ fn video_job(t: &Transcript, view: Option<&str>, language: Option<&str>) -> R<(P
         return Err(crate::tr!("The video is not at {} any more.", source.display()));
     }
     let ffmpeg = setup::find_exe("ffmpeg").ok_or_else(|| crate::tr!("Adding subtitles to a video needs ffmpeg. Install it (winget install Gyan.FFmpeg), then try again."))?;
-    let track = |t: &Transcript| video::Track { srt: transcript::to_srt(t), language: t.language.clone(), title: track_title(&t.language) };
-    let translated = |l: &str| t.translated(l).ok_or_else(|| crate::tr!("There is no translation into that language."));
-    let tracks = match View::parse(view, language) {
-        View::Original => vec![track(t)],
-        View::Translation(l) => vec![track(&translated(&l)?)],
-        // the translation on, the transcript a click away
-        View::Both(l) => vec![track(&translated(&l)?), track(t)],
-    };
+    let tracks = video::tracks(t, &View::parse(view, language))?;
     Ok((source, ffmpeg, tracks))
 }
-
 /// The same, written to `path` without asking where.
 #[tauri::command]
 async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
@@ -586,6 +624,8 @@ pub fn run() {
             export_transcript,
             export_video,
             export_video_to_path,
+            export_audio,
+            export_audio_to_path,
             audio_path,
             audio_preview,
             reveal,

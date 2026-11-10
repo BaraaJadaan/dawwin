@@ -54,6 +54,33 @@ pub struct Track {
     pub title: String,
 }
 
+/// The name of a language in English, for a subtitle track.
+fn track_title(code: &str) -> String {
+    crate::models::translation_targets()
+        .find(|(c, _)| *c == code)
+        .map_or_else(|| crate::models::language_name(code).to_string(), |(_, n)| n.to_string())
+}
+
+/// The subtitle tracks for a transcript: its own, its translation's, or both, the translation first
+/// (on), the transcript a click away. An error says what is missing.
+pub fn tracks(t: &crate::transcript::Transcript, view: &crate::transcript::View) -> std::result::Result<Vec<Track>, String> {
+    use crate::transcript::{to_srt, Transcript, View};
+    let track = |t: &Transcript| Track { srt: to_srt(t), language: t.language.clone(), title: track_title(&t.language) };
+    let translated = |l: &str| t.translated(l).ok_or_else(|| crate::tr!("There is no translation into that language."));
+    Ok(match view {
+        View::Original => vec![track(t)],
+        View::Translation(l) => vec![track(&translated(l)?)],
+        View::Both(l) => vec![track(&translated(l)?), track(t)],
+    })
+}
+
+/// Where the video with subtitles goes by default: next to the video, "name (English, Arabic).mp4".
+pub fn default_dest(video: &Path, tracks: &[Track]) -> PathBuf {
+    let stem = video.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let names = tracks.iter().map(|t| t.title.as_str()).collect::<Vec<_>>().join(", ");
+    video.with_file_name(format!("{stem} ({names}).{}", output_ext(video)))
+}
+
 /// How many subtitle streams the video has already, from what `ffmpeg -i` says about it.
 fn subtitle_streams(ffmpeg: &Path, video: &Path) -> usize {
     let mut cmd = Command::new(ffmpeg);

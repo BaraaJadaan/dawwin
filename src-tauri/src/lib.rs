@@ -12,11 +12,12 @@ mod setup;
 mod transcript;
 mod translate;
 mod updates;
+mod video;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::queue::{Core, Snapshot};
@@ -418,6 +419,78 @@ fn write_export(t: &Transcript, ext: &str, stamps: bool, view: &View, dest: &std
     std::fs::write(dest, bytes).map_err(|x| x.to_string())
 }
 
+/// The name of a language in English, for a subtitle track.
+fn track_title(code: &str) -> String {
+    models::translation_targets().find(|(c, _)| *c == code).map_or_else(|| models::language_name(code).to_string(), |(_, n)| n.to_string())
+}
+
+/// The video the transcript was made from, with its subtitles added as tracks players can turn on
+/// and off: the transcript's, the translation's, or both (see `video`).
+/// What adding subtitles to a transcript's video needs: the video, ffmpeg, and the tracks.
+fn video_job(t: &Transcript, view: Option<&str>, language: Option<&str>) -> R<(PathBuf, PathBuf, Vec<video::Track>)> {
+    let source = PathBuf::from(&t.source_path);
+    if !video::is_video(&source) {
+        return Err(crate::tr!("That recording is not a video."));
+    }
+    if !source.is_file() {
+        return Err(crate::tr!("The video is not at {} any more.", source.display()));
+    }
+    let ffmpeg = setup::find_exe("ffmpeg").ok_or_else(|| crate::tr!("Adding subtitles to a video needs ffmpeg. Install it (winget install Gyan.FFmpeg), then try again."))?;
+    let track = |t: &Transcript| video::Track { srt: transcript::to_srt(t), language: t.language.clone(), title: track_title(&t.language) };
+    let translated = |l: &str| t.translated(l).ok_or_else(|| crate::tr!("There is no translation into that language."));
+    let tracks = match View::parse(view, language) {
+        View::Original => vec![track(t)],
+        View::Translation(l) => vec![track(&translated(&l)?)],
+        // the translation on, the transcript a click away
+        View::Both(l) => vec![track(&translated(&l)?), track(t)],
+    };
+    Ok((source, ffmpeg, tracks))
+}
+
+/// The same, written to `path` without asking where.
+#[tauri::command]
+async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let t = core.transcript(&id).map_err(e)?;
+    let (source, ffmpeg, tracks) = video_job(&t, view.as_deref(), language.as_deref())?;
+    let (dest, scratch) = (PathBuf::from(&path), core.paths.cache_dir());
+    tauri::async_runtime::spawn_blocking(move || video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &scratch))
+        .await
+        .map_err(|x| x.to_string())?
+        .map_err(e)?;
+    Ok(path)
+}
+
+#[tauri::command]
+async fn export_video(app: AppHandle, id: String, view: Option<String>, language: Option<String>) -> R<Option<String>> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let t = core.transcript(&id).map_err(e)?;
+    let (source, ffmpeg, tracks) = video_job(&t, view.as_deref(), language.as_deref())?;
+    let ext = video::output_ext(&source);
+    let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
+    let names = tracks.iter().map(|x| x.title.clone()).collect::<Vec<_>>().join(", ");
+    let mut dlg = app
+        .dialog()
+        .file()
+        .set_title(crate::tr!("Save the video with its subtitles"))
+        .set_file_name(format!("{} ({}).{ext}", safe_name(&stem), safe_name(&names)))
+        .add_filter(crate::tr!("Video"), &[ext]);
+    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+        dlg = dlg.set_directory(dir);
+    }
+    let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
+    let dest = dest.into_path().map_err(|x| x.to_string())?;
+    let dest = if dest.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)) { dest } else { dest.with_extension(ext) };
+    let _ = app.emit("video-saving", dest.display().to_string());
+    let scratch = core.paths.cache_dir();
+    let out = dest.clone();
+    tauri::async_runtime::spawn_blocking(move || video::add_subtitles(&ffmpeg, &source, &tracks, &out, &scratch))
+        .await
+        .map_err(|x| x.to_string())?
+        .map_err(e)?;
+    Ok(Some(dest.display().to_string()))
+}
+
 /// The recording to play next to a transcript, allowed for the webview's asset protocol.
 #[tauri::command]
 fn audio_path(app: AppHandle, id: String) -> R<Option<String>> {
@@ -511,6 +584,8 @@ pub fn run() {
             delete_transcript,
             transcript_text,
             export_transcript,
+            export_video,
+            export_video_to_path,
             audio_path,
             audio_preview,
             reveal,

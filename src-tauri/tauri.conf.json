@@ -38,7 +38,7 @@
       "icons/icon.ico"
     ],
     "shortDescription": "Local speech-to-text, Arabic first",
-    "longDescription": "Transcribes recordings on this computer, in Arabic and about 100 other languages.",
+    "longDescription": "Transcribes, translates and subtitles recordings and videos on this computer, in Arabic and about 100 other languages.",
     "publisher": "Baraa Jadaan",
     "homepage": "https://github.com/BaraaJadaan/dawwin",
     "copyright": "© 2026 Baraa Jadaan, MIT License",

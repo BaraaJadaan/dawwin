@@ -1233,8 +1233,13 @@ function exportView() {
   return tr && tr.lines.some((l) => l.text) ? { view: S.scope, language: S.shown } : { view: "original", language: null };
 }
 
+const VIDEO_EXT = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "3gp", "ts", "mts", "m2ts", "mpg", "mpeg"];
+
 function paintExportScope() {
   const box = $("export-scope");
+  // subtitles into the video it was made from, when it is a video and ffmpeg is there to do it
+  const ext = (S.current?.source_path || "").split(".").pop().toLowerCase();
+  $("export-video").hidden = !VIDEO_EXT.includes(ext) || !S.snap?.setup.ffmpeg;
   box.hidden = !exportView().language;
   for (const b of box.querySelectorAll("button")) {
     const on = b.dataset.scope === S.scope;
@@ -1247,6 +1252,16 @@ async function exportAs(fmt) {
   $("export-menu").hidden = true;
   try {
     const path = await invoke("export_transcript", { id: S.current.id, format: fmt, stamps: S.stamps, ...exportView() });
+    if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
+  } catch (err) {
+    toast(t("toast.exportFailed", { err }));
+  }
+}
+
+async function exportVideo() {
+  $("export-menu").hidden = true;
+  try {
+    const path = await invoke("export_video", { id: S.current.id, ...exportView() });
     if (path) toast(t("toast.saved", { name: path.split(/[\\/]/).pop() }), { label: t("toast.showFolder"), run: () => invoke("reveal", { path }) });
   } catch (err) {
     toast(t("toast.exportFailed", { err }));
@@ -1463,6 +1478,8 @@ function wire() {
     $("export-menu").hidden = !$("export-menu").hidden;
   };
   for (const b of $("export-menu").querySelectorAll("button[data-fmt]")) b.onclick = () => exportAs(b.dataset.fmt);
+  $("export-video").onclick = exportVideo;
+  listen("video-saving", () => toast(t("toast.videoSaving")));
   for (const b of $("export-scope").querySelectorAll("button")) {
     b.onclick = (ev) => {
       ev.stopPropagation(); // the menu stays open for the format

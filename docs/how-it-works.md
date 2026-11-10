@@ -21,6 +21,7 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
 | `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time. |
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
+| `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 
@@ -64,7 +65,9 @@ own, so a crash in a GPU driver costs a retry on the CPU instead of the whole ap
   (20 for English), two frames between subtitles, gaps under half a second closed, and breaks where a
   sentence or clause ends or the speaker pauses. The model times whole lines, so inside a line the
   words are placed by where the speech and the pauses are (`audio::pauses`, recorded with each line
-  since 1.3), and a translation by the same share of its text.
+  since 1.3), and a translation by the same share of its text. **Video with subtitles** runs ffmpeg with
+  `-c copy`: MP4 and MOV give an MP4 with `mov_text` tracks, anything else an MKV that keeps all its
+  streams. Each track has its ISO 639-2 language and a name, and the first one added is on by default.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 
 ## Where the app keeps things

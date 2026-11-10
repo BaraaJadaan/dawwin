@@ -2,7 +2,7 @@
   "name": "dawwin",
   "private": true,
   "version": "1.2.0",
-  "description": "Local Arabic speech-to-text (Cohere Transcribe Arabic), a Tauri desktop app",
+  "description": "Local speech-to-text, translation and subtitles, Arabic first: a Tauri desktop app",
   "scripts": {
     "tauri": "tauri",
     "engine": "node tools/stage-engine.mjs",

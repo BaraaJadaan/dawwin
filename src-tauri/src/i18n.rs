@@ -95,6 +95,14 @@ static AR: &[(&str, &str)] = &[
     ("the translator exited. Last output:\n{}", "خرج المترجم. آخر ما كتبه:\n{}"),
     ("the translator did not start. Last output:\n{}", "لم يبدأ المترجم. آخر ما كتبه:\n{}"),
     ("Cancelled.", "أُلغي."),
+    // subtitles into a video
+    ("The video is not at {} any more.", "لم يعد الفيديو في {}."),
+    ("That recording is not a video.", "هذا التسجيل ليس فيديو."),
+    ("Adding subtitles to a video needs ffmpeg. Install it (winget install Gyan.FFmpeg), then try again.", "تحتاج إضافة النص إلى الفيديو إلى ffmpeg. ثبّته (winget install Gyan.FFmpeg) ثم أعد المحاولة."),
+    ("Save the video with its subtitles", "حفظ الفيديو مع نصه"),
+    ("Video", "فيديو"),
+    ("Choose another name: the video itself cannot be written over.", "اختر اسمًا آخر: لا يمكن الكتابة فوق الفيديو نفسه."),
+    ("ffmpeg could not add the subtitles: {}", "تعذّر على ffmpeg إضافة النص: {}"),
     // updates
     ("Could not reach GitHub. Check the connection and try again.", "تعذّر الوصول إلى GitHub. تحقّق من الاتصال وحاول مجددًا."),
     ("No version has been published yet.", "لم يُنشر أي إصدار بعد."),

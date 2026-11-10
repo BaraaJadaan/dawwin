@@ -97,11 +97,11 @@ cd "$WORK/src/ffmpeg-$FFMPEG"
   --enable-demuxer=mov,matroska,ogg,mp3,aac,ac3,eac3,dts,dtshd,truehd,wav,w64,flac,amr,asf,avi,flv,mpegts,mpegps,aiff,caf,srt,webvtt,ass \
   --enable-decoder=aac,aac_latm,ac3,eac3,dca,truehd,mlp,mp1,mp2,mp3,mp3float,opus,vorbis,flac,alac,amrnb,amrwb,wmav1,wmav2,wmapro \
   --enable-decoder=pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_u8,pcm_alaw,pcm_mulaw,adpcm_ima_wav,adpcm_ms,gsm_ms \
-  --enable-decoder=srt,subrip,webvtt,mov_text,ass,ssa \
+  --enable-decoder=srt,subrip,webvtt,movtext,ass,ssa \
   --enable-parser=aac,aac_latm,ac3,dca,mlp,mpegaudio,opus,vorbis,flac,h264,hevc,vp9,av1 \
   --enable-bsf=aac_adtstoasc,extract_extradata,h264_mp4toannexb,hevc_mp4toannexb \
-  --enable-encoder=aac,pcm_s16le,pcm_f32le,mov_text,srt,subrip,webvtt,ass \
-  --enable-muxer=mp4,mov,ipod,matroska,webm,srt,webvtt,ass,f32le,wav,adts,null \
+  --enable-encoder=aac,pcm_s16le,pcm_f32le,movtext,srt,subrip,webvtt,ass \
+  --enable-muxer=mp4,mov,ipod,matroska,webm,srt,webvtt,ass,pcm_f32le,wav,adts,null \
   --enable-filter=aresample,aformat,anull,atrim,asetpts,trim,setpts \
   "${EXTRA[@]}" | tee "$WORK/configure.log"
 make -j "$JOBS"

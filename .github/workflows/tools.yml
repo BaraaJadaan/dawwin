@@ -84,8 +84,6 @@ jobs:
           ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libx264 -preset veryfast -c:a ac3 -ac 6 film.mkv
           ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libvpx-vp9 -deadline realtime -b:v 1M -c:a libopus browser.webm
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=300:duration=10" -c:a libopus whatsapp.ogg
-          # a phone video, filmed upright: the picture is stored on its side, with a rotation to show it
-          ffmpeg -loglevel error -f lavfi -i testsrc2=size=640x360:rate=30:duration=5 -f lavfi -i "sine=duration=5" -c:v libx264 -preset veryfast -c:a aac -metadata:s:v:0 rotate=90 phone.mp4
           printf '1\n00:00:01,000 --> 00:00:05,000\nطيب، خلونا نبدأ الاجتماع\n\n2\n00:00:06,000 --> 00:00:10,000\nOkay, let'"'"'s start the meeting\n\n' > subtitles.srt
           ls -l
       - uses: actions/upload-artifact@v4
@@ -126,6 +124,9 @@ jobs:
       - name: Read the sound, save it, add subtitle tracks
         shell: pwsh
         run: |
+          # a phone video, filmed upright: the picture is stored on its side, with a rotation to show it
+          # (made here: the ffmpeg of Ubuntu that made the other samples cannot set one)
+          & "unpacked\tools\ffmpeg-video\ffmpeg.exe" -nostdin -loglevel error -y -display_rotation 90 -i s\meeting.mp4 -t 5 -c copy s\phone.mp4
           foreach ($variant in "audio", "video") {
             $ff = "unpacked\tools\ffmpeg-$variant\ffmpeg.exe"
             Write-Host "== $variant"
@@ -159,7 +160,7 @@ jobs:
           }
           # upright stays upright: the burned phone video is taller than wide
           $info = (& $ff -hide_banner -i burned-phone.mp4 2>&1 | Out-String)
-          if ($info -notmatch "360x640") { Write-Host $info; throw "the phone video lost its rotation" }
+          if ($info -notmatch "720x1280") { Write-Host $info; throw "the phone video lost its rotation" }
           exit 0
       - uses: actions/upload-artifact@v4
         with:

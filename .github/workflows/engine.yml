@@ -91,7 +91,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        model: [milmmt-4b, milmmt-12b]
+        model: [milmmt-1b, milmmt-4b, milmmt-12b]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

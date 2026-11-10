@@ -119,7 +119,7 @@ pub struct Variant {
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 6] = [
+pub const VARIANTS: [Variant; 7] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -187,6 +187,18 @@ pub const VARIANTS: [Variant; 6] = [
         file: "MiLMMT-46-4B-v1.0.Q4_K_M.gguf",
         sha256: "25424cbb5423afaa22b1b53bfb3d8aa116cfd84b5f8dcfa82363bfb3c4221ddf",
         size: 2_489_893_152,
+        prompt: Some(Prompt::MiLMMT),
+    },
+    // the smallest: a third of the 4B's download, for slow connections and older computers
+    Variant {
+        id: "milmmt-1b",
+        family: Family::Translator,
+        label: "MiLMMT-46 1B · Q4",
+        repository: "mradermacher/MiLMMT-46-1B-v1.0-GGUF",
+        revision: "34df5efbe6592773ec168cc7b307728c08623472",
+        file: "MiLMMT-46-1B-v1.0.Q4_K_M.gguf",
+        sha256: "74d38ba75108d455326e9deeaf9ab01bb266dfa665eae9c4aa84e84485d4fdf9",
+        size: 806_057_408,
         prompt: Some(Prompt::MiLMMT),
     },
 ];

@@ -16,7 +16,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `engine/src/main.rs` | `dawwin-engine.exe`: loads one model, talks JSON lines over stdin/stdout. Picks a dedicated GPU first, and falls back on the CPU. `--cpu` keeps the GPU driver out of the process. |
 | `src-tauri/src/engine.rs` | The `Engine` interface, and `EngineProcess`, which runs the engine and notices when it dies. |
 | `src-tauri/src/queue.rs` | The queue, on one engine thread: decode, chunk, transcribe, fix loops, save. |
-| `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when there is one, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise). Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
+| `src-tauri/src/audio.rs` | Decodes any file to 16 kHz mono (ffmpeg when there is one, [symphonia](https://github.com/pdeljanov/Symphonia) otherwise): with ffmpeg, its first sound track on the file's own timeline (`aresample=async=1:first_pts=0`), so sound that starts after the picture keeps its place. Cuts it into chunks of at most 30 s, at the quietest moment of each chunk's last 8 s (20 ms RMS frames smoothed over 200 ms), so words are not split. |
 | `src-tauri/src/models.rs` | The models, their pinned revisions and checksums, which model each language goes to, and the download. |
 | `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
@@ -24,15 +24,17 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
 | `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
-| `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. |
+| `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
+| `src-tauri/src/instance.rs` | One Dawwin per data folder: started again, it brings the open window forward and quits. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 
 ## Details worth knowing
 
 - **GPUs.** Vulkan covers every brand and needs nothing but the graphics driver. The engine uses shared
   backends, so a machine without Vulkan simply has no GPU device, and the CPU code is chosen at run
-  time from `ggml-cpu-*.dll`. If the GPU fails in any way, the app stops using it until it restarts,
-  and runs the same recording again on the CPU.
+  time from `ggml-cpu-*.dll`. If the GPU fails (the engine process dies, or its reply marks the error
+  as the device's), the app stops using it until it restarts, and runs the same recording again on the
+  CPU. Any other error (a broken model file, a missing audio file) fails that job and leaves the GPU in use.
 - **Loops.** The model sometimes repeats itself. transcribe.cpp stops it and returns the text so far,
   which would lose the rest of the chunk, so such a chunk goes back through in two halves. A half that
   still does it gets the repetition cut and a "check this line" mark.
@@ -68,11 +70,17 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   sentence or clause ends or the speaker pauses. The model times whole lines, so inside a line the
   words are placed by where the speech and the pauses are (`audio::pauses`, recorded with each line
   since 1.3), and a translation by the same share of its text. **Video with subtitles** runs ffmpeg with
-  `-c copy`: MP4 and MOV give an MP4 with `mov_text` tracks, anything else an MKV that keeps all its
-  streams. Each track has its ISO 639-2 language and a name, and the first one added is on by default.
+  `-c copy`: MP4 and MOV whose streams an MP4 holds give an MP4 with `mov_text` tracks, a MOV it cannot
+  hold (ProRes, PCM sound) stays a MOV, anything else an MKV that keeps all its streams. Only the tracks
+  added are written as text; the video's own subtitles (PGS, VobSub, styled ASS) are copied as they are.
+  Each track has its ISO 639-2 language and a name, and the first one added is on by default.
   **Burned in**, the subtitles go through libass in Segoe UI (Windows' Arial draws ث before لا as a box),
-  with an outline and a soft shadow, and the picture is encoded again into an MP4: at a quarter above its
-  own bitrate, capped by its size, with the first H.264 encoder that starts (NVIDIA, AMD, Intel, then
+  with an outline and a soft shadow, and `Encoding=-1`, so libass finds each line's direction (without
+  it an Arabic line is laid out from the left: its full stop at the start, the words around an English
+  term swapped). The picture is encoded again into an MP4: at a quarter above its own bitrate (for a
+  picture that states none, as in MKV and WebM, the file's bitrate less its sound's), capped by its
+  size, with no floor but 300 kb/s, which keeps the file about the size of the original, and with the
+  first H.264 encoder that starts (NVIDIA, AMD, Intel, then
   Windows' Media Foundation, which uses any chip or software, then x264 of a full ffmpeg). Sound an MP4
   can hold is copied, the rest becomes AAC. About 5 seconds a minute of 1080p on an RTX 4060 laptop.
 - **Steps.** A job carries the steps chosen on the start page (`queue::Steps`): silences out, sound
@@ -81,20 +89,29 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   one. **Silences**: `audio::speech_spans` keeps everything but the pauses over 0.7 s (silent means near
   the recording's own quietest level, or 35 dB under its loud parts); the model hears only the kept
   parts, and `audio::original_time` takes every time back to the original recording. The sound is
-  saved through ffmpeg (decoded at 48 kHz, cut, encoded as AAC), or as WAV without it.
+  saved through ffmpeg (decoded at 48 kHz, cut, and handed to a second ffmpeg as a WAV stream through
+  `pipe:0`, encoded as AAC), or as WAV without it. Dawwin's own builds have no raw-sample reader and no
+  `fd:` protocol, so a bare `-` as input fails there. A child process whose pipe is still open is killed
+  and let go before the app waits for it.
 - **Tools.** The translator (llama.cpp's official Windows build, the files its server needs) and two
   builds of ffmpeg are not in the installer. `tools.rs` pins each as a `.tar.xz` on a release, with its
   size and SHA-256. It downloads like a model (resumable, checked), then unpacks (xz and tar, plain files
-  at the top level only) into a folder of its own under `%LOCALAPPDATA%\Dawwin\tools`. The first
+  at the top level only, dated when they are unpacked) into a folder of its own under
+  `%LOCALAPPDATA%\Dawwin\tools`. A tool counts as installed only when every file it needs is there
+  (`Tool::files`), and files 1.3.0 unpacked with the date 1970 get today's at start. The first
   translation model brings the translator along. ffmpeg is built by `tools/ffmpeg/build.sh`, LGPL only,
   cross-compiled with mingw: **audio** reads every common format, saves the sound as M4A and adds subtitle
   tracks; **video** adds libass (with FreeType, HarfBuzz and FriBidi, so Arabic is shaped and runs right
   to left), the video decoders and the encoders of NVIDIA, AMD and Windows. The app uses Dawwin's own
   ffmpeg, the larger first, else one on the PATH; burning in takes the video one, or an installed ffmpeg
   that has libass. The **Tools** workflow builds and packs them (`tools/pack.py`), tries them on Windows
-  with the app's own unpacking on files of the kinds people bring, and, run by hand with a tag, puts
-  them on that release.
+  with the app's own unpacking on files of the kinds people bring, runs the app's own sound and video
+  tests on them, and, run by hand with a tag, puts them on that release.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
+- **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event
+  that brings the first window forward, and quits before it touches anything. Leftover audio in the
+  cache is deleted only by the Dawwin that holds the folder. A test run with another `DAWWIN_HOME` runs
+  beside the installed one.
 
 ## Where the app keeps things
 
@@ -125,7 +142,10 @@ npm run build        # the installer and a portable zip land in dist/
 [Vulkan SDK](https://vulkan.lunarg.com)), and for the CPU otherwise. `npm run engine -- --from-ci`
 takes the newest engine GitHub Actions built instead (needs the `gh` command).
 
-`cargo test` in `src-tauri` runs the unit tests. If linking fails with
+`cargo test` in `src-tauri` runs the unit tests. The sound and video tests also run on a full ffmpeg on
+the PATH when there is one, and on Dawwin's own builds when `DAWWIN_TEST_TOOLS_DIR` names a folder laid
+out like the app's tools folder (`ffmpeg-audio\ffmpeg.exe`, `ffmpeg-video\ffmpeg.exe`): a feature that
+worked only with a full ffmpeg has shipped broken before. If linking fails with
 `LNK1104: cannot open file 'msvcrt.lib'`, Rust picked a Visual Studio install without the C++ x64
 libraries: add the "MSVC x64/x86 build tools" component, or build from the `vcvars64.bat` prompt of a
 complete install.

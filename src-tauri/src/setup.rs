@@ -92,12 +92,12 @@ impl Paths {
         for d in [p.cache_dir(), p.logs_dir(), p.history_dir()] {
             std::fs::create_dir_all(&d).with_context(|| format!("cannot create {}", d.display()))?;
         }
-        p.clear_leftover_audio();
         Ok(p)
     }
 
-    /// Audio handed to the engine is deleted after each job; a crash can leave some behind.
-    fn clear_leftover_audio(&self) {
+    /// Audio handed to the engine is deleted after each job; a crash can leave some behind. Only
+    /// the one Dawwin of this data folder may do this (see `instance`): the files may be in use.
+    pub fn clear_leftover_audio(&self) {
         for entry in std::fs::read_dir(self.cache_dir()).into_iter().flatten().flatten() {
             if entry.path().extension().is_some_and(|x| x == "f32") {
                 let _ = std::fs::remove_file(entry.path());

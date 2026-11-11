@@ -219,6 +219,9 @@ pub fn now_ms() -> u64 {
 impl Core {
     pub fn start(app: AppHandle) -> Result<Arc<Core>> {
         let paths = Paths::new()?;
+        // this is the one Dawwin of the data folder (see `instance`): what is left is nobody's
+        paths.clear_leftover_audio();
+        tools::refresh_dates(&paths);
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
         crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));

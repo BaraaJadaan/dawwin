@@ -6,6 +6,7 @@ mod engine;
 mod folder;
 mod history;
 pub mod i18n;
+mod instance;
 mod models;
 mod queue;
 mod setup;
@@ -611,9 +612,25 @@ fn open_log(core: C) {
 }
 
 pub fn run() {
+    // one Dawwin per data folder: started again, it brings the open window forward and quits
+    let guard = match setup::Paths::new().map(|p| instance::claim(&p.local)) {
+        Ok(instance::Start::Second) => return,
+        Ok(instance::Start::First(g)) => Some(g),
+        Err(_) => None,
+    };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .setup(move |app| {
+            if let Some(g) = guard {
+                let handle = app.handle().clone();
+                instance::on_second_start(g, move || {
+                    if let Some(w) = handle.get_webview_window("main") {
+                        let _ = w.unminimize();
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                });
+            }
             let core = Core::start(app.handle().clone())?;
             app.manage(core);
             Ok(())

@@ -26,6 +26,9 @@ pub struct Tool {
     /// The folder it is unpacked into, and the program in it
     pub folder: &'static str,
     pub exe: &'static str,
+    /// Every file it needs to run: it counts as installed only when all are there, so a folder a
+    /// cleaner emptied in part is offered again, not run
+    pub files: &'static [&'static str],
 }
 
 /// The release the tools are files of. A newer version of the app keeps pointing here until a
@@ -39,6 +42,14 @@ pub const TRANSLATOR: Tool = Tool {
     sha256: "f66c4406f39a8eeb37d77b76a9c7ed07055295e2f1266fd06a14f90cd540864f",
     folder: "translate",
     exe: "llama-server.exe",
+    // what the pack holds, but its two license files
+    files: &[
+        "llama-server.exe", "llama-server-impl.dll", "llama-common.dll", "llama.dll", "mtmd.dll", "libomp.dll",
+        "ggml.dll", "ggml-base.dll", "ggml-vulkan.dll", "ggml-cpu-x64.dll", "ggml-cpu-sse42.dll",
+        "ggml-cpu-sandybridge.dll", "ggml-cpu-ivybridge.dll", "ggml-cpu-piledriver.dll", "ggml-cpu-haswell.dll",
+        "ggml-cpu-skylakex.dll", "ggml-cpu-cannonlake.dll", "ggml-cpu-cascadelake.dll", "ggml-cpu-icelake.dll",
+        "ggml-cpu-cooperlake.dll", "ggml-cpu-alderlake.dll", "ggml-cpu-sapphirerapids.dll", "ggml-cpu-zen4.dll",
+    ],
 };
 
 pub const FFMPEG_AUDIO: Tool = Tool {
@@ -48,6 +59,7 @@ pub const FFMPEG_AUDIO: Tool = Tool {
     sha256: "02d8a17aa61f3a09a8a80cdf84f26f65ceebe3f8c08e765190c57b8b25d00379",
     folder: "ffmpeg-audio",
     exe: "ffmpeg.exe",
+    files: &["ffmpeg.exe"],
 };
 
 pub const FFMPEG_VIDEO: Tool = Tool {
@@ -57,6 +69,7 @@ pub const FFMPEG_VIDEO: Tool = Tool {
     sha256: "c60e43a640f7cdf681f6d92574d2d1d15d87d37e924111df591c9d611ff90d59",
     folder: "ffmpeg-video",
     exe: "ffmpeg.exe",
+    files: &["ffmpeg.exe"],
 };
 
 pub const TOOLS: [Tool; 3] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO];
@@ -84,10 +97,27 @@ fn archive(paths: &Paths, t: &Tool) -> PathBuf {
     root(paths).join(t.file)
 }
 
-/// The tool's program, when it is installed.
+/// The tool's program, when it is installed: every file it needs is there.
 pub fn exe(paths: &Paths, t: &Tool) -> Option<PathBuf> {
-    let exe = root(paths).join(t.folder).join(t.exe);
-    exe.is_file().then_some(exe)
+    let dir = root(paths).join(t.folder);
+    t.files.iter().all(|f| dir.join(f).is_file()).then(|| dir.join(t.exe))
+}
+
+/// Tools unpacked by Dawwin 1.3.0 carry the date 1970-01-01, which cleaners and the antivirus take
+/// for junk. Their files get today's date, so they keep working without a new download.
+pub fn refresh_dates(paths: &Paths) {
+    let year_2000 = std::time::UNIX_EPOCH + std::time::Duration::from_secs(946_684_800);
+    let now = std::time::SystemTime::now();
+    for t in TOOLS {
+        for entry in std::fs::read_dir(root(paths).join(t.folder)).into_iter().flatten().flatten() {
+            let old = entry.metadata().and_then(|m| m.modified()).is_ok_and(|m| m < year_2000);
+            if old {
+                if let Ok(f) = std::fs::File::options().write(true).open(entry.path()) {
+                    let _ = f.set_modified(now);
+                }
+            }
+        }
+    }
 }
 
 /// How much of a download that is not finished is there.
@@ -128,6 +158,8 @@ pub fn unpack(archive: &Path, dir: &Path) -> Result<()> {
             let mut parts = path.components().filter(|c| !matches!(c, std::path::Component::CurDir));
             let (Some(std::path::Component::Normal(name)), None) = (parts.next(), parts.next()) else { continue };
             if entry.header().entry_type().is_file() {
+                // dated when unpacked: the packs say 1970, and cleaners delete files that old
+                entry.set_preserve_mtime(false);
                 entry.unpack(fresh.join(name)).with_context(|| format!("{}", path.display()))?;
             }
         }
@@ -207,6 +239,32 @@ mod tests {
         assert_eq!(std::fs::read(into.join("LICENSE.txt")).unwrap(), b"lgpl");
         assert!(!into.join("old.dll").exists(), "what the older version had is gone");
         assert!(!dir.join("ffmpeg-audio.new").exists());
+        // the archive says 1970, as tools/pack.py writes: the files are dated now instead
+        let dated = std::fs::metadata(into.join("ffmpeg.exe")).unwrap().modified().unwrap();
+        assert!(dated > std::time::SystemTime::now() - std::time::Duration::from_secs(3600), "{dated:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tool_missing_a_file_is_not_installed_and_old_dates_are_made_new() {
+        let dir = folder("files");
+        let paths = Paths { local: dir.clone(), roaming: dir.clone() };
+        let t = TRANSLATOR;
+        let into = root(&paths).join(t.folder);
+        std::fs::create_dir_all(&into).unwrap();
+        for f in t.files {
+            std::fs::write(into.join(f), b"x").unwrap();
+        }
+        assert_eq!(exe(&paths, &t), Some(into.join("llama-server.exe")));
+        // what 1.3.0 left: files dated 1970
+        let epoch = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        std::fs::File::options().write(true).open(into.join("ggml.dll")).unwrap().set_modified(epoch).unwrap();
+        refresh_dates(&paths);
+        let dated = std::fs::metadata(into.join("ggml.dll")).unwrap().modified().unwrap();
+        assert!(dated > std::time::SystemTime::now() - std::time::Duration::from_secs(3600), "{dated:?}");
+        // a cleaner took one of its files: not installed, so it is offered again
+        std::fs::remove_file(into.join("ggml-base.dll")).unwrap();
+        assert_eq!(exe(&paths, &t), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

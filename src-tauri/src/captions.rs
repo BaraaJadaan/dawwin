@@ -425,6 +425,7 @@ mod tests {
             device: String::new(),
             model: String::new(),
             partial: false,
+            timed: false,
             segments,
             translations: vec![],
         }

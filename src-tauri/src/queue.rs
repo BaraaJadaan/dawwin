@@ -18,6 +18,7 @@ use crate::folder;
 use crate::history;
 use crate::models::{self, Family};
 use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
+use crate::timing;
 use crate::tools;
 use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
 use crate::translate::TranslatorProcess;
@@ -26,7 +27,7 @@ pub(crate) const MAX_CHUNK_S: f32 = 30.0;
 pub(crate) const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "timing", "translating", "saving_audio", "saving_video"];
 /// Save a translation that is under way at least this often, so closing the app keeps it.
 const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
 
@@ -61,14 +62,14 @@ pub struct JobView {
     /// The files it saved: the sound, the video with subtitles
     pub outputs: Vec<String>,
     /// "translate" for translating a finished transcript, "burn" for burning subtitles into its
-    /// video; empty for transcribing a recording
+    /// video, "timing" for placing its words in time; empty for transcribing a recording
     pub kind: String,
     /// What a translation translates: the transcript's id, and the language it goes into
     pub transcript: Option<String>,
     pub target: Option<String>,
     /// Where a translation runs: "GPU · …" or "CPU"
     pub device: Option<String>,
-    /// queued | decoding | loading | transcribing | translating | done | failed | cancelled
+    /// queued | decoding | loading | transcribing | timing | translating | done | failed | cancelled
     pub status: String,
     pub progress: f64,
     pub eta_s: Option<f64>,
@@ -186,6 +187,8 @@ pub struct Snapshot {
 
 enum Msg {
     Job(String),
+    /// A job someone waits for: it runs before the jobs sent before it that have not started
+    Priority(String),
     Translate(String),
     Probe,
     /// Stop the engine so the next one starts with new settings (another model, GPU or CPU)
@@ -751,6 +754,77 @@ impl Core {
         Ok(id)
     }
 
+    /// Place the words of a finished transcript in time (see `timing`), as a job in the queue:
+    /// before its subtitles are made, for Follow words, and for "Fix the timing". It runs before
+    /// the jobs that wait, since someone waits for it. Its id, or that of the one already at it.
+    pub fn fix_timing(&self, transcript: &str) -> Result<String> {
+        if self.is_live(transcript) {
+            return Err(anyhow!(crate::tr!("This transcript is still being written. Edit it when it is done.")));
+        }
+        let t = history::load(&self.paths.history_dir(), transcript)?;
+        if !Path::new(&t.source_path).is_file() {
+            return Err(anyhow!(crate::tr!("The recording is not at {} any more.", t.source_path)));
+        }
+        if setup::model_for(&self.paths, &self.settings.lock().unwrap(), &t.language).is_none() {
+            return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
+        }
+        let running = self
+            .snapshot()
+            .queue
+            .into_iter()
+            .find(|j| j.kind == "timing" && j.transcript.as_deref() == Some(transcript) && ACTIVE_JOB.contains(&j.status.as_str()));
+        if let Some(j) = running {
+            return Ok(j.id);
+        }
+        self.update(|s| s.queue.retain(|j| !(j.kind == "timing" && j.transcript.as_deref() == Some(transcript))));
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!("{}-{:03}", now_ms(), n % 1000);
+        self.cancels.lock().unwrap().insert(id.clone(), Arc::new(AtomicBool::new(false)));
+        let job = JobView {
+            id: id.clone(),
+            title: t.title.clone(),
+            path: t.source_path.clone(),
+            language: t.language.clone(),
+            kind: "timing".into(),
+            steps: Steps { transcribe: false, ..Default::default() },
+            transcript: Some(transcript.to_string()),
+            status: "queued".into(),
+            duration_s: t.duration_s,
+            ..Default::default()
+        };
+        self.update(|s| {
+            let at = s.queue.iter().position(|j| j.status == "queued").unwrap_or(s.queue.len());
+            s.queue.insert(at, job);
+        });
+        self.send(Msg::Priority(id.clone()));
+        Ok(id)
+    }
+
+    /// Wait for a job to end: its last status.
+    pub fn wait_for(&self, id: &str) -> String {
+        loop {
+            match self.snapshot().queue.into_iter().find(|j| j.id == id).map(|j| j.status) {
+                Some(s) if ACTIVE_JOB.contains(&s.as_str()) => std::thread::sleep(Duration::from_millis(200)),
+                Some(s) => return s,
+                None => return "cancelled".into(),
+            }
+        }
+    }
+
+    /// The transcript, its words placed in time first when they are not and can be: what every
+    /// kind of subtitles is made from. Where that cannot be done (the recording moved, no model,
+    /// stopped), the times stay guesses, and the subtitles allow for that.
+    pub fn timed_transcript(&self, id: &str) -> Result<Transcript> {
+        let t = self.transcript(id)?;
+        if t.timed || self.is_live(id) {
+            return Ok(t);
+        }
+        if let Ok(job) = self.fix_timing(id) {
+            self.wait_for(&job);
+        }
+        self.transcript(id)
+    }
+
     pub fn cancel_all(&self) {
         let ids: Vec<String> = self.snapshot().queue.into_iter().filter(|j| ACTIVE_JOB.contains(&j.status.as_str())).map(|j| j.id).collect();
         for id in ids {
@@ -815,8 +889,19 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     // the speech engine and the translator take turns: both want the GPU's memory
     let mut translator: Option<TranslatorProcess> = None;
     let mut last_used = Instant::now();
+    // what was sent and not done yet: a job someone waits for goes first
+    let mut backlog: std::collections::VecDeque<Msg> = std::collections::VecDeque::new();
     loop {
-        let msg = match rx.recv_timeout(Duration::from_secs(20)) {
+        backlog.extend(rx.try_iter());
+        let next = match backlog.iter().position(|m| matches!(m, Msg::Priority(_))) {
+            Some(k) => backlog.remove(k).map(|m| match m {
+                Msg::Priority(id) => Msg::Job(id),
+                m => m,
+            }),
+            None => backlog.pop_front(),
+        };
+        let msg = match next.map(Ok).unwrap_or_else(|| rx.recv_timeout(Duration::from_secs(20))) {
+            Ok(Msg::Priority(id)) => Msg::Job(id),
             Ok(m) => m,
             Err(RecvTimeoutError::Timeout) => {
                 if last_used.elapsed() > IDLE_UNLOAD {
@@ -919,7 +1004,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 }
                 core.cancels.lock().unwrap().remove(&id);
             }
-            Msg::Job(id) => {
+            Msg::Job(id) | Msg::Priority(id) => {
                 if let Some(t) = translator.take() {
                     t.shutdown();
                 }
@@ -1124,7 +1209,73 @@ fn to_original(mut s: Segment, spans: &[(usize, usize)]) -> Segment {
         p[1] = audio::original_time(spans, p[1] as f64, true) as f32;
         p[2] = audio::original_time(spans, p[2] as f64, false) as f32;
     }
+    for h in s.heard.iter_mut() {
+        h.0 = audio::original_time(spans, h.0 as f64, false) as f32;
+        h.1 = audio::original_time(spans, h.1 as f64, true) as f32;
+    }
+    for w in s.words.iter_mut() {
+        w.1 = audio::original_time(spans, w.1 as f64, false) as f32;
+    }
     s
+}
+
+/// The timing pass over a finished transcript (`Core::fix_timing`): its recording decoded again,
+/// the model of its language loaded, and what was heard in each line saved with it. Lines edited
+/// in the meantime keep their new text, and are matched again.
+fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobView) -> Result<()> {
+    let id = job.id.as_str();
+    let transcript = job.transcript.clone().unwrap_or_default();
+    let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
+    let started = Instant::now();
+    let _awake = KeepAwake::new();
+    core.update_job(id, |j| j.status = "decoding".into());
+    let t = history::load(&core.paths.history_dir(), &transcript)?;
+    let source = PathBuf::from(&t.source_path);
+    if !source.is_file() {
+        return Err(anyhow!(crate::tr!("The recording is not at {} any more.", source.display())));
+    }
+    let Some((_, model)) = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &t.language) else {
+        return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
+    };
+    let w = ensure_engine(core, engine, Some(&model.path))?;
+    w.start_loading()?;
+    let samples = audio::decode(&source, setup::ffmpeg(&core.paths).as_ref(), &cancel)?;
+    core.update_job(id, |j| j.status = "loading".into());
+    let info = w.ensure_loaded()?;
+    show_loaded(core, &info);
+    core.update_job(id, |j| j.status = "timing".into());
+    let audio = Audio { id: id.to_string(), samples };
+    let mut segments = t.segments.clone();
+    let result = timing::pass(w, &audio, &mut segments, &t.language, &cancel, |f| {
+        let spent = started.elapsed().as_secs_f64();
+        core.update_job(id, |j| {
+            j.progress = f;
+            j.elapsed_s = spent;
+            j.eta_s = (f > 0.02).then(|| spent / f * (1.0 - f));
+        });
+    });
+    w.forget(id);
+    result?;
+    let cancelled = cancel.load(Ordering::SeqCst);
+    history::modify(&core.paths.history_dir(), &transcript, |now| {
+        for (s, timed) in now.segments.iter_mut().zip(&segments) {
+            if s.start == timed.start && s.end == timed.end {
+                s.heard = timed.heard.clone();
+                timing::apply(s);
+            }
+        }
+        now.timed = !cancelled;
+    })?;
+    let _ = core.app.emit("history-changed", &transcript);
+    core.update_job(id, |j| {
+        j.status = if cancelled { "cancelled".into() } else { "done".into() };
+        j.eta_s = None;
+        j.elapsed_s = started.elapsed().as_secs_f64();
+        if !cancelled {
+            j.progress = 1.0;
+        }
+    });
+    Ok(())
 }
 
 /// The video a transcript was made from, with its subtitles added as tracks, or burned into the
@@ -1159,6 +1310,9 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
     if job.status != "queued" {
         return Ok(());
+    }
+    if job.kind == "timing" {
+        return run_timing(core, engine, &job);
     }
     let steps = job.steps.clone();
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
@@ -1227,6 +1381,9 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         Some(g) if info.device == "gpu" => format!("GPU · {g}"),
         _ => "CPU".into(),
     };
+    // subtitles will be made: the words are placed in time as the lines come (see `timing`)
+    let folder_subtitles = job.folder && core.settings.lock().unwrap().folder_formats().iter().any(|f| f == "srt" || f == "vtt");
+    let time_words = (steps.video && crate::video::is_video(&source)) || folder_subtitles;
 
     let mut t = Transcript {
         id: id.to_string(),
@@ -1239,6 +1396,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         device,
         model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
         partial: false,
+        timed: false,
         segments: Vec::new(),
         translations: Vec::new(),
     };
@@ -1269,6 +1427,11 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                             break;
                         }
                     };
+                }
+                if time_words && failure.is_none() {
+                    if let Err(e) = timing::pass(w, &audio, &mut lines, &job.language, &cancel, |_| {}) {
+                        failure = Some(e);
+                    }
                 }
                 for s in lines {
                     // the times of the original recording, whatever the model was given
@@ -1318,6 +1481,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let cancelled = cancel.load(Ordering::SeqCst);
     t.elapsed_s = t_start.elapsed().as_secs_f64();
     t.partial = cancelled || failure.is_some();
+    t.timed = time_words && !t.partial;
     let saved = !t.segments.is_empty();
     if saved {
         history::save(&core.paths.history_dir(), &t)?;
@@ -1505,6 +1669,7 @@ mod tests {
             device: String::new(),
             model: String::new(),
             partial: false,
+            timed: false,
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
         };

@@ -291,11 +291,19 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
             if s.text != text {
                 s.text = text;
                 s.edited = true;
-                s.words.clear(); // they no longer fit the text
+                // the old times no longer fit the text: matched again with what was heard, if anything
+                s.words.clear();
+                timing::apply(s);
             }
         }
     })?;
     Ok(())
+}
+
+/// Place the words of a transcript in time again (see `timing`): a job in the queue.
+#[tauri::command]
+fn fix_timing(core: C, id: String) -> R<String> {
+    core.fix_timing(&id).map_err(e)
 }
 
 #[derive(serde::Serialize)]
@@ -404,16 +412,25 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
+    let t = if matches!(ext, "srt" | "vtt") { timed(&core, &id).await? } else { t };
     write_export(&t, ext, stamps, &view, &dest)?;
     Ok(Some(dest.display().to_string()))
 }
 
+/// The transcript with its words placed in time, for subtitles: a timing job first when they are
+/// not (see `Core::timed_transcript`), off the interface's thread.
+async fn timed(core: &Arc<Core>, id: &str) -> R<Transcript> {
+    let (core, id) = (core.clone(), id.to_string());
+    tauri::async_runtime::spawn_blocking(move || core.timed_transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)
+}
+
 /// Export without asking where (the file name decides the format).
 #[tauri::command]
-fn export_to_path(core: C, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
-    let t = core.transcript(&id).map_err(e)?;
+async fn export_to_path(app: AppHandle, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
     let dest = PathBuf::from(&path);
     let ext = dest.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+    let t = if matches!(ext.as_str(), "srt" | "vtt") { timed(&core, &id).await? } else { core.transcript(&id).map_err(e)? };
     write_export(&t, &ext, stamps, &View::parse(view.as_deref(), language.as_deref()), &dest)?;
     Ok(path)
 }
@@ -492,7 +509,7 @@ fn video_job(core: &Core, t: &Transcript, view: Option<&str>, language: Option<&
 #[tauri::command]
 async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let t = core.transcript(&id).map_err(e)?;
+    let t = timed(&core, &id).await?;
     let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
     let (dest, scratch) = (PathBuf::from(&path), core.paths.cache_dir());
     tauri::async_runtime::spawn_blocking(move || video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &scratch))
@@ -506,7 +523,7 @@ async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Op
 async fn export_video(app: AppHandle, id: String, view: Option<String>, language: Option<String>) -> R<Option<String>> {
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
-    let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
+    let (source, _, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
     let ext = video::output_ext(&source);
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
     let names = tracks.iter().map(|x| x.title.clone()).collect::<Vec<_>>().join(", ");
@@ -522,6 +539,8 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
     let dest = if dest.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)) { dest } else { dest.with_extension(ext) };
+    let t = timed(&core, &id).await?;
+    let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
     let _ = app.emit("video-saving", dest.display().to_string());
     let scratch = core.paths.cache_dir();
     let out = dest.clone();
@@ -554,14 +573,16 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?.with_extension("mp4");
+    timed(&core, &id).await?;
     core.burn(&id, &view, dest.clone()).map_err(e)?;
     Ok(Some(dest.display().to_string()))
 }
 
 /// The same, to `path` without asking where: the job's id.
 #[tauri::command]
-fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
+async fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
     let core = app.state::<Arc<Core>>().inner().clone();
+    timed(&core, &id).await?;
     core.burn(&id, &View::parse(view.as_deref(), language.as_deref()), PathBuf::from(path)).map_err(e)
 }
 
@@ -650,6 +671,7 @@ pub fn run() {
             list_history,
             get_transcript,
             update_segment,
+            fix_timing,
             translation_targets,
             translate,
             update_translation,

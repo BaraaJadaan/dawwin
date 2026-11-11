@@ -7,7 +7,7 @@ const listen = T.event.listen;
 const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
-const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"]);
+const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "timing", "translating", "saving_audio", "saving_video"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 const MEDIA_EXT = ["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
 
@@ -32,6 +32,7 @@ const S = {
   scope: store.get("scope", "translation"), // what export and copy take while a translation is shown
   steps: loadSteps(),   // what happens to recordings dropped on the window
   told: new Set(),      // jobs whose saved files were announced
+  timingAsked: new Set(), // transcripts Follow words asked to place in time, once a session
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
@@ -340,6 +341,7 @@ function jobLine(j) {
     case "loading": return t(j.kind === "translate" ? "job.loadingTranslator" : "job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
+    case "timing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "saving_audio": return t("job.savingAudio");
     case "saving_video": return j.steps?.burn ? `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}` : t("job.savingVideo");
     case "done": return t("job.done", { dur: dur(j.elapsed_s) });
@@ -362,7 +364,7 @@ function renderQueue() {
     li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
     // burning the subtitles in takes a while, and says how far it is
     const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
-    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
+    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "timing" ? t("job.timing") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
     const what = doing ? `<div class="sub">${esc(doing)}</div>` : "";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
@@ -371,7 +373,7 @@ function renderQueue() {
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     // a job that only saves the sound has no transcript: it shows the file
-    li.onclick = () => (j.kind === "burn" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
+    li.onclick = () => (j.kind === "burn" || j.kind === "timing" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
       if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
@@ -798,6 +800,7 @@ function renderTranscript() {
   box.scrollTop = same ? keep : 0;
   runSearch(false);
   setupAudio(live);
+  if (S.follow && !live) fixTiming(true);
 }
 
 /** The translation menu: none, the languages it is translated into, then all the others. */
@@ -820,6 +823,23 @@ function paintTranslationMenu() {
   menu.value = S.shown;
   menu.disabled = isLive(cur.id);
   $("btn-retranslate").hidden = !S.shown || !!translateJob(cur.id, S.shown) || !untranslated(cur, S.shown);
+  $("btn-fix-timing").hidden = isLive(cur.id) || !!cur.timed || !cur.segments.length || !!timingJob(cur.id);
+}
+
+/** The job placing the words of transcript `id` in time, while it runs. */
+function timingJob(id) {
+  return S.snap?.queue.find((j) => j.kind === "timing" && j.transcript === id && ACTIVE.has(j.status)) || null;
+}
+
+/** Place the words of the transcript on screen in time (subtitles and Follow words need it).
+ *  `quiet`: asked for by Follow words, so a recording that moved is no reason for a message. */
+async function fixTiming(quiet) {
+  const cur = S.current;
+  if (!cur || cur.timed || isLive(cur.id) || timingJob(cur.id) || !cur.segments.length) return;
+  if (quiet && S.timingAsked.has(cur.id)) return;
+  S.timingAsked.add(cur.id);
+  try { await invoke("fix_timing", { id: cur.id }); } catch (e) { if (!quiet) toast(t("toast.timingFailed", { err: String(e) })); }
+  paintTranslationMenu();
 }
 
 /** Show the transcript's translation into `lang` (or none), and translate it if it has none yet. */
@@ -1582,6 +1602,13 @@ function onState(snap) {
       S.current.duration_s = j.duration_s;
       renderMeta();
     }
+    // its words were placed in time: Follow words uses them from now on
+    const timed = (prev?.queue || []).filter((x) => x.kind === "timing" && x.transcript === S.current.id && ACTIVE.has(x.status))
+      .map((x) => snap.queue.find((y) => y.id === x.id)).filter((y) => !y || !ACTIVE.has(y.status));
+    if (timed.length) {
+      for (const y of timed) if (y?.status === "failed") toast(t("toast.timingFailed", { err: (y.error || t("job.unknown")).split("\n")[0] }));
+      reloadCurrent();
+    }
     // a translation of it ended: what it saved can now be corrected by hand
     const ended = (prev?.queue || []).filter((x) => x.kind === "translate" && x.transcript === S.current.id && ACTIVE.has(x.status))
       .map((x) => snap.queue.find((y) => y.id === x.id)).filter((y) => !y || !ACTIVE.has(y.status));
@@ -1732,7 +1759,7 @@ function wire() {
   $("follow").onchange = () => {
     S.follow = $("follow").checked;
     store.set("follow", S.follow ? "1" : "0");
-    if (S.follow) startFollow(); else clearWordHighlight();
+    if (S.follow) { startFollow(); fixTiming(true); } else clearWordHighlight();
   };
   $("audio").addEventListener("play", startFollow);
   for (const ev of ["wheel", "touchmove", "keydown", "pointerdown"]) {
@@ -1772,6 +1799,7 @@ function wire() {
   $("btn-retranslate").onclick = async () => {
     if (S.current && S.shown && (await startTranslation(S.shown))) paintTranslationMenu();
   };
+  $("btn-fix-timing").onclick = () => fixTiming(false);
 
   const title = $("t-title");
   title.addEventListener("keydown", (ev) => {

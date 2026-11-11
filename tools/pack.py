@@ -1,5 +1,6 @@
 """Pack files into a .tar.xz the way Dawwin's downloads are made (src-tauri/src/tools.rs reads them):
-the files at the top level, sorted, with no owner and no time, and compressed as small as xz goes.
+the files at the top level, sorted, with no owner, dated now (or SOURCE_DATE_EPOCH, to make the same
+pack again), and compressed as small as xz goes.
 
     python tools/pack.py OUT.tar.xz FILE_OR_FOLDER... [--skip NAME]...
 
@@ -10,6 +11,7 @@ import lzma
 import os
 import sys
 import tarfile
+import time
 
 args = sys.argv[1:]
 skip = {args[i + 1] for i, a in enumerate(args) if a == "--skip"}
@@ -34,7 +36,8 @@ with tarfile.open(out, "w:xz", preset=9 | lzma.PRESET_EXTREME, format=tarfile.GN
         info = tar.gettarinfo(files[name], arcname=name)
         info.uid = info.gid = 0
         info.uname = info.gname = ""
-        info.mtime = 0
+        # a real date: files dated 1970 are what cleaners delete (Dawwin dates them anew when it unpacks)
+        info.mtime = int(os.environ.get("SOURCE_DATE_EPOCH") or time.time())
         info.mode = 0o755 if name.endswith((".exe", ".dll")) else 0o644
         with open(files[name], "rb") as fh:
             tar.addfile(info, fh)

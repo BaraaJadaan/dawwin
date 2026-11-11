@@ -1,0 +1,136 @@
+name: Voice bench
+
+# Which voices Dawwin offers for reading aloud (issue 6). Every candidate reads the same Arabic and
+# English passages (tools/bench-voice/texts.json) through audio.cpp's official Windows build, on the
+# runner's processor, a sentence at a time as Dawwin reads. "listen" is a page to compare them by ear,
+# by letter; "key" says which letter is which model, with its size, license, speed and memory.
+# A model that needs a recording to speak like reads from voices VoxCPM 2 made from a description.
+on:
+  workflow_dispatch:
+  # until this file is on main, a push to the 1.7.0 branch is how it starts; that trigger goes before the merge
+  push:
+    branches: [claude/dawwin-1-7-0-e06241]
+    paths:
+      - "tools/bench-voice/**"
+      - ".github/workflows/voice-bench.yml"
+
+env:
+  AUDIOCPP: v0.9.4
+  PYTHONUTF8: "1"
+
+jobs:
+  refs:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet huggingface_hub psutil
+      - name: audio.cpp, the build Dawwin would ship
+        shell: pwsh
+        run: |
+          $base = "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP"
+          curl.exe -sSL --fail --retry 5 -o vk.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-vulkan.zip"
+          Expand-Archive vk.zip acpp
+          $cli = (Get-ChildItem acpp -Recurse -Filter audiocpp_cli.exe | Select-Object -First 1).FullName
+          & $cli --list-devices --json
+          if ($LASTEXITCODE -ne 0) {
+            curl.exe -sSL --fail --retry 5 -o cpu.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-cpu.zip"
+            Expand-Archive cpu.zip acpp-cpu
+            $cli = (Get-ChildItem acpp-cpu -Recurse -Filter audiocpp_cli.exe | Select-Object -First 1).FullName
+          }
+          "CLI=$cli" >> $env:GITHUB_ENV
+      - name: The ready-made voices
+        run: python tools/bench-voice/run.py --make-refs "$env:CLI" models refs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: refs
+          path: refs/*.wav
+
+  bench:
+    needs: refs
+    if: ${{ !cancelled() }}
+    runs-on: windows-2022
+    timeout-minutes: 340
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { candidate: supertonic3-f16, sexes: "m,f" }
+          - { candidate: supertonic3-orig, sexes: "f" }
+          - { candidate: magpie-q8, sexes: "m,f" }
+          - { candidate: phonon-31m-q8, sexes: "m,f" }
+          - { candidate: lfm3-audio-q8, sexes: "m" }
+          - { candidate: lfm3-audio-q8, sexes: "f" }
+          - { candidate: voxcpm2-q8, sexes: "m" }
+          - { candidate: voxcpm2-q8, sexes: "f" }
+          - { candidate: chatterbox-mtl3-q8, sexes: "m" }
+          - { candidate: chatterbox-mtl3-q8, sexes: "f" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet huggingface_hub psutil
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: refs
+          path: refs
+      - name: audio.cpp, the build Dawwin would ship
+        shell: pwsh
+        run: |
+          $base = "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP"
+          curl.exe -sSL --fail --retry 5 -o vk.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-vulkan.zip"
+          Expand-Archive vk.zip acpp
+          $cli = (Get-ChildItem acpp -Recurse -Filter audiocpp_cli.exe | Select-Object -First 1).FullName
+          $list = & $cli --list-devices --json 2>&1 | Out-String
+          $ok = $LASTEXITCODE -eq 0
+          New-Item -ItemType Directory -Force out | Out-Null
+          if ($ok) {
+            "Vulkan build of audio.cpp $env:AUDIOCPP started on a runner without a GPU. Devices: $list" | Out-File -Encoding utf8 out/runtime.txt
+          } else {
+            "Vulkan build of audio.cpp $env:AUDIOCPP did not start on a runner without a GPU (exit $LASTEXITCODE): $list. The CPU build was used." | Out-File -Encoding utf8 out/runtime.txt
+            curl.exe -sSL --fail --retry 5 -o cpu.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-cpu.zip"
+            Expand-Archive cpu.zip acpp-cpu
+            $cli = (Get-ChildItem acpp-cpu -Recurse -Filter audiocpp_cli.exe | Select-Object -First 1).FullName
+          }
+          Get-Content out/runtime.txt
+          (Get-CimInstance Win32_Processor | Select-Object -First 1).Name | Out-File -Append -Encoding utf8 out/runtime.txt
+          "CLI=$cli" >> $env:GITHUB_ENV
+      - name: Speak
+        run: python tools/bench-voice/run.py ${{ matrix.candidate }} "$env:CLI" models out --sexes "${{ matrix.sexes }}" --refs refs --budget-min 300
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: out-${{ matrix.candidate }}-${{ strategy.job-index }}
+          path: |
+            out/**/*.wav
+            out/**/*.jsonl
+            out/**/*.json
+            out/**/log.txt
+            out/runtime.txt
+
+  page:
+    needs: bench
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: out-*
+          path: art
+      - name: The page and the key
+        run: python3 tools/bench-voice/page.py art listen key | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: listen
+          path: listen/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: key
+          path: key/

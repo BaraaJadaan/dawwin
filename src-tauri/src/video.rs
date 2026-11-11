@@ -19,7 +19,7 @@ use anyhow::{bail, Context, Result};
 use crate::setup::no_window;
 
 /// Videos, by extension. The rest of what the app reads is sound only.
-const VIDEO_EXT: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "3gp", "ts", "mts", "m2ts", "mpg", "mpeg"];
+pub const VIDEO_EXT: &[&str] = &["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "3gp", "ts", "mts", "m2ts", "mpg", "mpeg"];
 
 pub fn is_video(path: &Path) -> bool {
     path.extension().and_then(|x| x.to_str()).is_some_and(|x| VIDEO_EXT.contains(&x.to_lowercase().as_str()))

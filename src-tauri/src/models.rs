@@ -18,6 +18,8 @@ const SYNC_EVERY: u64 = 8 * 1024 * 1024;
 /// And at most this much time: on a slow connection those megabytes take minutes.
 const SYNC_AFTER: Duration = Duration::from_secs(10);
 const BUFFER: usize = 256 * 1024;
+/// How often a download starts over because the server sent another file, before it gives up
+const START_OVERS: u64 = 3;
 
 /// What a model is built on. It decides which languages the model is used for. The translator is
 /// the one that is no speech model: the app uses one at a time, whichever of them it is.
@@ -246,9 +248,10 @@ pub fn is_right_to_left(code: &str) -> bool {
     RIGHT_TO_LEFT.contains(&code)
 }
 
-/// The name of a language in English, or the code of one the app does not know.
+/// The name of a language in English, or the code of one the app does not know. A language that is
+/// only translated into ("zh-Hant") has its name from the translation model's list.
 pub fn language_name<'a>(code: &'a str) -> &'a str {
-    LANGUAGES.iter().find(|(c, _)| *c == code).map_or(code, |(_, name)| *name)
+    LANGUAGES.iter().chain(MILMMT_LANGUAGES).find(|(c, _)| *c == code).map_or(code, |(_, name)| *name)
 }
 
 /// The models for a spoken language, the best first.
@@ -284,7 +287,7 @@ pub fn variant_of(path: &Path) -> Option<Variant> {
 }
 
 /// Hugging Face, or the mirror named by HF_ENDPOINT (its usual setting) where it is blocked.
-fn endpoint() -> String {
+pub fn endpoint() -> String {
     std::env::var("HF_ENDPOINT").ok().filter(|e| !e.is_empty()).unwrap_or_else(|| "https://huggingface.co".into()).trim_end_matches('/').to_string()
 }
 
@@ -426,6 +429,7 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
         .tls_connector(std::sync::Arc::new(native_tls::TlsConnector::new()?))
         .build();
     let mut attempt = 0u64;
+    let mut start_overs = 0u64;
     loop {
         if stop.load(Ordering::SeqCst) {
             return Ok(Finished::Paused);
@@ -438,8 +442,21 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
             Fetch::Complete => break,
             Fetch::Stopped => return Ok(Finished::Paused),
             Fetch::StartOver => {
+                // a server that sends another file: from the start again, after a wait, a few times
                 discard(&d.dest);
                 attempt = 0;
+                start_overs += 1;
+                if start_overs > START_OVERS {
+                    bail!(crate::tr!("The server keeps sending a different file. Try again later, or download it by hand."));
+                }
+                let wait_s = if cfg!(test) { 0 } else { 10 * start_overs };
+                on_event(Event::Retrying { wait_s, attempt: start_overs });
+                for _ in 0..wait_s * 5 {
+                    if stop.load(Ordering::SeqCst) {
+                        return Ok(Finished::Paused);
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
             }
             Fetch::Retry => {
                 // what counts is whether it is getting anywhere, not how often it dropped
@@ -626,6 +643,8 @@ mod tests {
         NotFound,
         /// The first answer is a server error
         BusyOnce,
+        /// Always sends a file longer than the one asked for: another file
+        Longer,
     }
 
     struct Server {
@@ -668,6 +687,9 @@ mod tests {
                     (_, Serve::IgnoresRanges) | (None, _) => None,
                     (Some(r), _) => Some(r as usize),
                 };
+                let longer = [&body[..], b"!"].concat();
+                let body = if how == Serve::Longer { &longer } else { &body };
+                let from = if how == Serve::Longer { None } else { from };
                 let part = &body[from.unwrap_or(0).min(body.len())..];
                 let head = match from {
                     Some(r) => format!("HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n", part.len(), r, body.len() - 1, body.len()),
@@ -756,6 +778,25 @@ mod tests {
         assert_eq!(download(&d, &AtomicBool::new(false), &mut |_| {}).unwrap(), Finished::Complete);
         assert_eq!(s.ranges.lock().unwrap()[0], Some(100_000));
         assert_eq!(std::fs::read(&d.dest).unwrap(), body);
+    }
+
+    #[test]
+    fn a_server_that_keeps_sending_another_file_is_given_up_with_a_message() {
+        let (body, dir) = (payload(), folder("longer"));
+        let s = serve(body.clone(), Serve::Longer);
+        let d = job(&s, &dir, &body);
+        let mut waits = 0;
+        let end = crate::setup::within(Duration::from_secs(30), "giving up", move || {
+            download(&d, &AtomicBool::new(false), &mut |e| {
+                if let Event::Retrying { .. } = e {
+                    waits += 1;
+                }
+            })
+            .map(|_| waits)
+        });
+        let err = end.expect_err("it never gets the file it wants");
+        assert!(err.to_string().contains("different file"), "{err:#}");
+        assert_eq!(s.ranges.lock().unwrap().len() as u64, START_OVERS + 1, "a few tries, not for ever");
     }
 
     #[test]
@@ -929,7 +970,9 @@ mod tests {
         assert_eq!(translation_targets().count(), 46);
         for (code, _) in translation_targets() {
             assert!(known_language(code) || code == "zh-Hant", "{code}");
+            assert_ne!(language_name(code), code, "{code} has a name for file names and headings");
         }
+        assert_eq!(language_name("zh-Hant"), "Chinese (Traditional)");
         assert!(can_translate_into("ar") && can_translate_into("da") && can_translate_into("tr"));
         assert!(!can_translate_into("sw"));
         for v in VARIANTS {

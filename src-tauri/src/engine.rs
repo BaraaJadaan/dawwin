@@ -74,6 +74,19 @@ impl std::fmt::Display for EngineFailed {
 }
 impl std::error::Error for EngineFailed {}
 
+/// What a failed reply means. Only out of memory, or an error the engine marks as the device's,
+/// is the engine's fault (and costs the GPU); a broken model file or a missing audio file is not.
+fn reply_error(v: &Value) -> anyhow::Error {
+    let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error").to_string();
+    if v.get("oom").and_then(|o| o.as_bool()) == Some(true) {
+        OutOfMemory(err).into()
+    } else if v.get("device").and_then(|o| o.as_bool()) == Some(true) {
+        EngineFailed(err).into()
+    } else {
+        anyhow!(err)
+    }
+}
+
 /// On audio with no speech the model can write a marker such as "@@@ضوضاء" (noise).
 fn without_markers(text: &str) -> String {
     if !text.contains("@@@") {
@@ -192,11 +205,7 @@ impl EngineProcess {
                     if v.get("ok").and_then(|o| o.as_bool()) == Some(true) {
                         return Ok(v);
                     }
-                    let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error").to_string();
-                    if v.get("oom").and_then(|o| o.as_bool()) == Some(true) {
-                        return Err(OutOfMemory(err).into());
-                    }
-                    return Err(EngineFailed(err).into());
+                    return Err(reply_error(&v));
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     if let Ok(Some(status)) = self.child.try_wait() {
@@ -317,6 +326,15 @@ impl Engine for EngineProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_devices_own_errors_count_against_the_gpu() {
+        let broken = reply_error(&json!({"ok": false, "error": "model load failed: bad GGUF", "oom": false, "device": false}));
+        assert!(!broken.is::<EngineFailed>() && !broken.is::<OutOfMemory>(), "a broken model file is not the GPU's fault");
+        assert!(reply_error(&json!({"ok": false, "error": "backend error: vk", "device": true})).is::<EngineFailed>());
+        assert!(reply_error(&json!({"ok": false, "error": "out of memory", "oom": true})).is::<OutOfMemory>());
+        assert!(!reply_error(&json!({"ok": false, "error": "x"})).is::<EngineFailed>(), "an engine that does not say");
+    }
 
     #[test]
     fn the_noise_marker_is_not_text() {

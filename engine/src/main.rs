@@ -8,7 +8,9 @@
 //! stdout, one JSON object per line. Anything else goes to stderr, which the app keeps as a log.
 //!
 //!   Requests: {"id": 1, "cmd": "probe" | "load" | "transcribe" | "quit", ...}
-//!   Replies:  {"id": 1, "ok": true, ...} or {"id": 1, "ok": false, "error": "...", "oom": false}
+//!   Replies:  {"id": 1, "ok": true, ...} or {"id": 1, "ok": false, "error": "...", "oom": false, "device": false}
+//!             `device`: the compute device failed (the app then stops using the GPU), as opposed
+//!             to the request (a broken model file, a missing audio file).
 //!
 //!   load:       {"model": <.gguf file>} -> where it runs
 //!   transcribe: {"path": <raw little-endian f32, 16 kHz mono>, "ranges": [[start, end], ...],
@@ -226,7 +228,7 @@ fn reply(id: &Value, result: Result<Value, Error>) -> Value {
         }
         Err(e) => {
             log::error!("{e}");
-            json!({ "id": id, "ok": false, "error": e.to_string(), "oom": matches!(e, Error::OutOfMemory(_)) })
+            json!({ "id": id, "ok": false, "error": e.to_string(), "oom": matches!(e, Error::OutOfMemory(_)), "device": matches!(e, Error::Backend(_)) })
         }
     }
 }

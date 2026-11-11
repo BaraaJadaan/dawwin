@@ -43,9 +43,10 @@ fn refresh_setup(core: C) -> Snapshot {
     core.snapshot()
 }
 
+/// Start a download: false when another one runs, and this one did not start.
 #[tauri::command]
-fn download_model(core: C, id: String) {
-    core.inner().download_model(&id);
+fn download_model(core: C, id: String) -> bool {
+    core.inner().download_model(&id)
 }
 
 #[tauri::command]
@@ -98,9 +99,9 @@ async fn choose_download_dir(app: AppHandle) -> R<Snapshot> {
     Ok(core.snapshot())
 }
 
-/// Use a model file the user already has.
+/// Use a model file the user already has. None when the dialog was cancelled.
 #[tauri::command]
-async fn import_model(app: AppHandle) -> R<Snapshot> {
+async fn import_model(app: AppHandle) -> R<Option<Snapshot>> {
     let core = app.state::<Arc<Core>>().inner().clone();
     let Some(file) = app
         .dialog()
@@ -109,11 +110,11 @@ async fn import_model(app: AppHandle) -> R<Snapshot> {
         .add_filter("GGUF", &["gguf"])
         .blocking_pick_file()
     else {
-        return Ok(core.snapshot());
+        return Ok(None);
     };
     let file = file.into_path().map_err(|x| x.to_string())?;
     core.import_model(&file).map_err(e)?;
-    Ok(core.snapshot())
+    Ok(Some(core.snapshot()))
 }
 
 /// The same, for a file or folder dropped on the window.
@@ -129,7 +130,7 @@ fn set_ui_language(app: AppHandle, lang: String) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>();
     core.set_ui_lang(&lang).map_err(e)?;
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.set_title(&crate::tr!("Dawwin · Speech to text"));
+        let _ = w.set_title(&crate::tr!("Dawwin"));
     }
     Ok(core.snapshot())
 }
@@ -157,7 +158,9 @@ fn set_run_on(core: C, value: String) -> R<Snapshot> {
 fn open_url(url: String) -> R<()> {
     // the two sites, and writing to the maker
     let mail = url == "mailto:braajad1@gmail.com" || url.starts_with("mailto:braajad1@gmail.com?");
-    if !url.starts_with("https://huggingface.co/") && !url.starts_with("https://github.com/") && !mail {
+    // the Hugging Face mirror HF_ENDPOINT names, whose pages the "download by hand" links point at
+    let mirror = url.starts_with(&format!("{}/", models::endpoint())) && (url.starts_with("https://") || url.starts_with("http://"));
+    if !url.starts_with("https://huggingface.co/") && !url.starts_with("https://github.com/") && !mail && !mirror {
         return Err("not an allowed link".into());
     }
     std::process::Command::new("explorer.exe").arg(&url).spawn().map_err(|x| x.to_string())?;
@@ -355,7 +358,29 @@ fn rename_transcript(core: C, id: String, title: String) -> R<()> {
 
 #[tauri::command]
 fn delete_transcript(core: C, id: String) -> R<()> {
-    history::delete(&core.paths.history_dir(), &id).map_err(e)
+    history::delete(&core.paths.history_dir(), &id).map_err(e)?;
+    // its playback copy (see `audio_preview`), about 115 MB an hour
+    let _ = std::fs::remove_file(core.paths.cache_dir().join(format!("{id}.wav")));
+    Ok(())
+}
+
+/// The files Dawwin takes, by extension: all of them, the videos among them, and those only
+/// ffmpeg reads (the built-in decoder cannot).
+#[derive(serde::Serialize)]
+struct MediaFormats {
+    all: &'static [&'static str],
+    video: &'static [&'static str],
+    needs_ffmpeg: &'static [&'static str],
+}
+
+#[tauri::command]
+fn media_formats() -> MediaFormats {
+    MediaFormats { all: folder::MEDIA_EXT, video: video::VIDEO_EXT, needs_ffmpeg: folder::NEEDS_FFMPEG }
+}
+
+/// The test hooks that write without asking where exist only in debug builds.
+fn test_hook() -> R<()> {
+    if cfg!(debug_assertions) { Ok(()) } else { Err("not in this build".into()) }
 }
 
 /// The text to copy: the transcript, its translation, or both (`view` "translation" | "both", into `language`).
@@ -411,6 +436,7 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
 /// Export without asking where (the file name decides the format).
 #[tauri::command]
 fn export_to_path(core: C, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
+    test_hook()?;
     let t = core.transcript(&id).map_err(e)?;
     let dest = PathBuf::from(&path);
     let ext = dest.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
@@ -468,6 +494,7 @@ async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<O
 /// The same, to `path` without asking where.
 #[tauri::command]
 async fn export_audio_to_path(app: AppHandle, id: String, path: String, without_silences: bool) -> R<String> {
+    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let ffmpeg = setup::ffmpeg(&core.paths);
@@ -491,6 +518,7 @@ fn video_job(core: &Core, t: &Transcript, view: Option<&str>, language: Option<&
 /// The same, written to `path` without asking where.
 #[tauri::command]
 async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
+    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
@@ -561,6 +589,7 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
 /// The same, to `path` without asking where: the job's id.
 #[tauri::command]
 fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
+    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     core.burn(&id, &View::parse(view.as_deref(), language.as_deref()), PathBuf::from(path)).map_err(e)
 }
@@ -594,16 +623,30 @@ async fn audio_preview(app: AppHandle, id: String) -> R<String> {
     Ok(out.display().to_string())
 }
 
+/// Show a file in its folder, selected, or open a folder. Only paths that exist: anything else
+/// would go to Explorer as it is, past `open_url`'s list.
 #[tauri::command]
 fn reveal(path: String) {
-    let p = PathBuf::from(&path);
+    if let Some(mut cmd) = reveal_command(std::path::Path::new(&path)) {
+        let _ = cmd.spawn();
+    }
+}
+
+fn reveal_command(p: &std::path::Path) -> Option<std::process::Command> {
     let mut cmd = std::process::Command::new("explorer.exe");
     if p.is_file() {
-        cmd.arg(format!("/select,{}", p.display()));
+        // the path in quotes of its own: with the whole argument quoted, which Rust does for one
+        // that holds a space, Explorer opens Documents instead (no Windows path holds a quote)
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::raw_arg(&mut cmd, format!("/select,\"{}\"", p.display()));
+        #[cfg(not(windows))]
+        cmd.arg(p);
+    } else if p.is_dir() {
+        cmd.arg(p);
     } else {
-        cmd.arg(&p);
+        return None;
     }
-    let _ = cmd.spawn();
+    Some(cmd)
 }
 
 #[tauri::command]
@@ -684,7 +727,63 @@ pub fn run() {
             audio_preview,
             reveal,
             open_log,
+            media_formats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What the shell says its open Explorer windows show: each one's folder, and the names selected.
+    #[cfg(windows)]
+    fn explorer_windows() -> Vec<(String, Vec<String>)> {
+        // the selected items, and the focused one: on Windows 11 the shell can report the selection
+        // empty while `/select` has focused (and so selected) the file
+        let script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; foreach ($w in (New-Object -ComObject Shell.Application).Windows()) { try { $f = $w.Document.Folder.Self.Path; $s = @($w.Document.SelectedItems() | ForEach-Object { $_.Name }) + @($w.Document.FocusedItem.Name) -join '|'; Write-Output \"$f`t$s\" } catch {} }";
+        let out = std::process::Command::new("powershell").args(["-NoProfile", "-Command", script]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(f, s)| (f.to_string(), s.split('|').filter(|x| !x.is_empty()).map(String::from).collect()))
+            .collect()
+    }
+
+    /// "Show in folder" opens the folder the file is in, with the file selected, whatever its name
+    /// holds: spaces (every name Dawwin gives a file has one), commas, brackets, Arabic. It opens
+    /// Explorer windows, so it runs by hand: `cargo test show_in_folder -- --ignored`.
+    #[cfg(windows)]
+    #[test]
+    #[ignore]
+    fn show_in_folder_opens_the_files_own_folder_with_it_selected() {
+        let dir = std::env::temp_dir().join(format!("dawwin reveal {}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (k, name) in ["talk (Arabic, burned in).mp4", "اجتماع الفريق (بدون فترات الصمت).m4a", "a,b [1].srt"].into_iter().enumerate() {
+            // a folder each: Explorer would reuse the window of the one before
+            let folder = dir.join(format!("case {k}"));
+            std::fs::create_dir_all(&folder).unwrap();
+            let file = folder.join(name);
+            std::fs::write(&file, b"x").unwrap();
+            reveal_command(&file).unwrap().spawn().unwrap();
+            let want = folder.display().to_string();
+            let mut seen = Vec::new();
+            for _ in 0..40 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                seen = explorer_windows();
+                if seen.iter().any(|(f, s)| f.eq_ignore_ascii_case(&want) && s.iter().any(|x| x == name)) {
+                    break;
+                }
+            }
+            assert!(seen.iter().any(|(f, s)| f.eq_ignore_ascii_case(&want) && s.iter().any(|x| x == name)), "{name}: Explorer shows {seen:?}");
+            // close the window it opened
+            let close = format!("foreach ($w in (New-Object -ComObject Shell.Application).Windows()) {{ try {{ if ($w.Document.Folder.Self.Path -eq '{}') {{ $w.Quit() }} }} catch {{}} }}", want.replace('\'', "''"));
+            let _ = std::process::Command::new("powershell").args(["-NoProfile", "-Command", &close]).status();
+        }
+        assert!(reveal_command(&dir.join("not there.mp4")).is_none(), "only paths that exist");
+        assert!(reveal_command(std::path::Path::new("https://example.com")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

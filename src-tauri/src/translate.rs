@@ -67,6 +67,9 @@ fn choose_device<'a>(devices: &'a [(String, String)], preferred: Option<&str>) -
 fn list_devices(exe: &Path) -> Vec<(String, String)> {
     let mut cmd = Command::new(exe);
     cmd.arg("--list-devices").stdin(Stdio::null());
+    if let Some(dir) = exe.parent() {
+        cmd.current_dir(dir);
+    }
     no_window(&mut cmd);
     match cmd.output() {
         Ok(out) => parse_devices(&(String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr))),
@@ -193,6 +196,10 @@ impl TranslatorProcess {
         // one device; how much of the model fits on it, llama.cpp works out by itself
         cmd.args(["--device", device.as_ref().map_or("none", |(id, _)| id.as_str())]);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // ggml's loader also looks for its libraries in the working folder: only its own
+        if let Some(dir) = exe.parent() {
+            cmd.current_dir(dir);
+        }
         no_window(&mut cmd);
         let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", exe.display()))?;
         end_with_the_app(&child);
@@ -293,18 +300,16 @@ impl TranslatorProcess {
             .send_string(&body.to_string());
         let reply = match reply {
             Ok(r) => r,
+            // the server answered: an error about this line, not the GPU's
             Err(ureq::Error::Status(code, r)) => {
                 let detail = r.into_string().unwrap_or_default();
-                return Err(EngineFailed(format!("translator error {code}: {detail}")).into());
+                return Err(anyhow!("translator error {code}: {detail}"));
             }
-            Err(e) => {
-                let gone = !self.alive();
-                let mut msg = format!("{e}");
-                if gone {
-                    msg = crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12));
-                }
-                return Err(EngineFailed(msg).into());
+            // only a server that died counts against the GPU
+            Err(_) if !self.alive() => {
+                return Err(EngineFailed(crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12))).into());
             }
+            Err(e) => return Err(anyhow!("{e}")),
         };
         let v: Value = serde_json::from_str(&reply.into_string()?)?;
         let out = v.get("content").and_then(Value::as_str).unwrap_or_default().trim().to_string();

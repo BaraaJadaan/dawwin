@@ -528,36 +528,37 @@ mod tests {
         assert!(line(&[], "libx264").contains("-preset faster"));
     }
 
-    /// With an ffmpeg that can burn (Dawwin's video one, or a full one): Arabic and English on the picture.
+    /// With every ffmpeg that can burn (Dawwin's video one, a full one): Arabic with an English word
+    /// and a full stop, and English, on the picture.
     #[test]
     fn a_real_video_gets_subtitles_burned_in() {
-        let ffmpeg = std::env::var_os("DAWWIN_TEST_BURNER").map(PathBuf::from).or_else(|| crate::setup::find_exe("ffmpeg"));
-        let Some(ffmpeg) = ffmpeg.filter(|f| crate::setup::ffmpeg_lists(f, "-filters").iter().any(|x| x == "subtitles")) else { return };
         let dir = std::env::temp_dir().join(format!("dawwin-burn-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let video = dir.join("in.mkv");
-        let made = Command::new(&ffmpeg)
-            .args(["-nostdin", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=4", "-f", "lavfi", "-i", "sine=duration=4"])
-            .args(["-c:v", "mpeg4", "-c:a", "libvorbis"])
-            .arg(&video)
-            .status();
-        if !made.is_ok_and(|s| s.success()) {
-            return; // an ffmpeg without these
+        let made = crate::setup::test_sample(&dir, "in.mkv", &[
+            "-f", "lavfi", "-i", "testsrc=size=320x180:rate=25:duration=4", "-f", "lavfi", "-i", "sine=duration=4", "-c:v", "mpeg4", "-c:a", "libvorbis",
+        ]);
+        let Some(video) = made else { return };
+        let mut burners: Vec<(&str, PathBuf)> = crate::setup::test_ffmpegs();
+        if let Some(b) = std::env::var_os("DAWWIN_TEST_BURNER").map(PathBuf::from) {
+            burners.push(("DAWWIN_TEST_BURNER", b));
         }
-        let srt = "1\n00:00:00,500 --> 00:00:03,000\nثلاثة لاعبين\nThree players\n\n";
-        let dest = dir.join("out.mp4");
-        let mut seen = Vec::new();
-        burn_subtitles(&ffmpeg, &video, srt, &dest, &dir, &AtomicBool::new(false), &mut |f| seen.push(f)).unwrap();
-        assert!(dest.is_file() && !dir.join("out.part.mp4").exists());
-        assert_eq!(seen.last(), Some(&1.0));
-        let p = probe(&ffmpeg, &dest);
-        assert!((p.duration_s - 4.0).abs() < 0.3 && p.pixels == 320 * 180 && p.audio == ["aac"], "{p:?}");
-        assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|f| !f.file_name().to_string_lossy().ends_with(".srt")), "the subtitles file is gone");
+        burners.retain(|(_, f)| crate::setup::ffmpeg_lists(f, "-filters").iter().any(|x| x == "subtitles"));
+        let srt = "1\n00:00:00,500 --> 00:00:03,000\nالعميل طلب إن الـ dashboard يطلع أول شي.\nThree players\n\n";
+        for (name, ffmpeg) in burners {
+            let dest = dir.join(format!("out-{name}.mp4"));
+            let mut seen = Vec::new();
+            burn_subtitles(&ffmpeg, &video, srt, &dest, &dir, &AtomicBool::new(false), &mut |f| seen.push(f)).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert!(dest.is_file() && !dir.join(format!("out-{name}.part.mp4")).exists(), "{name}");
+            assert_eq!(seen.last(), Some(&1.0), "{name}");
+            let p = probe(&ffmpeg, &dest);
+            assert!((p.duration_s - 4.0).abs() < 0.3 && p.pixels == 320 * 180 && p.audio == ["aac"], "{name}: {p:?}");
+            assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|f| !f.file_name().to_string_lossy().ends_with(".srt")), "{name}: the subtitles file is gone");
 
-        let stop = AtomicBool::new(true);
-        let err = burn_subtitles(&ffmpeg, &video, srt, &dir.join("stopped.mp4"), &dir, &stop, &mut |_| {}).unwrap_err();
-        assert!(err.to_string().contains("cancelled") && !dir.join("stopped.mp4").exists() && !dir.join("stopped.part.mp4").exists());
+            let stop = AtomicBool::new(true);
+            let err = burn_subtitles(&ffmpeg, &video, srt, &dir.join("stopped.mp4"), &dir, &stop, &mut |_| {}).unwrap_err();
+            assert!(err.to_string().contains("cancelled") && !dir.join("stopped.mp4").exists() && !dir.join("stopped.part.mp4").exists(), "{name}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

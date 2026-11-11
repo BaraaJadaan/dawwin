@@ -19,6 +19,7 @@ use anyhow::Result;
 
 use crate::audio::SR;
 use crate::engine::{Audio, Engine};
+use crate::script::tokens;
 use crate::transcript::Segment;
 
 #[cfg(test)]
@@ -30,48 +31,6 @@ const MIN_CUT_S: f64 = 0.3;
 const MIN_STRETCH_S: f64 = 1.0;
 /// Sound on each side of a stretch the model hears too, so its first and last words are whole.
 const PAD_S: f64 = 0.15;
-
-/// Scripts written without spaces between words: there, each character counts as a word.
-pub fn unspaced(c: char) -> bool {
-    matches!(c as u32,
-        0x3040..=0x30FF            // Hiragana, Katakana
-        | 0x31F0..=0x31FF          // Katakana extensions
-        | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x2FA1F // Han
-        | 0x0E00..=0x0E7F          // Thai
-        | 0x0E80..=0x0EFF          // Lao
-        | 0x1780..=0x17FF          // Khmer
-        | 0x1000..=0x109F          // Myanmar
-    )
-}
-
-/// The words of a text, as character ranges: what spaces separate, and in scripts without
-/// spaces, each character with the marks and punctuation that belong to it.
-pub fn tokens(text: &str) -> Vec<(usize, usize)> {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i].is_whitespace() {
-            i += 1;
-            continue;
-        }
-        let a = i;
-        if unspaced(chars[i]) {
-            i += 1;
-            // what is not a letter of its own (a closing mark, a full stop) stays with it
-            while i < chars.len() && !chars[i].is_whitespace() && !chars[i].is_alphanumeric() {
-                i += 1;
-            }
-            out.push((a, i));
-            continue;
-        }
-        while i < chars.len() && !chars[i].is_whitespace() && !unspaced(chars[i]) {
-            i += 1;
-        }
-        out.push((a, i));
-    }
-    out
-}
 
 /// A word as it is compared: in lower case, without punctuation, and Arabic without its vowel
 /// marks and with the letters people write either way made one (أ إ آ ا, ى ي, ة ه).

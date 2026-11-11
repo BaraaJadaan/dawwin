@@ -27,9 +27,11 @@ A script without what it needs says so and is skipped.
 | Script | What it checks |
 | --- | --- |
 | `timing.mjs` | Subtitles that follow the speaker: words placed in time while a video with subtitles is made, when subtitles are exported, from "Fix the timing" and for Follow words; edited lines; a recording that moved. |
+| `subtitles.mjs` | Subtitles in Chinese, Japanese, Korean, Thai and Khmer cut to each language's line length; a subtitle track and burned-in subtitles with Dawwin's own ffmpeg; both languages, the translation in whole sentences; exports a player or a spreadsheet would misread. |
 | `lists.mjs` | Long recordings and big folders: a made-up 5,000-line transcript (opening, scrolling, search a key at a time), 300 transcripts in History, a folder of 1,000 recordings, a huge folder stopped, a folder run twice, keyboard access, zoom. |
 
 ```bash
 node tools/e2e/timing.mjs
 node tools/e2e/lists.mjs
+node tools/e2e/subtitles.mjs
 ```

@@ -255,9 +255,39 @@ fn srt(cues: Vec<crate::captions::Cue>) -> String {
 fn vtt(cues: Vec<crate::captions::Cue>) -> String {
     let mut out = String::from("WEBVTT\n\n");
     for c in cues {
-        out.push_str(&format!("{} --> {}\n{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), c.text()));
+        out.push_str(&format!("{} --> {}\n{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), vtt_text(&c.text())));
     }
     out
+}
+
+/// Text as WebVTT shows it: `<` would start a tag, `&` a character name, and `-->` a timing line.
+fn vtt_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// A cell a spreadsheet keeps as text: one that starts with `=`, `+`, `-` or `@` would be taken
+/// for a formula, so it gets an apostrophe in front, which spreadsheets take to mean "text".
+fn text_cell(text: &str) -> String {
+    if text.starts_with(['=', '+', '-', '@']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A quoted CSV cell.
+fn csv_cell(text: &str) -> String {
+    format!("\"{}\"", text_cell(text.trim()).replace('"', "\"\""))
+}
+
+/// A TSV cell, on one line; one that starts with a quote is quoted, or it would be read as quoted.
+fn tsv_cell(text: &str) -> String {
+    let flat = text_cell(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+    if flat.starts_with('"') {
+        format!("\"{}\"", flat.replace('"', "\"\""))
+    } else {
+        flat
+    }
 }
 /// Subtitles timed and broken as professional ones are: see `captions`.
 pub fn to_srt(t: &Transcript) -> String {
@@ -307,18 +337,16 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
         "vtt" => vtt(crate::captions::bilingual_cues(t, tr)).into_bytes(),
         "docx" => to_docx_with(t, Some((&tr.language, &second)), stamps)?,
         "csv" => {
-            let q = |s: &str| s.trim().replace('"', "\"\"");
             let mut out = String::from("\u{feff}start,end,text,translation\r\n");
             for (i, s) in lines() {
-                out.push_str(&format!("{},{},\"{}\",\"{}\"\r\n", secs(s.start), secs(s.end), q(&s.text), q(&second[i])));
+                out.push_str(&format!("{},{},{},{}\r\n", secs(s.start), secs(s.end), csv_cell(&s.text), csv_cell(&second[i])));
             }
             out.into_bytes()
         }
         "tsv" => {
-            let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
             let mut out = String::from("start\tend\ttext\ttranslation\n");
             for (i, s) in lines() {
-                out.push_str(&format!("{}\t{}\t{}\t{}\n", secs(s.start), secs(s.end), flat(&s.text), flat(&second[i])));
+                out.push_str(&format!("{}\t{}\t{}\t{}\n", secs(s.start), secs(s.end), tsv_cell(&s.text), tsv_cell(&second[i])));
             }
             out.into_bytes()
         }
@@ -362,8 +390,7 @@ fn secs(sec: f64) -> String {
 pub fn to_csv(t: &Transcript) -> String {
     let mut out = String::from("\u{feff}start,end,text\r\n");
     for s in visible(t) {
-        let text = s.text.trim().replace('"', "\"\"");
-        out.push_str(&format!("{},{},\"{}\"\r\n", secs(s.start), secs(s.end), text));
+        out.push_str(&format!("{},{},{}\r\n", secs(s.start), secs(s.end), csv_cell(&s.text)));
     }
     out
 }
@@ -371,8 +398,7 @@ pub fn to_csv(t: &Transcript) -> String {
 pub fn to_tsv(t: &Transcript) -> String {
     let mut out = String::from("start\tend\ttext\n");
     for s in visible(t) {
-        let text = s.text.split_whitespace().collect::<Vec<_>>().join(" ");
-        out.push_str(&format!("{}\t{}\t{}\n", secs(s.start), secs(s.end), text));
+        out.push_str(&format!("{}\t{}\t{}\n", secs(s.start), secs(s.end), tsv_cell(&s.text)));
     }
     out
 }
@@ -614,14 +640,14 @@ mod tests {
         assert_eq!(both("txt"), "يعني مثلا بيجيك اخر شيء ثلاث زرار\nI mean, at the end you get three buttons\n\n");
         let srt = both("srt");
         assert!(srt.starts_with("1\n00:00:00,000 --> "), "{srt}");
-        // every subtitle: a part of the line, and under it the part of the translation that goes with it
+        // every subtitle: a part of the line; the translation, one sentence, whole under the one
+        // where the middle of it is said, never cut into pieces
         let cues: Vec<&str> = srt.split("\n\n").filter(|c| !c.is_empty()).collect();
         assert!(cues.len() >= 2, "22 seconds do not fit in one subtitle: {srt}");
-        for c in &cues {
-            assert_eq!(c.lines().count(), 4, "number, time, the line's part, the translation's: {c}");
-        }
-        assert!(cues[0].contains("يعني") && cues[0].contains("I mean"), "{srt}");
-        assert!(cues.last().unwrap().contains("زرار") && cues.last().unwrap().ends_with("buttons"), "{srt}");
+        assert!(cues[0].contains("يعني"), "{srt}");
+        assert!(cues.last().unwrap().contains("زرار"), "{srt}");
+        assert_eq!(cues.iter().filter(|c| c.contains("I mean, at the end you get three buttons")).count(), 1, "{srt}");
+        assert_eq!(cues.iter().filter(|c| c.contains("I mean")).count(), 1, "{srt}");
         assert_eq!(both("csv").lines().nth(1).unwrap(), "0.000,22.000,\"يعني مثلا بيجيك اخر شيء ثلاث زرار\",\"I mean, at the end you get three buttons\"");
         let json: serde_json::Value = serde_json::from_str(&both("json")).unwrap();
         assert_eq!(json["segments"][0]["translation"], "I mean, at the end you get three buttons");
@@ -657,6 +683,23 @@ mod tests {
         assert!(csv.starts_with("\u{feff}start,end,text\r\n"));
         assert_eq!(csv.lines().nth(1).unwrap(), "0.000,22.000,\"قال \"\"نعم\"\", ثم مشى\"");
         assert_eq!(csv.lines().count(), 2);
+    }
+
+    #[test]
+    fn what_players_and_spreadsheets_would_read_as_something_else_comes_out_as_text() {
+        let mut t = sample();
+        t.segments[0].text = "=SUM(A1:A9) <b>bold</b> --> & more".into();
+        let vtt = to_vtt(&t);
+        assert!(vtt.contains("&lt;b&gt;bold&lt;/b&gt;") && vtt.contains("--&gt; &amp; more"), "{vtt}");
+        assert!(vtt.lines().filter(|l| l.contains("-->")).all(|l| l.contains(" --> ") && l.starts_with("00:")), "only timing lines have an arrow: {vtt}");
+        assert_eq!(to_csv(&t).lines().nth(1).unwrap(), "0.000,22.000,\"'=SUM(A1:A9) <b>bold</b> --> & more\"");
+        for lead in ["+", "-", "@"] {
+            t.segments[0].text = format!("{lead}1 تمام");
+            assert!(to_csv(&t).lines().nth(1).unwrap().ends_with(&format!("\"'{lead}1 تمام\"")));
+            assert!(to_tsv(&t).ends_with(&format!("\t'{lead}1 تمام\n")));
+        }
+        t.segments[0].text = "\"نعم\" قالها".into();
+        assert_eq!(to_tsv(&t).lines().nth(1).unwrap(), "0.000\t22.000\t\"\"\"نعم\"\" قالها\"");
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod history;
 pub mod i18n;
 mod models;
 mod queue;
+mod script;
 mod setup;
 mod timing;
 mod tools;

@@ -399,6 +399,7 @@ mod tests {
             partial: false,
             segments,
             translations: vec![],
+            minutes: None,
         }
     }
 

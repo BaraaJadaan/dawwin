@@ -48,6 +48,9 @@ pub struct Transcript {
     /// The transcript in other languages, line by line
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translations: Vec<Translation>,
+    /// Its minutes: summary, decisions, action items (see `minutes`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minutes: Option<crate::minutes::Minutes>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -445,6 +448,18 @@ fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool)
             body.push_str(&format!("<w:p>{ppr}<w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>", xml(text)));
         }
     }
+    docx_package(&body, rtl)
+}
+
+/// One paragraph of a Word document, right to left when `rtl`, in a style of [`docx_package`]'s.
+pub(crate) fn docx_paragraph(text: &str, rtl: bool, style: Option<&str>) -> String {
+    let style = style.map(|s| format!("<w:pStyle w:val=\"{s}\"/>")).unwrap_or_default();
+    let (bidi, rpr) = if rtl { ("<w:bidi/>", "<w:rPr><w:rtl/></w:rPr>") } else { ("", "") };
+    format!("<w:p><w:pPr>{style}{bidi}</w:pPr><w:r>{rpr}<w:t xml:space=\"preserve\">{}</w:t></w:r></w:p>", xml(text))
+}
+
+/// A Word document around `body` (its paragraphs), with the styles Title and Heading1.
+pub(crate) fn docx_package(body: &str, rtl: bool) -> Result<Vec<u8>> {
     let document = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
 <w:document xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:body>{body}\
@@ -459,7 +474,7 @@ fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool)
 <w:style w:type=\"paragraph\" w:default=\"1\" w:styleId=\"Normal\"><w:name w:val=\"Normal\"/></w:style>\
 <w:style w:type=\"paragraph\" w:styleId=\"Title\"><w:name w:val=\"Title\"/><w:basedOn w:val=\"Normal\"/>\
 <w:pPr><w:spacing w:after=\"80\"/></w:pPr><w:rPr><w:b/><w:bCs/><w:sz w:val=\"36\"/><w:szCs w:val=\"36\"/></w:rPr></w:style>\
-</w:styles>";
+<w:style w:type=\"paragraph\" w:styleId=\"Heading1\"><w:name w:val=\"heading 1\"/><w:basedOn w:val=\"Normal\"/>\n<w:pPr><w:keepNext/><w:spacing w:before=\"240\" w:after=\"80\"/></w:pPr><w:rPr><w:b/><w:bCs/><w:sz w:val=\"28\"/><w:szCs w:val=\"28\"/></w:rPr></w:style>\n</w:styles>";
     let content_types = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\
 <Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">\
 <Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\
@@ -547,6 +562,7 @@ mod tests {
                 Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
             ],
             translations: vec![],
+            minutes: None,
         }
     }
 

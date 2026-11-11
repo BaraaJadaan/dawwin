@@ -1,0 +1,60 @@
+{
+  "id": "en-committee",
+  "language": "en",
+  "variety": "English",
+  "kind": "meeting",
+  "speakers": "none",
+  "people": [
+    ["كارول", "carol"],
+    ["سانجاي", "sanjay"],
+    ["ليندا", "linda"],
+    ["بريدجيت", "bridget"],
+    ["أوين", "owen"],
+    ["حامد", "hamid"],
+    ["بيرس", "pearce", "mr pearce"]
+  ],
+  "decisions": [
+    {"text": "The playground fence repair goes to Ashgrove Fencing at £2,750 (old panels removed), not Kellaway's at £3,200 plus extra.", "lines": [16, 19]},
+    {"text": "The winter fair is on Saturday 5 December, 11am to 3pm, in the school hall.", "lines": [30, 31]},
+    {"text": "No bouncy castle at the winter fair (£450 hire plus £180 insurance and two adults needed).", "lines": [39, 41]},
+    {"text": "Raffle tickets cost £2 each or three for £5.", "lines": [46, 47]}
+  ],
+  "actions": [
+    {"who": ["سانجاي", "sanjay"], "what": "book Ashgrove Fencing and pay the £500 deposit", "due": ["friday", "جمعة", "جمعه"], "lines": [20, 21]},
+    {"who": ["ليندا", "linda"], "what": "collect raffle prizes from the high street shops", "due": ["20 november", "november 20", "20th", "20/11", "20 نوفمبر", "20 تشرين", "العشرين"], "lines": [51, 52, 54]},
+    {"who": ["أوين", "owen"], "what": "look into a card reader for the fair", "due": [], "lines": [57, 58, 59]},
+    {"who": ["بريدجيت", "bridget"], "what": "make the posters and the newsletter piece", "due": ["16th", "16 november", "november 16", "16/11", "16 نوفمبر", "16 تشرين", "السادس عشر"], "lines": [63, 64]},
+    {"who": ["كارول", "carol"], "what": "draw up the volunteer rota and send the sign-up sheet to parents", "due": ["wednesday", "الأربعاء", "اربعاء"], "lines": [65, 66]}
+  ],
+  "open_questions": [
+    {"text": "Whether the raffle needs a licence, especially if tickets are sold beforehand.", "lines": [67, 70]},
+    {"text": "Whether the council's playground grant will come through.", "lines": [71, 73]},
+    {"text": "What the fair money will be spent on: library books or the sensory garden (to decide at the next meeting).", "lines": [74, 77]}
+  ],
+  "topics": [
+    {"title": "Account balance", "line": 7},
+    {"title": "Playground fence repair quotes", "line": 10},
+    {"title": "Winter fair date, target and bouncy castle idea", "line": 24},
+    {"title": "Raffle tickets and prizes", "line": 42},
+    {"title": "Posters, newsletter and volunteer rota", "line": 60},
+    {"title": "Raffle licence, council grant and use of the money", "line": 67}
+  ],
+  "facts": [
+    ["4,120", "4120", "٤١٢٠"],
+    ["fence", "سياج", "سور"],
+    ["ashgrove", "2,750", "2750", "٢٧٥٠"],
+    ["winter fair", "fair", "سوق", "معرض", "مهرجان", "بازار"],
+    ["5 december", "december 5", "5th december", "5th of december", "5/12", "5 ديسمبر", "5 كانون"],
+    ["raffle", "يانصيب", "قرعة", "سحب"]
+  ],
+  "traps": [
+    "No speaker labels: owners are only clear from speech. Sanjay is the treasurer (lines 7-8, 20-21); Carol is identified only at lines 65-66.",
+    "Rejected proposal: a bouncy castle at £450 (line 34), rejected over insurance and staffing (lines 39, 41).",
+    "Rejected date: 28 November for the fair (lines 25-26) clashes with the football tournament; the fair is 5 December.",
+    "Reassigned task: raffle prizes first asked of Owen (line 48), who is away; moved to Linda (lines 51-54). The owner is Linda.",
+    "Self-correction: Bridget says 'the eighteenth, no, wait, the sixteenth' (line 63). Posters are due the 16th, not the 18th; the 17th is the newsletter print date, not her deadline.",
+    "Task with no deadline: Owen's card reader, 'no rush on that, whenever you get a chance' (line 59).",
+    "Not a decision: what the money is for, 'let's all have a think about it and decide at the next meeting' (line 77).",
+    "Dates and numbers that are not deadlines or decisions: fence work the week of 21 December (line 15), chasing the council in September (line 72), the £2,000 target is a hope, not an agreed figure (line 32)."
+  ]
+}

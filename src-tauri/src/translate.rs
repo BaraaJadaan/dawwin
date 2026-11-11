@@ -77,6 +77,24 @@ fn list_devices(exe: &Path) -> Vec<(String, String)> {
     }
 }
 
+/// How far a request has come: tokens of the prompt read (of how many), and tokens written.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Progress {
+    pub prompt_done: u64,
+    pub prompt_total: u64,
+    pub written: u64,
+}
+
+/// What a request for JSON gave back: the text, and why it ended ("stop", or "length" when it ran
+/// out of room).
+#[derive(Clone, Debug, Default)]
+pub struct JsonReply {
+    pub content: String,
+    pub finish: String,
+    pub prompt_tokens: u64,
+    pub tokens: u64,
+}
+
 pub struct TranslatorProcess {
     child: Child,
     base: String,
@@ -84,6 +102,8 @@ pub struct TranslatorProcess {
     agent: ureq::Agent,
     /// The model file it holds
     pub model: String,
+    /// How many tokens it has room for
+    pub context: u32,
     /// It kept the GPU out
     pub cpu_only: bool,
     /// The model is loaded and the server answers
@@ -185,14 +205,19 @@ impl TranslatorProcess {
     /// is there; `cpu_only` keeps the GPU out of it. It loads in the background:
     /// [`TranslatorProcess::wait_ready`] waits for it.
     pub fn spawn(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>) -> Result<Self> {
+        // one line at a time, and a line is short: 30 seconds of speech
+        Self::spawn_with(exe, paths, model, cpu_only, gpu, 4096)
+    }
+
+    /// The same, with room for `context` tokens: the minutes read ten minutes of a transcript at once.
+    pub fn spawn_with(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>, context: u32) -> Result<Self> {
         let device = if cpu_only { None } else { choose_device(&list_devices(exe), gpu).cloned() };
         let port = free_port()?;
         let key = random_key();
         let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).min(8);
         let mut cmd = Command::new(exe);
         cmd.args(["--model", model, "--host", "127.0.0.1", "--port", &port.to_string(), "--api-key", &key]);
-        // one line at a time, and a line is short: 30 seconds of speech
-        cmd.args(["--ctx-size", "4096", "--parallel", "1", "--threads", &threads.to_string(), "--no-ui"]);
+        cmd.args(["--ctx-size", &context.to_string(), "--parallel", "1", "--threads", &threads.to_string(), "--no-ui"]);
         // one device; how much of the model fits on it, llama.cpp works out by itself
         cmd.args(["--device", device.as_ref().map_or("none", |(id, _)| id.as_str())]);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -232,6 +257,7 @@ impl TranslatorProcess {
             key,
             agent,
             model: model.to_string(),
+            context,
             cpu_only,
             ready: false,
             placement: Placement { gpu: device.map(|(_, name)| name) },
@@ -316,6 +342,107 @@ impl TranslatorProcess {
         // a model that runs on to the limit repeats itself: keep what came before the loop
         let ran_out = v.get("stop_type").and_then(Value::as_str) == Some("limit");
         Ok(if ran_out { crate::transcript::collapse_loops(&out) } else { out })
+    }
+
+    /// Ask the model, in its own chat format, for JSON held to `schema` (its text, sent as it is so
+    /// that its fields keep their order), greedily and without thinking, as `tools/bench-minutes`
+    /// measured. The answer comes as it is written: `on` hears how far it is. A stop ends the
+    /// server, which is the one way to end a request that is still reading its prompt.
+    pub fn ask_json(&mut self, messages: &Value, schema: &str, max_tokens: u32, stop: &AtomicBool, on: &mut dyn FnMut(Progress)) -> Result<JsonReply> {
+        let mut body = json!({
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": 0,
+            "top_k": 1,
+            "cache_prompt": false,
+            "stream": true,
+            "return_progress": true,
+            "chat_template_kwargs": { "enable_thinking": false },
+        })
+        .to_string();
+        body.pop();
+        body.push_str(&format!(",\"response_format\":{{\"type\":\"json_schema\",\"json_schema\":{{\"name\":\"minutes\",\"schema\":{schema}}}}}}}"));
+        // a slow processor reads a long prompt for minutes before it writes a word
+        let agent = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(5)).timeout_read(Duration::from_secs(45 * 60)).build();
+        let request = agent
+            .post(&format!("{}/v1/chat/completions", self.base))
+            .set("Authorization", &format!("Bearer {}", self.key))
+            .set("Content-Type", "application/json");
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Value, String>>();
+        std::thread::spawn(move || {
+            let reply = match request.send_string(&body) {
+                Ok(r) => r,
+                Err(ureq::Error::Status(code, r)) => {
+                    let _ = tx.send(Err(format!("{code}: {}", r.into_string().unwrap_or_default())));
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(format!("{e}")));
+                    return;
+                }
+            };
+            for line in BufReader::new(reply.into_reader()).lines() {
+                let Ok(line) = line else {
+                    let _ = tx.send(Err("the connection closed".into()));
+                    return;
+                };
+                let Some(data) = line.strip_prefix("data: ") else { continue };
+                if data.trim() == "[DONE]" {
+                    break;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(data) {
+                    if tx.send(Ok(v)).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        let mut reply = JsonReply::default();
+        let mut progress = Progress::default();
+        loop {
+            if stop.load(Ordering::SeqCst) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                return Err(anyhow!(crate::tr!("Cancelled.")));
+            }
+            let chunk = match rx.recv_timeout(Duration::from_millis(250)) {
+                Ok(Ok(chunk)) => chunk,
+                Ok(Err(detail)) => {
+                    if !self.alive() {
+                        return Err(EngineFailed(crate::tr!("the translator exited. Last output:
+{}", self.last_lines(12))).into());
+                    }
+                    return Err(anyhow!("translator error {detail}"));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if !self.alive() {
+                        return Err(EngineFailed(crate::tr!("the translator exited. Last output:
+{}", self.last_lines(12))).into());
+                    }
+                    continue;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+            if let Some(p) = chunk.get("prompt_progress") {
+                progress.prompt_total = p.get("total").and_then(Value::as_u64).unwrap_or(0);
+                progress.prompt_done = p.get("processed").and_then(Value::as_u64).unwrap_or(0);
+                on(progress);
+            }
+            let choice = &chunk["choices"][0];
+            if let Some(text) = choice["delta"]["content"].as_str() {
+                reply.content.push_str(text);
+                progress.written += 1;
+                on(progress);
+            }
+            if let Some(f) = choice["finish_reason"].as_str() {
+                reply.finish = f.to_string();
+            }
+            if let Some(t) = chunk.get("timings") {
+                reply.prompt_tokens = t.get("prompt_n").and_then(Value::as_u64).unwrap_or(0);
+                reply.tokens = t.get("predicted_n").and_then(Value::as_u64).unwrap_or(progress.written);
+            }
+        }
+        Ok(reply)
     }
 
     pub fn shutdown(mut self) {

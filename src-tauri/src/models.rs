@@ -29,10 +29,12 @@ pub enum Family {
     Canary,
     Whisper,
     Translator,
+    /// The models that write minutes, run by the translator's server too
+    Minutes,
 }
 
 impl Family {
-    pub const ALL: [Family; 4] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator];
+    pub const ALL: [Family; 5] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Minutes];
 
     /// What the settings and the interface call it.
     pub fn key(self) -> &'static str {
@@ -41,6 +43,7 @@ impl Family {
             Family::Canary => "canary",
             Family::Whisper => "whisper",
             Family::Translator => "translator",
+            Family::Minutes => "minutes",
         }
     }
 
@@ -60,6 +63,7 @@ impl Family {
             Family::Canary => "NVIDIA Canary",
             Family::Whisper => "OpenAI Whisper",
             Family::Translator => "MiLMMT-46",
+            Family::Minutes => "Minutes model",
         }
     }
 }
@@ -363,8 +367,8 @@ pub fn check_file(path: &Path) -> Result<Family> {
     if !head.starts_with(b"GGUF") {
         bail!(crate::tr!("That is not a model file."));
     }
-    // a translation model is one of ours: its prompt depends on which model it is
-    if let Some(v) = variant_of(path).filter(|v| v.family == Family::Translator) {
+    // a translation or minutes model is one of ours: how it is asked depends on which model it is
+    if let Some(v) = variant_of(path).filter(|v| matches!(v.family, Family::Translator | Family::Minutes)) {
         return Ok(v.family);
     }
     architecture(&head)

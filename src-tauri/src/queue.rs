@@ -22,11 +22,13 @@ use crate::tools;
 use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
 use crate::translate::TranslatorProcess;
 
+mod minutes_job;
+
 const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "writing", "saving_audio", "saving_video"];
 /// Save a translation that is under way at least this often, so closing the app keeps it.
 const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
 
@@ -43,11 +45,13 @@ pub struct Steps {
     pub video: bool,
     /// The video's subtitles burned into the picture, rather than added as tracks
     pub burn: bool,
+    /// Write the minutes after the transcript
+    pub minutes: bool,
 }
 
 impl Default for Steps {
     fn default() -> Self {
-        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false, burn: false }
+        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false, burn: false, minutes: false }
     }
 }
 
@@ -61,7 +65,7 @@ pub struct JobView {
     /// The files it saved: the sound, the video with subtitles
     pub outputs: Vec<String>,
     /// "translate" for translating a finished transcript, "burn" for burning subtitles into its
-    /// video; empty for transcribing a recording
+    /// video, "minutes" for writing its minutes; empty for transcribing a recording
     pub kind: String,
     /// What a translation translates: the transcript's id, and the language it goes into
     pub transcript: Option<String>,
@@ -192,6 +196,7 @@ pub struct Snapshot {
 enum Msg {
     Job(String),
     Translate(String),
+    Minutes(String),
     Probe,
     /// Stop the engine so the next one starts with new settings (another model, GPU or CPU)
     Restart,
@@ -485,7 +490,7 @@ impl Core {
             return false;
         }
         let dest = variant.map(|v| self.settings.lock().unwrap().download_dir(&self.paths).join(v.file));
-        let translator_first = variant.is_some_and(|v| v.family == Family::Translator) && setup::translator_exe(&self.paths).is_none();
+        let translator_first = variant.is_some_and(|v| matches!(v.family, Family::Translator | Family::Minutes)) && setup::translator_exe(&self.paths).is_none();
         let _ = self.change_settings(|s| s.resume_model = Some(id.to_string()));
         self.download_stop.store(false, Ordering::SeqCst);
         let (done, total) = match (tool, variant, &dest) {
@@ -952,6 +957,35 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 }
                 core.cancels.lock().unwrap().remove(&id);
             }
+            Msg::Minutes(id) => {
+                if let Some(e) = engine.take() {
+                    e.shutdown();
+                    core.update(|s| s.engine.state = "off".into());
+                }
+                if let Err(err) = minutes_job::run(&core, &mut translator, &id) {
+                    let on_gpu = translator.as_mut().is_some_and(|t| !t.cpu_only && t.alive());
+                    let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
+                    if err.is::<EngineFailed>() && on_gpu && !cancelled && !core.translator_gpu_failed.swap(true, Ordering::SeqCst) {
+                        // the rest of it again, on the CPU: the notes done are kept
+                        if let Some(t) = translator.take() {
+                            t.shutdown();
+                        }
+                        core.update_job(&id, |j| {
+                            j.status = "queued".into();
+                            j.eta_s = None;
+                        });
+                        core.send(Msg::Minutes(id));
+                        continue;
+                    }
+                    end_in_error(&core, &id, err, cancelled);
+                    if let Some(t) = translator.as_mut() {
+                        if !t.alive() {
+                            translator = None;
+                        }
+                    }
+                }
+                core.cancels.lock().unwrap().remove(&id);
+            }
             Msg::Job(id) => {
                 if let Some(t) = translator.take() {
                     t.shutdown();
@@ -1286,6 +1320,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         partial: false,
         segments: Vec::new(),
         translations: Vec::new(),
+        minutes: None,
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -1395,6 +1430,12 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                 Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
                 Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(e) => next_error = Some(format!("{e:#}")),
+            }
+        }
+        // the minutes, after the translation if there is one: the queue runs them in turn
+        if steps.minutes && !cancel.load(Ordering::SeqCst) {
+            if let Err(e) = core.write_minutes(id, None, job.folder) {
+                next_error = next_error.or(Some(format!("{e:#}")));
             }
         }
     }
@@ -1555,6 +1596,7 @@ mod tests {
             partial: false,
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
+            minutes: None,
         };
         history::save(&dir, &t).unwrap();
         (dir, t)

@@ -1,0 +1,91 @@
+00:02	Rosa	okay, I think that's everyone. uh, Kenji, are you on?
+00:06	Kenji	yeah yeah I'm here, sorry, my headset was doing the thing again.
+00:11	Marcus	the crackly thing?
+00:14	Kenji	the crackly thing. new one's on order.
+00:18	Leila	Rosa, how was the wedding? you were dreading the speeches.
+00:23	Rosa	it was lovely actually, um, very long, a lot of dancing. my feet still hurt.
+00:30	Rosa	anyway. so the main thing today is 3.2, we need to lock the scope and pick a release date.
+00:37	Rosa	marketing keeps asking and I'd like to give them a real answer this week.
+00:43	Marcus	where are we on the board, like how many tickets are still open?
+00:48	Rosa	eleven open. three are bugs, and one of the bugs is the calendar sync one.
+00:55	Rosa	so let's start there because honestly that's the one that worries me.
+01:00	Marcus	yeah so, um, the sync bug. it's a timezone thing.
+01:05	Marcus	when the clinic and the patient are in different timezones the appointment shows up an hour off in the patient's calendar.
+01:13	Kenji	only around daylight saving though, right? I could only reproduce it for the last week of October.
+01:20	Marcus	right, it's when the offset changes between the booking and the appointment. we store the offset at booking time which is just, wrong.
+01:29	Leila	how many clinics actually hit that?
+01:32	Marcus	I counted forty two bookings last month. so not huge, but it's the kind of thing people really notice.
+01:40	Rosa	okay. can you fix it before the freeze?
+01:43	Marcus	I think so. I mean it's mostly a migration plus changing how we, how we read the zone.
+01:50	Marcus	I can have it merged by Thursday.
+01:53	Rosa	great. so Marcus owns the sync fix, merged by Thursday.
+01:58	Kenji	and I'd want, um, I'd really want a feature flag on it. if the migration goes wrong I don't want every clinic's calendar jumping around.
+02:07	Marcus	that's fair, yeah.
+02:10	Rosa	okay so the new sync goes behind a flag. it's off by default when we ship and we turn it on clinic by clinic.
+02:18	Marcus	works for me. I'll put the toggle in the admin panel in the same PR so support can flip it.
+02:25	Leila	okay can I, um, can I bring up dark mode?
+02:29	Leila	it's the most requested thing in the app store reviews and the screens are honestly almost done.
+02:36	Leila	I was thinking we squeeze it into 3.2. it gives marketing something shiny to talk about.
+02:43	Kenji	how almost done is almost done?
+02:46	Leila	the main screens are done. settings and the booking flow still need work, and the charts, the charts are a mess in dark.
+02:55	Kenji	so that's, I mean that's every screen I'd have to retest. twice.
+03:00	Marcus	and the email templates don't support it at all, I don't know if that matters
+03:05	Leila	it doesn't, emails are separate.
+03:08	Rosa	I hear you Leila, I really do, but I don't want a whole new surface to test in the same release as a migration.
+03:16	Rosa	so no, it's not going into 3.2. dark mode goes into 3.3, and it's the first thing we pick up next sprint.
+03:24	Leila	okay. yeah that's fine. that's probably smarter, honestly.
+03:28	Rosa	could you write up what's left on it? like a short spec so we can size it properly.
+03:34	Leila	sure, I'll write the spec. is there a deadline on that?
+03:38	Rosa	no, no deadline, whenever you get to it.
+03:42	Rosa	okay, dates. Kenji, what do you need for the regression run?
+03:47	Kenji	um, the full run is about two days on the device farm. three if the simulators act up like last time.
+03:55	Rosa	so if we freeze on Friday at noon you'd start Monday?
+04:00	Kenji	yeah Monday morning. so I can have it done by Thursday, no, sorry, Wednesday. Wednesday end of day, I'm out Thursday afternoon.
+04:10	Rosa	Wednesday end of day, perfect.
+04:13	Marcus	is Friday noon a hard freeze or like a, you know, a soft one?
+04:17	Rosa	hard. after Friday noon it's blocker fixes only and they go through me.
+04:23	Marcus	okay. fine by me.
+04:26	Rosa	good, so code freeze is Friday at twelve.
+04:30	Rosa	and then the release. I was thinking Thursday the 26th, but that leaves zero room if Kenji finds something.
+04:38	Leila	and then we're fixing stuff on a Friday, which, no.
+04:42	Marcus	what about the Monday after? that gives us Thursday and Friday for fixes.
+04:48	Kenji	Monday works. I'd rather have the buffer.
+04:52	Rosa	okay, let's do that. 3.2 goes out Monday, November 30th.
+04:58	Rosa	next, release notes. Leila, could you take those? you did them last time and they were great.
+05:05	Leila	um, I can, but I'm also on the onboarding fixes and that's, like, a lot of small screens.
+05:14	Rosa	okay, you know what, forget it, I'll do the release notes myself. I'm talking to marketing anyway.
+05:21	Leila	are you sure?
+05:24	Rosa	yeah, it's fine. I'll have them done by Friday.
+05:28	Kenji	does support know about the flag? because Gwen's team gets the angry emails, not us.
+05:34	Rosa	good point. Marcus, can you show Gwen how the toggle works? sometime next week, before we ship.
+05:41	Marcus	sure. I'll grab half an hour with her next week.
+05:46	Leila	oh, and um, does anyone know how long the Android store review is taking right now? last time it was like four days.
+05:54	Marcus	no idea. it was fast in the summer.
+05:58	Kenji	it changes every month honestly.
+06:01	Rosa	hm. if it's four days we'd have to submit before the regression is even done.
+06:07	Rosa	okay, nobody knows. let's leave that one open for now.
+06:11	Kenji	one more thing from me, I'm off from December 4th for two weeks.
+06:17	Rosa	oh right, the trip. Japan?
+06:20	Kenji	yeah, my sister's wedding in Osaka.
+06:25	Marcus	so who's covering QA on call while Kenji's gone? if the flag rollout goes weird in the second week...
+06:33	Rosa	yeah, that's, hm. I don't have an answer for that yet.
+06:37	Marcus	and it can't be me, I'm on backend on call that whole week.
+06:42	Rosa	no, I know. we need to figure that out, but not today.
+06:47	Leila	last thing, can we talk about standups? I was wondering if we could do them async, like in a thread.
+06:55	Marcus	I'd love that honestly. half the time it's just me saying same as yesterday.
+07:01	Kenji	I kind of like seeing faces though. especially with me being away.
+07:06	Rosa	I'm not against it. but I don't want to change anything in the middle of a release.
+07:12	Rosa	let's think about it and talk about it again after 3.2 is out.
+07:17	Leila	fair.
+07:20	Rosa	okay, let me just recap so we're on the same page.
+07:24	Rosa	Marcus, the sync fix behind the flag, merged by Thursday. and showing Gwen the toggle next week.
+07:32	Marcus	yep.
+07:35	Rosa	Kenji, full regression, done Wednesday end of day.
+07:39	Kenji	Wednesday, yes.
+07:42	Rosa	Leila, the dark mode spec, no deadline. and I've got the release notes by Friday.
+07:49	Rosa	freeze is Friday noon, release is Monday the 30th, dark mode is 3.3.
+07:56	Leila	and the store review thing is still open.
+07:59	Rosa	and the on-call cover, yeah. both still open.
+08:04	Rosa	okay, that's it, thanks everyone. Kenji, please get a headset that works.
+08:10	Kenji	ha, it's coming on Thursday.
+08:14	Marcus	bye all.

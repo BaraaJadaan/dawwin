@@ -1,0 +1,58 @@
+{
+  "id": "en-sprint",
+  "language": "en",
+  "variety": "English",
+  "kind": "meeting",
+  "speakers": "named",
+  "people": [
+    ["روزا", "rosa"],
+    ["ماركوس", "marcus"],
+    ["كينجي", "kenji"],
+    ["ليلى", "leila", "layla"],
+    ["غوين", "gwen"]
+  ],
+  "decisions": [
+    {"text": "The new calendar sync logic ships behind a feature flag, off by default, and is turned on clinic by clinic.", "lines": [24]},
+    {"text": "Dark mode does not go into 3.2; it moves to 3.3 and is the first thing picked up next sprint.", "lines": [35, 86]},
+    {"text": "Code freeze is a hard freeze on Friday at noon; after that only blocker fixes, approved by Rosa.", "lines": [46, 48]},
+    {"text": "Version 3.2 is released on Monday, November 30th.", "lines": [53, 86]}
+  ],
+  "actions": [
+    {"who": ["ماركوس", "marcus"], "what": "fix the calendar sync timezone bug behind the feature flag, with an admin toggle", "due": ["thursday", "خميس"], "lines": [20, 21, 81]},
+    {"who": ["كينجي", "kenji"], "what": "run the full regression test", "due": ["wednesday", "الأربعاء", "اربعاء"], "lines": [43, 44, 83]},
+    {"who": ["روزا", "rosa"], "what": "write the release notes", "due": ["friday", "جمعة", "جمعه"], "lines": [56, 58, 85]},
+    {"who": ["ليلى", "leila", "layla"], "what": "write a short spec of the remaining dark mode work", "due": [], "lines": [38, 39, 85]},
+    {"who": ["ماركوس", "marcus"], "what": "show Gwen in support how the flag toggle works", "due": ["next week", "الأسبوع القادم", "الاسبوع القادم", "الأسبوع المقبل", "الاسبوع المقبل"], "lines": [60, 61, 81]}
+  ],
+  "open_questions": [
+    {"text": "How long the Android store review takes right now; if about four days, the build would have to be submitted before regression ends.", "lines": [62, 66]},
+    {"text": "Who covers QA on call while Kenji is away from December 4th.", "lines": [70, 73]},
+    {"text": "Whether to move standups to async; to be revisited after 3.2.", "lines": [74, 78]}
+  ],
+  "topics": [
+    {"title": "3.2 release scope and date", "line": 7},
+    {"title": "Calendar sync timezone bug and feature flag", "line": 11},
+    {"title": "Dark mode request", "line": 26},
+    {"title": "Code freeze, regression testing and release date", "line": 40},
+    {"title": "Release notes, support handover and store review", "line": 54},
+    {"title": "On-call cover during Kenji's leave and async standups", "line": 67}
+  ],
+  "facts": [
+    ["3.2", "٣٫٢"],
+    ["sync", "مزامنة", "timezone", "time zone", "توقيت", "المنطقة الزمنية"],
+    ["flag", "فلاغ", "فلاج", "مفتاح"],
+    ["dark mode", "الوضع الداكن", "الوضع الليلي", "الوضع المظلم", "الوضع الليل"],
+    ["november 30", "30 november", "nov 30", "30th", "30/11", "30 نوفمبر", "30 تشرين"],
+    ["freeze", "تجميد"]
+  ],
+  "traps": [
+    "Rejected proposal: Leila proposes squeezing dark mode into 3.2 (lines 26-28); Rosa rejects it (line 35). Dark mode is in 3.3, not 3.2.",
+    "Rejected date: Rosa floats Thursday the 26th as release day (line 49); it is dropped for Monday November 30th (lines 51-53).",
+    "Reassigned task: release notes are first asked of Leila (line 54), then Rosa takes them herself (line 56). The owner is Rosa.",
+    "Self-correction: Kenji says 'Thursday, no, sorry, Wednesday' (line 43). The regression is due Wednesday, not Thursday.",
+    "Task with no deadline: Leila's dark mode spec, 'no deadline, whenever you get to it' (line 39).",
+    "Not a decision: async standups, 'let's think about it and talk about it again after 3.2' (line 78).",
+    "Dates that are not deadlines: last week of October (line 14), Kenji off from December 4th (line 67), the headset arriving Thursday (line 90).",
+    "Not new actions: the admin toggle (line 25) is part of Marcus's sync fix; Leila's onboarding fixes (line 55) are existing work with no new owner or date."
+  ]
+}

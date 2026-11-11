@@ -1,0 +1,388 @@
+{
+ "lines": [
+  [
+   2.0,
+   "سارة",
+   "طيب يا جماعة نبدأ، أول شي الـ release."
+  ],
+  [
+   9.0,
+   "عمر",
+   "أنا بقترح نأجل الـ launch لـ 15 نيسان."
+  ],
+  [
+   16.0,
+   "سارة",
+   "تمام، متفقين. ورامي بيصلّح الـ login bug قبل الخميس."
+  ],
+  [
+   24.0,
+   "",
+   "مين رح يدفع للـ venue؟ ما حدا بيعرف لسا."
+  ]
+ ],
+ "whole": {
+  "messages": [
+   {
+    "role": "system",
+    "content": "You write minutes from transcripts of recordings. Use only what the transcript says: never add a name, date, number or decision that it does not contain. The transcript comes from speech recognition and may have small mistakes."
+   },
+   {
+    "role": "user",
+    "content": "Transcript, one line each as [line number] time speaker: text.\n\n[1] 00:02 سارة: طيب يا جماعة نبدأ، أول شي الـ release.\n[2] 00:09 عمر: أنا بقترح نأجل الـ launch لـ 15 نيسان.\n[3] 00:16 سارة: تمام، متفقين. ورامي بيصلّح الـ login bug قبل الخميس.\n[4] 00:24 مين رح يدفع للـ venue؟ ما حدا بيعرف لسا.\n\nWrite the minutes of this recording in Arabic. Keep names as the transcript writes them, and words said in another language (often English) as they were said.\n\nFill in the JSON fields:\n- kind: \"meeting\" when people discuss and decide together, \"lecture\" when one person teaches or presents, \"interview\" when one person asks and another answers, \"other\" otherwise.\n- topics: the subjects in the order they come up, each with a short title and the number of the line where it starts.\n- decisions: what was clearly agreed or decided, one sentence each, with the numbers of the lines where it was agreed. Leave out proposals that were turned down or left for later.\n- actions: tasks someone took on: who (the person's name as said, or the speaker; empty if nobody was named), what, due (the deadline as said; empty if none was given), and the numbers of the lines. If a task moved to someone else, give only the last person.\n- open_questions: questions that were raised and not answered, with their lines.\n- summary: two to five sentences for someone who was not there.\nLeave decisions and actions empty unless kind is \"meeting\". Answer with the JSON only."
+   }
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "kind": {
+     "type": "string",
+     "enum": [
+      "meeting",
+      "lecture",
+      "interview",
+      "other"
+     ]
+    },
+    "topics": {
+     "type": "array",
+     "maxItems": 15,
+     "items": {
+      "type": "object",
+      "properties": {
+       "title": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "line": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 4
+       }
+      },
+      "required": [
+       "title",
+       "line"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "decisions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 1,
+         "maximum": 4
+        }
+       }
+      },
+      "required": [
+       "text",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "actions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "who": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "what": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "due": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 1,
+         "maximum": 4
+        }
+       }
+      },
+      "required": [
+       "who",
+       "what",
+       "due",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "open_questions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 1,
+         "maximum": 4
+        }
+       }
+      },
+      "required": [
+       "text",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "summary": {
+     "type": "string",
+     "maxLength": 1500
+    }
+   },
+   "required": [
+    "kind",
+    "topics",
+    "decisions",
+    "actions",
+    "open_questions",
+    "summary"
+   ],
+   "additionalProperties": false
+  }
+ },
+ "part": {
+  "messages": [
+   {
+    "role": "system",
+    "content": "You write minutes from transcripts of recordings. Use only what the transcript says: never add a name, date, number or decision that it does not contain. The transcript comes from speech recognition and may have small mistakes."
+   },
+   {
+    "role": "user",
+    "content": "Transcript, one line each as [line number] time speaker: text. This is part 2 of 3 of a longer recording, from 00:09 to 00:16.\n\n[2] 00:09 عمر: أنا بقترح نأجل الـ launch لـ 15 نيسان.\n[3] 00:16 سارة: تمام، متفقين. ورامي بيصلّح الـ login bug قبل الخميس.\n\nWrite notes on this part in English. Write names in English letters as they sound.\n\nFill in the JSON fields:\n- kind: \"meeting\" when people discuss and decide together, \"lecture\" when one person teaches or presents, \"interview\" when one person asks and another answers, \"other\" otherwise.\n- topics: the subjects in the order they come up, each with a short title and the number of the line where it starts.\n- decisions: what was clearly agreed or decided, one sentence each, with the numbers of the lines where it was agreed. Leave out proposals that were turned down or left for later.\n- actions: tasks someone took on: who (the person's name as said, or the speaker; empty if nobody was named), what, due (the deadline as said; empty if none was given), and the numbers of the lines. If a task moved to someone else, give only the last person.\n- open_questions: questions that were raised and not answered, with their lines.\n- summary: two to five sentences for someone who was not there.\nLeave decisions and actions empty unless kind is \"meeting\". Answer with the JSON only."
+   }
+  ],
+  "schema": {
+   "type": "object",
+   "properties": {
+    "kind": {
+     "type": "string",
+     "enum": [
+      "meeting",
+      "lecture",
+      "interview",
+      "other"
+     ]
+    },
+    "topics": {
+     "type": "array",
+     "maxItems": 15,
+     "items": {
+      "type": "object",
+      "properties": {
+       "title": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "line": {
+        "type": "integer",
+        "minimum": 2,
+        "maximum": 3
+       }
+      },
+      "required": [
+       "title",
+       "line"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "decisions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 2,
+         "maximum": 3
+        }
+       }
+      },
+      "required": [
+       "text",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "actions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "who": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "what": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "due": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 2,
+         "maximum": 3
+        }
+       }
+      },
+      "required": [
+       "who",
+       "what",
+       "due",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "open_questions": {
+     "type": "array",
+     "maxItems": 20,
+     "items": {
+      "type": "object",
+      "properties": {
+       "text": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "lines": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "integer",
+         "minimum": 2,
+         "maximum": 3
+        }
+       }
+      },
+      "required": [
+       "text",
+       "lines"
+      ],
+      "additionalProperties": false
+     }
+    },
+    "summary": {
+     "type": "string",
+     "maxLength": 1500
+    }
+   },
+   "required": [
+    "kind",
+    "topics",
+    "decisions",
+    "actions",
+    "open_questions",
+    "summary"
+   ],
+   "additionalProperties": false
+  }
+ },
+ "notes": [
+  {
+   "kind": "meeting",
+   "topics": [
+    {
+     "title": "الإطلاق",
+     "line": 1
+    }
+   ],
+   "decisions": [],
+   "actions": [],
+   "open_questions": [],
+   "summary": "بدأ الاجتماع."
+  },
+  {
+   "kind": "meeting",
+   "topics": [],
+   "decisions": [
+    {
+     "text": "تأجيل الإطلاق إلى 15 نيسان.",
+     "lines": [
+      2,
+      3
+     ]
+    }
+   ],
+   "actions": [
+    {
+     "who": "رامي",
+     "what": "إصلاح الـ login bug",
+     "due": "الخميس",
+     "lines": [
+      3
+     ]
+    }
+   ],
+   "open_questions": [],
+   "summary": "اتفقوا على الموعد."
+  }
+ ],
+ "combine": {
+  "messages": [
+   {
+    "role": "system",
+    "content": "You write minutes from transcripts of recordings. Use only what the transcript says: never add a name, date, number or decision that it does not contain. The transcript comes from speech recognition and may have small mistakes."
+   },
+   {
+    "role": "user",
+    "content": "Notes on the parts of one recording, in order. Each item gives the numbers of the transcript lines it came from.\n\nPart 1 (00:02 to 00:02), meeting:\nSummary: بدأ الاجتماع.\nTopic [1]: الإطلاق\n\nPart 2 (00:09 to 00:16), meeting:\nSummary: اتفقوا على الموعد.\nDecision [2, 3]: تأجيل الإطلاق إلى 15 نيسان.\nAction [3]: who: رامي; what: إصلاح الـ login bug; due: الخميس\n\nWrite the minutes of the whole recording in Arabic from these notes. Merge items that say the same thing, keep the line numbers the notes give, and where a later part changes something agreed earlier, keep only the final version. Keep names as the transcript writes them, and words said in another language (often English) as they were said.\n\nFill in the JSON fields:\n- kind: \"meeting\" when people discuss and decide together, \"lecture\" when one person teaches or presents, \"interview\" when one person asks and another answers, \"other\" otherwise.\n- topics: the subjects in the order they come up, each with a short title and the number of the line where it starts.\n- decisions: what was clearly agreed or decided, one sentence each, with the numbers of the lines where it was agreed. Leave out proposals that were turned down or left for later.\n- actions: tasks someone took on: who (the person's name as said, or the speaker; empty if nobody was named), what, due (the deadline as said; empty if none was given), and the numbers of the lines. If a task moved to someone else, give only the last person.\n- open_questions: questions that were raised and not answered, with their lines.\n- summary: two to five sentences for someone who was not there.\nLeave decisions and actions empty unless kind is \"meeting\". Answer with the JSON only."
+   }
+  ]
+ }
+}

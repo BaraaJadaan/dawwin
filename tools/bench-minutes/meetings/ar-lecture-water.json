@@ -1,0 +1,34 @@
+{
+  "id": "ar-lecture-water",
+  "language": "ar",
+  "variety": "Modern Standard Arabic with some Levantine dialect and English technical terms",
+  "kind": "lecture",
+  "speakers": "none",
+  "people": [],
+  "decisions": [],
+  "actions": [],
+  "open_questions": [
+    {"text": "هل يمكن استخراج معادن مثل الليثيوم أو المغنيسيوم من الـ brine بشكل مجدٍ اقتصادياً؟ الجواب مؤجل للأسبوع القادم.", "lines": [44, 45]}
+  ],
+  "topics": [
+    {"title": "شح المياه العذبة والحاجة إلى تحلية مياه البحر", "line": 2},
+    {"title": "التحلية الحرارية: MSF و MED", "line": 10},
+    {"title": "التناضح العكسي والأغشية", "line": 16},
+    {"title": "الطاقة والتكلفة", "line": 30},
+    {"title": "الأثر البيئي للـ brine", "line": 35}
+  ],
+  "facts": [
+    ["reverse osmosis", "التناضح العكسي", "تناضح عكسي"],
+    ["membrane", "غشاء", "أغشية", "اغشية"],
+    ["brine", "محلول ملحي", "المحلول الملحي", "شديد الملوحة", "شديدة الملوحة", "رجيع"],
+    ["حراري", "حرارية", "تقطير", "thermal", "distillation", "msf"],
+    ["طاقة", "energy"]
+  ],
+  "traps": [
+    "It is a lecture: there are no decisions and no action items. 'Next week we cover wastewater treatment and reuse' (line 43) is the course plan, not a task.",
+    "Self-correction (line 24): the lecturer says about 50 bar, then corrects it to 55-80 bar depending on salinity. 50 bar is wrong.",
+    "Not a decision (line 42): a possible visit to a desalination plant at the end of the term, explicitly not confirmed.",
+    "A date that is not a deadline (line 34): 'in the eighties' energy use was about double; it is history.",
+    "The student's question (line 44) is in the same empty speaker column; the lecturer defers the answer to next week (line 45), so it stays an open question."
+  ]
+}

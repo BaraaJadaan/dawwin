@@ -7,6 +7,8 @@ mod folder;
 mod history;
 pub mod i18n;
 mod instance;
+mod minutes;
+mod minutes_commands;
 mod models;
 mod queue;
 mod setup;
@@ -717,6 +719,11 @@ pub fn run() {
             delete_transcript,
             transcript_text,
             export_transcript,
+            minutes_commands::write_minutes,
+            minutes_commands::edit_minutes,
+            minutes_commands::minutes_info,
+            minutes_commands::export_minutes,
+            minutes_commands::export_minutes_to_path,
             export_video,
             export_video_to_path,
             export_burned,

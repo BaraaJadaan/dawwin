@@ -109,7 +109,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   tests on them, and, run by hand with a tag, puts them on that release.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 - **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event
-  that brings the first window forward, and quits before it touches anything. Leftover audio in the
+  that brings the first window forward, and quits before it touches the cache, a download or the GPU. Leftover audio in the
   cache is deleted only by the Dawwin that holds the folder. A test run with another `DAWWIN_HOME` runs
   beside the installed one.
 

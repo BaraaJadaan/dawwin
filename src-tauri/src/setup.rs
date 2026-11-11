@@ -334,10 +334,14 @@ pub fn test_ffmpegs() -> Vec<(&'static str, PathBuf)> {
     out
 }
 
-/// For tests: a full ffmpeg on the PATH, which makes sample files Dawwin's own builds cannot.
+/// For tests: a sample file of the kind people bring, made into `dir` with a full ffmpeg on the
+/// PATH and `args` (its inputs and options, before the output). None without a full ffmpeg.
 #[cfg(test)]
-pub fn test_full_ffmpeg() -> Option<PathBuf> {
-    find_exe("ffmpeg").filter(|f| ffmpeg_lists(f, "-filters").iter().any(|x| x == "sine"))
+pub fn test_sample(dir: &Path, name: &str, args: &[&str]) -> Option<PathBuf> {
+    let maker = find_exe("ffmpeg").filter(|f| ffmpeg_lists(f, "-filters").iter().any(|x| x == "sine"))?;
+    let out = dir.join(name);
+    let made = Command::new(maker).args(["-nostdin", "-loglevel", "error", "-y"]).args(args).arg(&out).status();
+    made.is_ok_and(|s| s.success()).then_some(out)
 }
 
 /// For tests: run `f` on a thread of its own, and fail when it takes longer than `limit`: a test

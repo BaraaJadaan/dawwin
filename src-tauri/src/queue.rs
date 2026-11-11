@@ -1150,7 +1150,7 @@ fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::tran
         return Ok(dest);
     }
     let ffmpeg = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Download it in Settings.")))?;
-    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks));
+    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks, crate::video::output_ext(&ffmpeg, &source)));
     crate::video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &core.paths.cache_dir())?;
     Ok(dest)
 }

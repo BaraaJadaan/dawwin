@@ -506,7 +506,7 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
-    let ext = video::output_ext(&source);
+    let ext = video::output_ext(&ffmpeg, &source);
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
     let names = tracks.iter().map(|x| x.title.clone()).collect::<Vec<_>>().join(", ");
     let mut dlg = app

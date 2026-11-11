@@ -836,6 +836,30 @@ mod tests {
         }
     }
 
+    /// A video whose sound starts 2 s after its picture: the samples keep the picture's timeline,
+    /// so every time in the transcript and the subtitles is the picture's time.
+    #[test]
+    fn sound_that_starts_after_the_picture_keeps_its_place() {
+        let dir = temp_dir("late");
+        for name in ["late.mkv", "late.mp4"] {
+            // 6 s of picture, a tone from 2 s to 6 s
+            let made = crate::setup::test_sample(&dir, name, &[
+                "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10:duration=6",
+                "-itsoffset", "2", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "aac",
+            ]);
+            let Some(video) = made else { return };
+            for (ff_name, ff) in crate::setup::test_ffmpegs() {
+                let s = decode(&video, Some(&ff), &AtomicBool::new(false)).unwrap();
+                let secs = s.len() as f32 / SR as f32;
+                assert!((secs - 6.0).abs() < 0.15, "{ff_name}, {name}: {secs} s, not the video's 6");
+                let loudest = |a: f32, b: f32| s[(a * SR as f32) as usize..(b * SR as f32) as usize].iter().fold(0f32, |m, x| m.max(x.abs()));
+                assert!(loudest(0.0, 1.8) < 0.01 && loudest(2.2, 3.0) > 0.1, "{ff_name}, {name}: the tone is not where it is in the video");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// An MKV video (OBS, films) is read by the built-in decoder, without ffmpeg. ffmpeg only makes the file.
     #[test]
     fn an_mkv_is_read_without_ffmpeg() {

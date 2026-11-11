@@ -312,6 +312,45 @@ pub fn find_exe(name: &str) -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(&file)).find(|p| p.is_file())
 }
 
+/// For tests: every ffmpeg a feature must work with. Dawwin's own builds first, from
+/// DAWWIN_TEST_TOOLS_DIR (a folder laid out like the app's tools folder: `ffmpeg-audio\ffmpeg.exe`,
+/// `ffmpeg-video\ffmpeg.exe`), then a full ffmpeg on the PATH. Its own builds lack much of what a
+/// full one has, and bugs that only they show have shipped before.
+#[cfg(test)]
+pub fn test_ffmpegs() -> Vec<(&'static str, PathBuf)> {
+    let mut out = Vec::new();
+    if let Some(dir) = std::env::var_os("DAWWIN_TEST_TOOLS_DIR").map(PathBuf::from) {
+        for t in [tools::FFMPEG_AUDIO, tools::FFMPEG_VIDEO] {
+            let exe = dir.join(t.folder).join(t.exe);
+            if exe.is_file() {
+                out.push((t.id, exe));
+            }
+        }
+        assert!(!out.is_empty(), "DAWWIN_TEST_TOOLS_DIR holds no ffmpeg-audio or ffmpeg-video");
+    }
+    if let Some(ff) = find_exe("ffmpeg") {
+        out.push(("installed", ff));
+    }
+    out
+}
+
+/// For tests: a full ffmpeg on the PATH, which makes sample files Dawwin's own builds cannot.
+#[cfg(test)]
+pub fn test_full_ffmpeg() -> Option<PathBuf> {
+    find_exe("ffmpeg").filter(|f| ffmpeg_lists(f, "-filters").iter().any(|x| x == "sine"))
+}
+
+/// For tests: run `f` on a thread of its own, and fail when it takes longer than `limit`: a test
+/// of something that once hung must not hang itself.
+#[cfg(test)]
+pub fn within<T: Send + 'static>(limit: std::time::Duration, what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).unwrap_or_else(|_| panic!("{what} did not finish within {limit:?}"))
+}
+
 // ---------------------------------------------------------------- model
 
 #[derive(Clone, Debug, Serialize, Default)]

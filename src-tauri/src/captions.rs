@@ -11,6 +11,9 @@
 
 use crate::transcript::{Segment, Transcript, Translation};
 
+/// Measured with the timing bench (`tools/timing`): see `Rules::hold_s`.
+pub(crate) const HOLD_S: f64 = 0.8;
+
 pub struct Rules {
     /// Characters on a line, and lines on the screen
     pub max_line: usize,
@@ -26,6 +29,10 @@ pub struct Rules {
     pub chain_s: f64,
     /// How long one stays up after the speaker stops, when nothing follows at once
     pub linger_s: f64,
+    /// Where the words of a line are only guessed, a subtitle that ends at a pause stays on until
+    /// the speech after it has run this long, so that words the guess put before the pause are
+    /// still on the screen when they are said.
+    pub hold_s: f64,
 }
 
 impl Rules {
@@ -41,6 +48,7 @@ impl Rules {
             gap_s: 2.0 / 24.0,
             chain_s: 0.5,
             linger_s: 0.5,
+            hold_s: HOLD_S,
         }
     }
 
@@ -88,14 +96,14 @@ fn ends_clause(word: &str) -> bool {
     w.ends_with([',', '،', ';', '؛', ':', '—', '–'])
 }
 
-struct Word {
-    text: String,
+pub(crate) struct Word {
+    pub(crate) text: String,
     /// Where it starts and ends in the line's text, as a share of its characters
-    from: f64,
-    to: f64,
+    pub(crate) from: f64,
+    pub(crate) to: f64,
 }
 
-fn words_of(text: &str) -> Vec<Word> {
+pub(crate) fn words_of(text: &str) -> Vec<Word> {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len().max(1) as f64;
     let mut out = Vec::new();
@@ -173,18 +181,22 @@ impl Clock {
     }
 }
 
-/// Where each word of a line is said: (start, end) in seconds. Word times from the model, when an
-/// older transcript has them, are better than any estimate.
-fn word_times(s: &Segment, words: &[Word], from_model: bool) -> Vec<(f64, f64)> {
+/// Where each word of a line is said: (start, end) in seconds. Word times, from the timing pass
+/// or from the model of an older version, are better than any estimate: a word then ends where
+/// the next one starts, or where the speaker stops before it.
+pub(crate) fn word_times(s: &Segment, words: &[Word], from_model: bool) -> Vec<(f64, f64)> {
     let clock = Clock::new(s, words);
     let mut times: Vec<(f64, f64)> = words.iter().map(|w| (clock.at(w.from, true), clock.at(w.to, false))).collect();
     if from_model && s.words.len() == words.len() {
         for (k, (_, t)) in s.words.iter().enumerate() {
             times[k].0 = *t as f64;
         }
+        let speech_end = clock.at(1.0, false);
         for k in 0..times.len() {
-            let next = times.get(k + 1).map_or(clock.at(1.0, false), |n| n.0);
-            times[k].1 = times[k].1.min(next).max(times[k].0);
+            let start = times[k].0;
+            let next = times.get(k + 1).map_or(speech_end.max(start), |n| n.0);
+            let stop = s.pauses.iter().map(|p| p[1] as f64).find(|&a| a > start && a < next).unwrap_or(next);
+            times[k].1 = stop.max(start);
         }
     }
     times
@@ -299,12 +311,25 @@ fn line_cues(s: &Segment, text: &str, from_model: bool, rules: &Rules) -> Vec<(C
         j = i;
     }
     cuts.reverse();
-    cuts.into_iter()
+    let mut out: Vec<(Cue, f64, f64)> = cuts
+        .into_iter()
         .map(|(i, j)| {
             let lines = lines_of(&words[i..j], &times[i..j], rules).unwrap_or_else(|| vec![joined(&words[i..j])]);
             (Cue { start: times[i].0, end: times[j - 1].1, lines }, words[i].from, words[j - 1].to)
         })
-        .collect()
+        .collect();
+    let guessed = !(from_model && s.words.len() == words.len());
+    if guessed && rules.hold_s > 0.0 {
+        for k in 0..out.len().saturating_sub(1) {
+            let next = out[k + 1].0.start;
+            if next - out[k].0.end >= 0.25 {
+                out[k].0.end = next + rules.hold_s;
+                out[k + 1].0.start = out[k].0.end;
+                out[k + 1].0.end = out[k + 1].0.end.max(out[k + 1].0.start);
+            }
+        }
+    }
+    out
 }
 
 /// On and off at the right moments, all together: at least the shortest time on screen, a moment
@@ -341,9 +366,12 @@ fn settle(mut cues: Vec<Cue>, rules: &Rules) -> Vec<Cue> {
 
 /// The transcript's subtitles.
 pub fn cues(t: &Transcript) -> Vec<Cue> {
-    let rules = Rules::for_language(&t.language);
-    let all = t.segments.iter().flat_map(|s| line_cues(s, &s.text, true, &rules).into_iter().map(|(c, _, _)| c)).collect();
-    settle(all, &rules)
+    cues_with(t, &Rules::for_language(&t.language))
+}
+
+pub(crate) fn cues_with(t: &Transcript, rules: &Rules) -> Vec<Cue> {
+    let all = t.segments.iter().flat_map(|s| line_cues(s, &s.text, true, rules).into_iter().map(|(c, _, _)| c)).collect();
+    settle(all, rules)
 }
 
 /// Subtitles in both languages: the transcript's, each with the part of the translation that
@@ -382,7 +410,7 @@ mod tests {
     use super::*;
 
     fn seg(start: f64, end: f64, text: &str, voice: Vec<f32>, pauses: Vec<[f32; 3]>) -> Segment {
-        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses }
+        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses, heard: vec![] }
     }
 
     fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {
@@ -413,14 +441,36 @@ mod tests {
         )
     }
 
+    /// The same, with the time of each word (from the timing pass): three before the pause, the
+    /// rest after it.
+    fn greeting_timed() -> Segment {
+        let mut s = greeting();
+        let toks = crate::timing::tokens(&s.text);
+        s.words = toks
+            .iter()
+            .enumerate()
+            .map(|(k, &(a, _))| (a as u32, if k < 3 { 1.0 + 0.5 * k as f32 } else { 3.4 + 0.5 * (k - 3) as f32 }))
+            .collect();
+        s
+    }
+
     #[test]
     fn a_subtitle_ends_where_the_speaker_stops() {
-        let c = cues(&transcript("en", vec![greeting()]));
+        let c = cues(&transcript("en", vec![greeting_timed()]));
         assert_eq!(c[0].text(), "Good morning everyone.", "{c:?}");
         assert!((c[0].start - 1.0).abs() < 0.01, "on when the speech starts: {}", c[0].start);
         assert!(c[0].end > 2.6 && c[0].end <= 3.0, "off a moment after the speaker stops at 2.6 s: {}", c[0].end);
         assert!((c[1].start - 3.4).abs() < 0.05, "the next on when the speaker starts again: {}", c[1].start);
         assert!(c[1].start - c[0].end >= 0.5 - 1e-9, "no flash of a gap between them: {c:?}");
+        assert!(c[1].text().starts_with("Today"));
+    }
+
+    #[test]
+    fn a_guessed_subtitle_stays_into_the_speech_after_the_pause() {
+        let c = cues(&transcript("en", vec![greeting()]));
+        assert_eq!(c[0].text(), "Good morning everyone.", "{c:?}");
+        assert!((c[0].end - (3.4 + HOLD_S)).abs() < 0.05, "still there for words the guess put early: {c:?}");
+        assert!(c[1].start >= c[0].end, "{c:?}");
         assert!(c[1].text().starts_with("Today"));
     }
 
@@ -460,7 +510,7 @@ mod tests {
         let en = t.translated("en").unwrap();
         let c = cues(&en);
         assert_eq!(c[0].text(), "Good morning everyone.", "{c:?}");
-        assert!((c[1].start - 3.4).abs() < 0.05, "{c:?}");
+        assert!((c[1].start - (3.4 + HOLD_S)).abs() < 0.1, "a translation's times are a guess: {c:?}");
         let both = bilingual_cues(&t, t.translation("en").unwrap());
         assert_eq!(both[0].lines, ["صباح الخير جميعًا.", "Good morning everyone."], "{both:?}");
     }

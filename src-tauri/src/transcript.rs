@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Segment {
     /// seconds from the start of the recording
     pub start: f64,
@@ -25,6 +25,10 @@ pub struct Segment {
     /// Where the speaker stops in the line (see `audio::pauses`), for subtitles that end when they do
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pauses: Vec<[f32; 3]>,
+    /// What the timing pass heard in each stretch of the line between two pauses: (speech starts,
+    /// speech ends, rough text). Only used to place the words in time (see `timing`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heard: Vec<(f32, f32, String)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -96,8 +100,17 @@ impl Transcript {
         t.model = tr.model.clone();
         t.translations.clear();
         for (i, s) in t.segments.iter_mut().enumerate() {
+            // with the words of the line timed, a pause is known to fall after that share of its
+            // text: the translation places it after the same share of its own
+            let len = s.text.chars().count().max(1) as f32;
+            for p in s.pauses.iter_mut() {
+                if let Some(w) = s.words.iter().find(|w| w.1 >= p[2] - 0.05) {
+                    p[0] = w.0 as f32 / len;
+                }
+            }
             s.text = tr.text(i).to_string();
             s.words.clear();
+            s.heard.clear();
             s.flag = None;
         }
         Some(t)
@@ -543,8 +556,8 @@ mod tests {
             model: "m".into(),
             partial: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },
             ],
             translations: vec![],
         }

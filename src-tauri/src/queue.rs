@@ -22,8 +22,8 @@ use crate::tools;
 use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
 use crate::translate::TranslatorProcess;
 
-const MAX_CHUNK_S: f32 = 30.0;
-const SEARCH_S: f32 = 8.0;
+pub(crate) const MAX_CHUNK_S: f32 = 30.0;
+pub(crate) const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
@@ -1379,7 +1379,7 @@ fn show_loaded(core: &Arc<Core>, info: &EngineInfo) {
 /// The model sometimes repeats itself, or stops because of it, and the rest of the audio goes
 /// unread. Transcribe such a chunk again in two halves; a half that still does it gets the
 /// repetition cut and a "repeat" flag.
-fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Recognized, lang: &str, depth: u32) -> Result<Vec<Segment>> {
+pub(crate) fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Recognized, lang: &str, depth: u32) -> Result<Vec<Segment>> {
     let seg = |a: usize, b: usize, text: String, flag: Option<&str>| Segment {
         start: a as f64 / SR as f64,
         end: b as f64 / SR as f64,
@@ -1389,6 +1389,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Rec
         voice: audio::voice_profile(&audio.samples, a, b, 20),
         words: Vec::new(),
         pauses: audio::pauses(&audio.samples, a, b),
+        heard: Vec::new(),
     };
     if !got.stopped && find_loop(&got.text).is_none() {
         return Ok(vec![seg(a, b, got.text, None)]);
@@ -1486,7 +1487,7 @@ mod tests {
     }
 
     fn line(text: &str) -> Segment {
-        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] }
+        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] }
     }
 
     fn saved_transcript(name: &str, lines: &[&str]) -> (PathBuf, Transcript) {

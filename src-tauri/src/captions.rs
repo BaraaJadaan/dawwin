@@ -54,6 +54,8 @@ pub struct Cue {
     pub start: f64,
     pub end: f64,
     pub lines: Vec<String>,
+    /// Who says it, when the speakers were told apart
+    pub speaker: Option<u32>,
 }
 
 impl Cue {
@@ -302,7 +304,7 @@ fn line_cues(s: &Segment, text: &str, from_model: bool, rules: &Rules) -> Vec<(C
     cuts.into_iter()
         .map(|(i, j)| {
             let lines = lines_of(&words[i..j], &times[i..j], rules).unwrap_or_else(|| vec![joined(&words[i..j])]);
-            (Cue { start: times[i].0, end: times[j - 1].1, lines }, words[i].from, words[j - 1].to)
+            (Cue { start: times[i].0, end: times[j - 1].1, lines, speaker: s.speaker }, words[i].from, words[j - 1].to)
         })
         .collect()
 }
@@ -382,7 +384,7 @@ mod tests {
     use super::*;
 
     fn seg(start: f64, end: f64, text: &str, voice: Vec<f32>, pauses: Vec<[f32; 3]>) -> Segment {
-        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses }
+        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses, speaker: None }
     }
 
     fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {
@@ -399,6 +401,8 @@ mod tests {
             partial: false,
             segments,
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         }
     }
 
@@ -475,7 +479,7 @@ mod tests {
     #[test]
     fn timing_follows_the_rules_between_subtitles() {
         let rules = Rules::for_language("en");
-        let cue = |start: f64, end: f64| Cue { start, end, lines: vec!["x".into()] };
+        let cue = |start: f64, end: f64| Cue { start, end, lines: vec!["x".into()], speaker: None };
         let c = settle(vec![cue(0.0, 0.3), cue(1.5, 2.0), cue(2.6, 4.0), cue(4.05, 6.0)], &rules);
         assert!((c[0].end - 0.833).abs() < 0.01, "at least 5/6 s on screen: {:?}", c[0]);
         assert!((c[1].end - (2.6 - rules.gap_s)).abs() < 0.01, "a gap under half a second is closed: {:?}", c[1]);

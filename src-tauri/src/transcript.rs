@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Segment {
     /// seconds from the start of the recording
     pub start: f64,
@@ -25,9 +25,12 @@ pub struct Segment {
     /// Where the speaker stops in the line (see `audio::pauses`), for subtitles that end when they do
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pauses: Vec<[f32; 3]>,
+    /// Who says it: one of the transcript's `speakers`, when they were told apart
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<u32>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Transcript {
     pub id: String,
     pub title: String,
@@ -48,6 +51,21 @@ pub struct Transcript {
     /// The transcript in other languages, line by line
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub translations: Vec<Translation>,
+    /// The people who speak in it, when they were told apart (see `speakers`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speakers: Vec<Speaker>,
+    /// The language Dawwin heard, when it was asked to find it rather than told
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detected: Option<String>,
+}
+
+/// Someone who speaks in a transcript. Numbered from 1 in the order they first speak; the name is
+/// the one the user gave, empty until then ("Speaker 2").
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct Speaker {
+    pub id: u32,
+    #[serde(default)]
+    pub name: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -183,11 +201,35 @@ fn visible(t: &Transcript) -> impl Iterator<Item = &Segment> {
     t.segments.iter().filter(|s| !s.text.trim().is_empty())
 }
 
+/// The lines with text, by their index, each with its speaker's name where a turn starts: where
+/// the speaker changes, not on every line.
+fn turns(t: &Transcript) -> Vec<(usize, &Segment, Option<String>)> {
+    let mut last = None;
+    t.segments
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| !s.text.trim().is_empty())
+        .map(|(i, s)| {
+            let name = s.speaker.filter(|x| Some(*x) != last).map(|x| t.speaker_name(x));
+            last = s.speaker.or(last);
+            (i, s, name)
+        })
+        .collect()
+}
+
+/// The speaker of a line, for a column of their own: empty for a line nobody was given.
+fn speaker_cell(t: &Transcript, s: &Segment) -> String {
+    s.speaker.map(|x| t.speaker_name(x)).unwrap_or_default()
+}
+
 pub fn to_txt(t: &Transcript, stamps: bool) -> String {
     let mut out = String::new();
-    for s in visible(t) {
+    for (_, s, name) in turns(t) {
         if stamps {
             out.push_str(&format!("[{} - {}] ", ts(s.start), ts(s.end)));
+        }
+        if let Some(name) = name {
+            out.push_str(&format!("{name}: "));
         }
         out.push_str(s.text.trim());
         out.push('\n');
@@ -213,9 +255,12 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
         crate::tr!("Model"),
         t.model
     ));
-    for s in visible(t) {
+    for (_, s, name) in turns(t) {
         if stamps {
             out.push_str(&format!("**[{}]** ", ts(s.start)));
+        }
+        if let Some(name) = name {
+            out.push_str(&format!("**{name}:** "));
         }
         out.push_str(s.text.trim());
         out.push_str("\n\n");
@@ -223,28 +268,45 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
     out
 }
 
-fn srt(cues: Vec<crate::captions::Cue>) -> String {
+/// With the names in subtitles asked for (see `speakers::names_in_srt`), a subtitle where the
+/// speaker changes starts with the name: "Sami: …".
+fn srt(t: &Transcript, cues: Vec<crate::captions::Cue>) -> String {
+    let named = crate::speakers::names_in_srt() && t.has_speakers();
     let mut out = String::new();
+    let mut last = None;
     for (i, c) in cues.into_iter().enumerate() {
-        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", i + 1, ts_ms(c.start, ','), ts_ms(c.end, ','), c.text()));
+        let mut text = c.text();
+        if named {
+            if let Some(x) = c.speaker.filter(|x| Some(*x) != last) {
+                text = format!("{}: {text}", t.speaker_name(x));
+            }
+            last = c.speaker.or(last);
+        }
+        out.push_str(&format!("{}\n{} --> {}\n{}\n\n", i + 1, ts_ms(c.start, ','), ts_ms(c.end, ','), text));
     }
     out
 }
 
-fn vtt(cues: Vec<crate::captions::Cue>) -> String {
+/// WebVTT carries the speaker in its voice tag, `<v Sami>`, on each of their subtitles.
+fn vtt(t: &Transcript, cues: Vec<crate::captions::Cue>) -> String {
+    let named = crate::speakers::names_in_vtt() && t.has_speakers();
     let mut out = String::from("WEBVTT\n\n");
     for c in cues {
-        out.push_str(&format!("{} --> {}\n{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), c.text()));
+        let voice = match c.speaker.filter(|_| named) {
+            Some(x) => format!("<v {}>", t.speaker_name(x).replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")),
+            None => String::new(),
+        };
+        out.push_str(&format!("{} --> {}\n{voice}{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), c.text()));
     }
     out
 }
 /// Subtitles timed and broken as professional ones are: see `captions`.
 pub fn to_srt(t: &Transcript) -> String {
-    srt(crate::captions::cues(t))
+    srt(t, crate::captions::cues(t))
 }
 
 pub fn to_vtt(t: &Transcript) -> String {
-    vtt(crate::captions::cues(t))
+    vtt(t, crate::captions::cues(t))
 }
 
 fn no_translation() -> anyhow::Error {
@@ -261,12 +323,16 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
     let tr = t.translation(language).ok_or_else(no_translation)?;
     let second: Vec<String> = (0..t.segments.len()).map(|i| tr.text(i).to_string()).collect();
     let lines = || t.segments.iter().enumerate().filter(|(_, s)| !s.text.trim().is_empty());
+    let named = t.has_speakers();
     Ok(match ext {
         "txt" => {
             let mut out = String::new();
-            for (i, s) in lines() {
+            for (i, s, name) in turns(t) {
                 if stamps {
                     out.push_str(&format!("[{} - {}] ", ts(s.start), ts(s.end)));
+                }
+                if let Some(name) = name {
+                    out.push_str(&format!("{name}: "));
                 }
                 out.push_str(&format!("{}\n{}\n\n", s.text.trim(), second[i]));
             }
@@ -274,30 +340,35 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
         }
         "md" => {
             let mut out = format!("# {}\n\n", t.title);
-            for (i, s) in lines() {
+            for (i, s, name) in turns(t) {
                 if stamps {
                     out.push_str(&format!("**[{}]** ", ts(s.start)));
+                }
+                if let Some(name) = name {
+                    out.push_str(&format!("**{name}:** "));
                 }
                 out.push_str(&format!("{}  \n{}\n\n", s.text.trim(), second[i]));
             }
             out.into_bytes()
         }
-        "srt" => srt(crate::captions::bilingual_cues(t, tr)).into_bytes(),
-        "vtt" => vtt(crate::captions::bilingual_cues(t, tr)).into_bytes(),
+        "srt" => srt(t, crate::captions::bilingual_cues(t, tr)).into_bytes(),
+        "vtt" => vtt(t, crate::captions::bilingual_cues(t, tr)).into_bytes(),
         "docx" => to_docx_with(t, Some((&tr.language, &second)), stamps)?,
         "csv" => {
             let q = |s: &str| s.trim().replace('"', "\"\"");
-            let mut out = String::from("\u{feff}start,end,text,translation\r\n");
+            let mut out = String::from(if named { "\u{feff}start,end,speaker,text,translation\r\n" } else { "\u{feff}start,end,text,translation\r\n" });
             for (i, s) in lines() {
-                out.push_str(&format!("{},{},\"{}\",\"{}\"\r\n", secs(s.start), secs(s.end), q(&s.text), q(&second[i])));
+                let who = if named { format!("\"{}\",", q(&speaker_cell(t, s))) } else { String::new() };
+                out.push_str(&format!("{},{},{who}\"{}\",\"{}\"\r\n", secs(s.start), secs(s.end), q(&s.text), q(&second[i])));
             }
             out.into_bytes()
         }
         "tsv" => {
             let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
-            let mut out = String::from("start\tend\ttext\ttranslation\n");
+            let mut out = String::from(if named { "start\tend\tspeaker\ttext\ttranslation\n" } else { "start\tend\ttext\ttranslation\n" });
             for (i, s) in lines() {
-                out.push_str(&format!("{}\t{}\t{}\t{}\n", secs(s.start), secs(s.end), flat(&s.text), flat(&second[i])));
+                let who = if named { format!("{}\t", flat(&speaker_cell(t, s))) } else { String::new() };
+                out.push_str(&format!("{}\t{}\t{who}{}\t{}\n", secs(s.start), secs(s.end), flat(&s.text), flat(&second[i])));
             }
             out.into_bytes()
         }
@@ -338,20 +409,25 @@ fn secs(sec: f64) -> String {
 }
 
 /// Opens in Excel with the Arabic intact: UTF-8 with a BOM, quoted where needed.
+/// With speakers told apart, a column of who says each line comes before its text.
 pub fn to_csv(t: &Transcript) -> String {
-    let mut out = String::from("\u{feff}start,end,text\r\n");
+    let named = t.has_speakers();
+    let mut out = String::from(if named { "\u{feff}start,end,speaker,text\r\n" } else { "\u{feff}start,end,text\r\n" });
     for s in visible(t) {
         let text = s.text.trim().replace('"', "\"\"");
-        out.push_str(&format!("{},{},\"{}\"\r\n", secs(s.start), secs(s.end), text));
+        let who = if named { format!("\"{}\",", speaker_cell(t, s).replace('"', "\"\"")) } else { String::new() };
+        out.push_str(&format!("{},{},{who}\"{}\"\r\n", secs(s.start), secs(s.end), text));
     }
     out
 }
 
 pub fn to_tsv(t: &Transcript) -> String {
-    let mut out = String::from("start\tend\ttext\n");
+    let named = t.has_speakers();
+    let flat = |x: &str| x.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut out = String::from(if named { "start\tend\tspeaker\ttext\n" } else { "start\tend\ttext\n" });
     for s in visible(t) {
-        let text = s.text.split_whitespace().collect::<Vec<_>>().join(" ");
-        out.push_str(&format!("{}\t{}\t{}\n", secs(s.start), secs(s.end), text));
+        let who = if named { format!("{}\t", flat(&speaker_cell(t, s))) } else { String::new() };
+        out.push_str(&format!("{}\t{}\t{who}{}\n", secs(s.start), secs(s.end), flat(&s.text)));
     }
     out
 }
@@ -377,6 +453,9 @@ pub fn to_json(t: &Transcript) -> String {
     let segments: Vec<serde_json::Value> = visible(t)
         .map(|s| {
             let mut v = serde_json::json!({ "start": round(s.start), "end": round(s.end), "text": s.text.trim() });
+            if let Some(x) = s.speaker {
+                v["speaker"] = t.speaker_name(x).into();
+            }
             let words = timed_words(s);
             if !words.is_empty() {
                 v["words"] = words.into();
@@ -384,13 +463,19 @@ pub fn to_json(t: &Transcript) -> String {
             v
         })
         .collect();
-    let doc = serde_json::json!({
+    let mut doc = serde_json::json!({
         "title": t.title,
         "language": t.language,
         "duration": round(t.duration_s),
         "model": t.model,
         "segments": segments,
     });
+    if t.has_speakers() {
+        let mut ids: Vec<u32> = t.segments.iter().filter_map(|s| s.speaker).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        doc["speakers"] = ids.into_iter().map(|x| t.speaker_name(x)).collect::<Vec<_>>().into();
+    }
     serde_json::to_string_pretty(&doc).unwrap_or_default() + "\n"
 }
 
@@ -428,7 +513,8 @@ fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool)
         if rtl { "<w:bidi/>" } else { "" },
         xml(&crate::tr!("Duration {} · {}", ts(t.duration_s), &t.model))
     ));
-    for (i, s) in t.segments.iter().enumerate().filter(|(_, s)| !s.text.trim().is_empty()) {
+    let bold = if rtl { "<w:rPr><w:b/><w:bCs/><w:rtl/><w:lang w:bidi=\"ar-SY\"/></w:rPr>" } else { "<w:rPr><w:b/><w:bCs/></w:rPr>" };
+    for (i, s, name) in turns(t) {
         body.push_str("<w:p>");
         body.push_str(&ppr);
         if stamps {
@@ -437,6 +523,9 @@ fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool)
                 ts(s.start),
                 text_rpr
             ));
+        }
+        if let Some(name) = name {
+            body.push_str(&format!("<w:r>{bold}<w:t xml:space=\"preserve\">{}: </w:t></w:r>", xml(&name)));
         }
         body.push_str(&format!("<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>", text_rpr, xml(s.text.trim())));
         body.push_str("</w:p>");
@@ -543,10 +632,12 @@ mod tests {
             model: "m".into(),
             partial: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None },
             ],
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         }
     }
 
@@ -654,6 +745,69 @@ mod tests {
         assert_eq!(doc["segments"][0]["words"][0]["word"], "ثلاث");
         assert_eq!(doc["segments"][0]["words"][1]["word"], "زرار");
         assert_eq!(doc["segments"][0]["words"][1]["start"], 2.25);
+    }
+
+    /// Three lines: Sami, Sami again, then someone not named yet.
+    fn spoken_by_two() -> Transcript {
+        let mut t = sample();
+        t.segments = vec![
+            Segment { start: 0.0, end: 4.0, text: "طيب، نبدأ بالـ agenda؟".into(), speaker: Some(1), ..Default::default() },
+            Segment { start: 4.0, end: 8.0, text: "أول نقطة هي الـ login.".into(), speaker: Some(1), ..Default::default() },
+            Segment { start: 8.0, end: 12.0, text: "تمام, \"ممتاز\"".into(), speaker: Some(2), ..Default::default() },
+        ];
+        t.speakers = vec![Speaker { id: 1, name: "Sami".into() }, Speaker { id: 2, name: String::new() }];
+        t
+    }
+
+    #[test]
+    fn the_speakers_name_starts_each_turn_in_text_markdown_and_word() {
+        let t = spoken_by_two();
+        let other = t.speaker_name(2);
+        assert_eq!(to_txt(&t, false), format!("Sami: طيب، نبدأ بالـ agenda؟\n\nأول نقطة هي الـ login.\n\n{other}: تمام, \"ممتاز\"\n\n"));
+        assert!(to_txt(&t, true).starts_with("[00:00 - 00:04] Sami: طيب"), "{}", to_txt(&t, true));
+        let md = to_md(&t, false);
+        assert!(md.contains("**Sami:** طيب، نبدأ") && md.contains("\n\nأول نقطة") && md.contains(&format!("**{other}:** تمام")), "{md}");
+        let docx = to_docx(&t, false).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(docx)).unwrap();
+        let mut doc = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut doc).unwrap();
+        assert_eq!(doc.matches("Sami: </w:t>").count(), 1, "once, where the turn starts");
+        assert_eq!(doc.matches("<w:b/>").count(), 2, "both names in bold");
+    }
+
+    #[test]
+    fn tables_get_a_speaker_column_and_json_a_speaker_field() {
+        let t = spoken_by_two();
+        let other = t.speaker_name(2);
+        let csv = to_csv(&t);
+        assert!(csv.starts_with("\u{feff}start,end,speaker,text\r\n"), "{csv}");
+        assert_eq!(csv.lines().nth(2).unwrap(), "4.000,8.000,\"Sami\",\"أول نقطة هي الـ login.\"", "every row says who");
+        assert_eq!(csv.lines().nth(3).unwrap(), format!("8.000,12.000,\"{other}\",\"تمام, \"\"ممتاز\"\"\""));
+        let tsv = to_tsv(&t);
+        assert_eq!(tsv.lines().next().unwrap(), "start\tend\tspeaker\ttext");
+        assert_eq!(tsv.lines().nth(1).unwrap(), "0.000\t4.000\tSami\tطيب، نبدأ بالـ agenda؟");
+        let json: serde_json::Value = serde_json::from_str(&to_json(&t)).unwrap();
+        assert_eq!(json["segments"][1]["speaker"], "Sami");
+        assert_eq!(json["speakers"][1], other.as_str());
+        // without speakers, nothing changes for the programs that read these
+        assert!(to_csv(&sample()).starts_with("\u{feff}start,end,text\r\n"));
+        assert!(serde_json::from_str::<serde_json::Value>(&to_json(&sample())).unwrap().get("speakers").is_none());
+    }
+
+    #[test]
+    fn subtitles_name_the_speaker_as_asked() {
+        let t = spoken_by_two();
+        crate::speakers::set_subtitle_names(false, true);
+        let srt = to_srt(&t);
+        assert!(!srt.contains("Sami"), "off for SRT unless asked: {srt}");
+        let vtt = to_vtt(&t);
+        assert!(vtt.contains("\n<v Sami>طيب، نبدأ") && vtt.contains("\n<v Sami>أول نقطة"), "WebVTT's voice tag on each of the speaker's: {vtt}");
+        crate::speakers::set_subtitle_names(true, false);
+        let srt = to_srt(&t);
+        assert_eq!(srt.matches("Sami: ").count(), 1, "only where the speaker changes: {srt}");
+        assert!(srt.contains("\nSami: طيب، نبدأ"), "{srt}");
+        assert!(!to_vtt(&t).contains("<v "));
+        crate::speakers::set_subtitle_names(false, true);
     }
 
     #[test]

@@ -55,6 +55,8 @@ static AR: &[(&str, &str)] = &[
     ("The download arrived damaged, so it was removed. Please start it again.", "وصل التنزيل تالفًا فحُذف. ابدأه من جديد من فضلك."),
     ("The server refused the download (error {}).", "رفض الخادم التنزيل (الخطأ {})."),
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
+    // speakers, the language heard, words and names (1.4)
+    ("Speaker {}", "المتحدث {}"),
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),
     ("Audio and video", "صوت وفيديو"),

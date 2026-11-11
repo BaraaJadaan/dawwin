@@ -10,6 +10,7 @@ mod instance;
 mod models;
 mod queue;
 mod setup;
+mod speakers;
 mod tools;
 mod transcript;
 mod translate;

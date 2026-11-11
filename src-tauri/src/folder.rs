@@ -117,8 +117,10 @@ mod tests {
             device: "cpu".into(),
             model: "m".into(),
             partial: false,
-            segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] }],
+            segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None }],
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         }
     }
 

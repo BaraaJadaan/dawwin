@@ -1286,6 +1286,8 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         partial: false,
         segments: Vec::new(),
         translations: Vec::new(),
+        speakers: Vec::new(),
+        detected: None,
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -1438,6 +1440,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Rec
         voice: audio::voice_profile(&audio.samples, a, b, 20),
         words: Vec::new(),
         pauses: audio::pauses(&audio.samples, a, b),
+        speaker: None,
     };
     if !got.stopped && find_loop(&got.text).is_none() {
         return Ok(vec![seg(a, b, got.text, None)]);
@@ -1535,7 +1538,7 @@ mod tests {
     }
 
     fn line(text: &str) -> Segment {
-        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] }
+        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None }
     }
 
     fn saved_transcript(name: &str, lines: &[&str]) -> (PathBuf, Transcript) {
@@ -1555,6 +1558,8 @@ mod tests {
             partial: false,
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         };
         history::save(&dir, &t).unwrap();
         (dir, t)

@@ -426,6 +426,7 @@ mod tests {
             model: String::new(),
             partial: false,
             timed: false,
+            outputs: vec![],
             segments,
             translations: vec![],
         }

@@ -52,6 +52,10 @@ pub struct Transcript {
     /// and Follow words. Transcripts made without subtitles, and those of older versions, are not.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub timed: bool,
+    /// The files Dawwin wrote for it (the sound, the video with subtitles, exports): a folder run
+    /// never takes them for recordings to transcribe
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
     pub segments: Vec<Segment>,
     /// The transcript in other languages, line by line
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -560,6 +564,7 @@ mod tests {
             model: "m".into(),
             partial: false,
             timed: false,
+            outputs: vec![],
             segments: vec![
                 Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },
                 Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },

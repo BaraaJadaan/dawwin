@@ -222,18 +222,24 @@ fn enqueue(core: C, paths: Vec<String>, language: String, steps: Option<queue::S
     core.enqueue(paths, spoken(&language), steps.unwrap_or_default())
 }
 
+/// A folder's recordings, as jobs: looking through it runs off the interface's thread, and shows
+/// in the list until it is done or stopped.
 #[tauri::command]
-fn enqueue_folder(core: C, path: String, language: String, steps: Option<queue::Steps>) -> queue::FolderScan {
-    core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language), steps.unwrap_or_default())
+async fn enqueue_folder(app: AppHandle, path: String, language: String, steps: Option<queue::Steps>) -> R<queue::FolderScan> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language), steps.unwrap_or_default()))
+        .await
+        .map_err(|x| x.to_string())
 }
 
-/// What a dropped path is: a model to import, a folder to transcribe, or something else.
+/// What a dropped path is: a model to import, a folder to transcribe, or something else. Only the
+/// folder itself is looked at, not what is under it: a whole drive is told at once.
 #[tauri::command]
-fn path_kind(path: String) -> &'static str {
+async fn path_kind(path: String) -> &'static str {
     let p = PathBuf::from(path.replace('/', "\\"));
     if p.is_dir() {
         // a folder of recordings stays a folder of recordings, even with a model in it
-        if folder::recordings_in(&p).is_empty() && models::find_in_folder(&p, None).is_some() {
+        if !folder::has_recordings_at_top(&p) && models::find_in_folder(&p, None).is_some() {
             "model"
         } else {
             "folder"
@@ -268,13 +274,16 @@ fn dismiss_job(core: C, id: String) {
 }
 
 #[tauri::command]
-fn list_history(core: C) -> Vec<history::Summary> {
-    history::list(&core.paths.history_dir())
+async fn list_history(app: AppHandle) -> R<Vec<history::Summary>> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || history::list(&core.paths.history_dir())).await.map_err(|x| x.to_string())
 }
 
+/// A transcript; a long one is read off the interface's thread.
 #[tauri::command]
-fn get_transcript(core: C, id: String) -> R<Transcript> {
-    core.transcript(&id).map_err(e)
+async fn get_transcript(app: AppHandle, id: String) -> R<Transcript> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)
 }
 
 fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript> {
@@ -284,9 +293,10 @@ fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript>
     history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
+/// Correct a line: the line as it is now, with its words placed in time again.
 #[tauri::command]
-fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
-    edit(&core, &id, |t| {
+fn update_segment(core: C, id: String, index: usize, text: String) -> R<Option<transcript::Segment>> {
+    let t = edit(&core, &id, |t| {
         if let Some(s) = t.segments.get_mut(index) {
             if s.text != text {
                 s.text = text;
@@ -297,7 +307,19 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
             }
         }
     })?;
-    Ok(())
+    Ok(t.segments.get(index).cloned())
+}
+
+/// How large the interface is drawn: the webview's own zoom, from half to twice the size, kept
+/// in the settings. The size it ended up at.
+#[tauri::command]
+fn set_zoom(app: AppHandle, core: C, level: f64) -> R<f64> {
+    let level = ((level * 10.0).round() / 10.0).clamp(0.5, 2.0);
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_zoom(level).map_err(|x| x.to_string())?;
+    }
+    core.change_settings(|s| s.zoom = (level != 1.0).then_some(level)).map_err(e)?;
+    Ok(level)
 }
 
 /// Place the words of a transcript in time again (see `timing`): a job in the queue.
@@ -414,6 +436,7 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
     let dest = dest.into_path().map_err(|x| x.to_string())?;
     let t = if matches!(ext, "srt" | "vtt") { timed(&core, &id).await? } else { t };
     write_export(&t, ext, stamps, &view, &dest)?;
+    core.remember_outputs(&id, std::slice::from_ref(&dest));
     Ok(Some(dest.display().to_string()))
 }
 
@@ -479,6 +502,7 @@ async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<O
     let dest = dest.into_path().map_err(|x| x.to_string())?;
     let _ = app.emit("audio-saving", dest.display().to_string());
     let saved = tauri::async_runtime::spawn_blocking(move || save_sound_of(&t, without_silences, &dest, ffmpeg)).await.map_err(|x| x.to_string())??;
+    core.remember_outputs(&id, std::slice::from_ref(&saved));
     Ok(Some(saved.display().to_string()))
 }
 
@@ -548,6 +572,7 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
         .await
         .map_err(|x| x.to_string())?
         .map_err(e)?;
+    core.remember_outputs(&id, std::slice::from_ref(&dest));
     Ok(Some(dest.display().to_string()))
 }
 
@@ -637,6 +662,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let core = Core::start(app.handle().clone())?;
+            // the size the interface was left at
+            let zoom = core.settings.lock().unwrap().zoom;
+            if let (Some(z), Some(w)) = (zoom, app.get_webview_window("main")) {
+                let _ = w.set_zoom(z);
+            }
             app.manage(core);
             Ok(())
         })
@@ -672,6 +702,7 @@ pub fn run() {
             get_transcript,
             update_segment,
             fix_timing,
+            set_zoom,
             translation_targets,
             translate,
             update_translation,

@@ -85,7 +85,8 @@ export async function open(home, port, env = {}) {
     if (r.result?.exceptionDetails) throw new Error(JSON.stringify(r.result.exceptionDetails).slice(0, 600));
     return r.result?.result?.value;
   };
-  await call("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+  // a fixed size, for pictures that compare; not when the test is of the window's own size
+  if (!env.REAL_SIZE) await call("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   await sleep(2500);
   await ev(`setUiLang('en')`);

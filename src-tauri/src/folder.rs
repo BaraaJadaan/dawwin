@@ -1,6 +1,8 @@
 //! Transcribing a folder: the recordings inside it, and the files written next to each one.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 
@@ -20,11 +22,26 @@ fn skip_dir(name: &str) -> bool {
 }
 
 /// Every recording under `dir`, sorted by path. Links are not followed, so a loop cannot trap it.
+#[cfg(test)]
 pub fn recordings_in(dir: &Path) -> Vec<PathBuf> {
+    scan(dir, &AtomicBool::new(false), &mut |_, _| {})
+}
+
+/// The same, stopped by `cancel` (with what it found so far), telling `progress` how many
+/// recordings it found and how many files it looked at, every few hundred files.
+pub fn scan(dir: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(usize, usize)) -> Vec<PathBuf> {
     let mut found = Vec::new();
+    let mut looked = 0usize;
     let mut todo = vec![dir.to_path_buf()];
     while let Some(d) = todo.pop() {
         for entry in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            if cancel.load(Ordering::Relaxed) {
+                return found;
+            }
+            looked += 1;
+            if looked % 256 == 0 {
+                progress(found.len(), looked);
+            }
             let Ok(kind) = entry.file_type() else { continue };
             let path = entry.path();
             if kind.is_dir() {
@@ -36,8 +53,46 @@ pub fn recordings_in(dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
+    progress(found.len(), looked);
     found.sort();
     found
+}
+
+/// Whether `dir` itself holds a recording, without looking into its subfolders.
+pub fn has_recordings_at_top(dir: &Path) -> bool {
+    std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| e.file_type().is_ok_and(|k| k.is_file()) && is_media(&e.path()))
+}
+
+/// Recordings Dawwin knows (it has their transcripts), by folder: the names, in lower case.
+pub type Known = HashMap<String, Vec<String>>;
+
+pub fn known(recordings: impl Iterator<Item = String>) -> Known {
+    let mut out: Known = HashMap::new();
+    for r in recordings {
+        let p = PathBuf::from(&r);
+        let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else { continue };
+        out.entry(same_file_key(&dir.display().to_string())).or_default().push(name.to_string_lossy().to_lowercase());
+    }
+    out
+}
+
+/// Whether `file` is one Dawwin wrote next to a recording it knows: its sound ("talk.m4a" next to
+/// "talk.mp4", "talk (without silences).m4a"), or its video with subtitles ("talk (Arabic).mp4",
+/// "talk (English, Arabic, burned in).mp4"). A name such as "talk (2).mp3" is the user's own.
+pub fn is_own_output(file: &Path, known: &Known) -> bool {
+    let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else { return false };
+    let Some(names) = known.get(&same_file_key(&dir.display().to_string())) else { return false };
+    let name = name.to_string_lossy().to_lowercase();
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((name.as_str(), ""));
+    names.iter().filter(|r| **r != name).any(|r| {
+        let rstem = r.rsplit_once('.').map_or(r.as_str(), |x| x.0);
+        if stem == rstem {
+            return matches!(ext, "m4a" | "wav");
+        }
+        stem.strip_prefix(rstem)
+            .and_then(|rest| rest.strip_prefix(" (")?.strip_suffix(')'))
+            .is_some_and(|inner| !inner.is_empty() && !inner.chars().all(|c| c.is_ascii_digit()))
+    })
 }
 
 /// Windows paths differ only by case and slash direction when they name the same file.
@@ -64,13 +119,16 @@ fn free_path(recording: &Path, ext: &str) -> PathBuf {
 }
 
 /// Write this transcript next to its recording in each format, under names that are free.
-pub fn write_outputs(t: &Transcript, formats: &[String]) -> Result<()> {
+pub fn write_outputs(t: &Transcript, formats: &[String]) -> Result<Vec<PathBuf>> {
     let recording = Path::new(&t.source_path);
+    let mut written = Vec::new();
     for ext in formats {
         let bytes = transcript::export_bytes(t, ext, true)?;
-        std::fs::write(free_path(recording, ext), bytes)?;
+        let dest = free_path(recording, ext);
+        std::fs::write(&dest, bytes)?;
+        written.push(dest);
     }
-    Ok(())
+    Ok(written)
 }
 
 /// The formats that have no file next to this recording yet.
@@ -103,6 +161,7 @@ mod tests {
             model: "m".into(),
             partial: false,
             timed: false,
+            outputs: vec![],
             segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] }],
             translations: vec![],
         }
@@ -148,6 +207,38 @@ mod tests {
         let rec = dir.join("lesson.mp3");
         std::fs::write(dir.join("lesson.txt"), "x").unwrap();
         assert_eq!(missing_outputs(&rec, &["txt".into(), "srt".into()]), ["srt"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_files_dawwin_wrote_are_not_taken_for_recordings() {
+        let k = known(["D:/Talks/talk.mp4".to_string(), "D:/Talks/درس.mp3".to_string()].into_iter());
+        let own = |f: &str| is_own_output(Path::new(f), &k);
+        assert!(own("D:/Talks/talk.m4a"), "the sound saved from the video");
+        assert!(own(r"d:\talks\Talk (without silences).m4a"));
+        assert!(own("D:/Talks/talk (Arabic).mp4"));
+        assert!(own("D:/Talks/talk (English, Arabic, burned in).mp4"));
+        assert!(own("D:/Talks/درس (بدون الصمت).m4a"));
+        assert!(!own("D:/Talks/talk.mp4"), "the recording itself");
+        assert!(!own("D:/Talks/talk (2).mp4"), "a name the user gave");
+        assert!(!own("D:/Talks/talking.m4a"));
+        assert!(!own("D:/Other/talk.m4a"), "another folder");
+        assert!(!own("D:/Talks/lesson.m4a"));
+    }
+
+    #[test]
+    fn a_long_scan_can_be_stopped_and_says_how_far_it_got() {
+        let dir = temp("stop");
+        for k in 0..600 {
+            std::fs::write(dir.join(format!("{k}.mp3")), b"x").unwrap();
+        }
+        let mut heard = Vec::new();
+        assert_eq!(scan(&dir, &AtomicBool::new(false), &mut |f, l| heard.push((f, l))).len(), 600);
+        assert!(heard.len() >= 3 && heard.last() == Some(&(600, 600)), "{heard:?}");
+        let stop = AtomicBool::new(false);
+        let got = scan(&dir, &stop, &mut |_, l| if l >= 256 { stop.store(true, Ordering::Relaxed) });
+        assert!(got.len() < 600, "{}", got.len());
+        assert!(has_recordings_at_top(&dir));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

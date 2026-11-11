@@ -97,6 +97,7 @@ fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {
         model: String::new(),
         partial: false,
         timed: false,
+        outputs: vec![],
         segments,
         translations: vec![],
     }

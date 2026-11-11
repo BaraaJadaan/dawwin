@@ -88,6 +88,8 @@ pub struct FolderScan {
     pub added: Vec<String>,
     /// Recordings with a finished transcript, or already in the queue
     pub already: usize,
+    /// Looking through the folder was stopped: nothing was added
+    pub stopped: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -174,16 +176,35 @@ pub struct SetupView {
     pub check_updates: bool,
     /// What transcribing a folder writes next to each recording
     pub folder_formats: Vec<String>,
+    /// How large the interface is drawn (Ctrl and plus, minus, zero)
+    pub zoom: f64,
     pub download: DownloadView,
     pub data_dir: String,
 }
 
+/// A folder being looked through for recordings: it can take a while on a whole drive.
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct ScanView {
+    pub id: String,
+    pub folder: String,
+    /// Recordings found so far, and files looked at
+    pub found: usize,
+    pub looked: usize,
+}
+
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct Snapshot {
+    /// Goes up with every change: the interface ignores a state older than the one it has
+    pub seq: u64,
     pub queue: Vec<JobView>,
+    pub scans: Vec<ScanView>,
     pub engine: EngineView,
     pub setup: SetupView,
 }
+
+/// How often the interface hears of changes at most: adding a thousand recordings, or the progress
+/// of a job, is one message a tenth of a second, not one a change.
+const STATE_EVERY: Duration = Duration::from_millis(100);
 
 enum Msg {
     Job(String),
@@ -213,6 +234,8 @@ pub struct Core {
     pub settings: Mutex<Settings>,
     tx: Mutex<Sender<Msg>>,
     counter: AtomicU64,
+    /// Something changed that the interface has not heard of yet
+    changed: (Mutex<bool>, std::sync::Condvar),
 }
 
 pub fn now_ms() -> u64 {
@@ -237,10 +260,21 @@ impl Core {
             settings: Mutex::new(settings),
             tx: Mutex::new(tx),
             counter: AtomicU64::new(0),
+            changed: (Mutex::new(false), std::sync::Condvar::new()),
         });
         core.refresh_setup();
         let c = core.clone();
         std::thread::Builder::new().name("engine".into()).spawn(move || engine_loop(c, rx))?;
+        let c = core.clone();
+        std::thread::Builder::new().name("state".into()).spawn(move || loop {
+            {
+                let (flag, wake) = &c.changed;
+                let mut changed = wake.wait_while(flag.lock().unwrap(), |changed| !*changed).unwrap();
+                *changed = false;
+            }
+            let _ = c.app.emit("state", c.snapshot());
+            std::thread::sleep(STATE_EVERY);
+        })?;
         if core.snapshot().setup.engine_found {
             core.send(Msg::Probe);
         }
@@ -260,13 +294,19 @@ impl Core {
         self.snap.lock().unwrap().clone()
     }
 
+    /// Tell the interface, soon, together with whatever else changes meanwhile.
     fn emit(&self) {
-        let s = self.snapshot();
-        let _ = self.app.emit("state", s);
+        let (flag, wake) = &self.changed;
+        *flag.lock().unwrap() = true;
+        wake.notify_one();
     }
 
     fn update(&self, f: impl FnOnce(&mut Snapshot)) {
-        f(&mut *self.snap.lock().unwrap());
+        {
+            let mut s = self.snap.lock().unwrap();
+            f(&mut s);
+            s.seq += 1;
+        }
         self.emit();
     }
 
@@ -298,11 +338,11 @@ impl Core {
             })
             .collect();
         let ffmpeg = ffmpeg.map(|p| p.display().to_string());
-        let (families, run_on, ui_lang, check_updates, folder_formats, dir) = {
+        let (families, run_on, ui_lang, check_updates, folder_formats, dir, zoom) = {
             let st = self.settings.lock().unwrap();
             let families: BTreeMap<String, ModelStatus> =
                 Family::ALL.into_iter().map(|f| (f.key().to_string(), setup::model_status(&self.paths, &st, f))).collect();
-            (families, st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths))
+            (families, st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths), st.zoom.unwrap_or(1.0))
         };
         let models = models::VARIANTS
             .iter()
@@ -336,6 +376,7 @@ impl Core {
             st.ui_lang = ui_lang;
             st.check_updates = check_updates;
             st.folder_formats = folder_formats;
+            st.zoom = zoom;
             st.app_version = crate::updates::VERSION.into();
             st.repo_url = format!("https://github.com/{}", crate::updates::REPO);
             st.data_dir = self.paths.roaming.display().to_string();
@@ -561,26 +602,53 @@ impl Core {
     }
 
     /// Every recording under `dir` that has no finished transcript yet. One that has gets
-    /// any file it is missing next to it, without being transcribed again.
+    /// any file it is missing next to it, without being transcribed again. Files Dawwin wrote
+    /// (its sound, its videos with subtitles) are never taken for recordings. Looking through a
+    /// big folder shows in the list, with how far it got, and stops when that is cancelled.
+    /// Runs on the caller's thread, which must not be the interface's.
     pub fn enqueue_folder(&self, dir: &std::path::Path, language: String, steps: Steps) -> FolderScan {
-        let finished: std::collections::HashMap<String, String> = history::list(&self.paths.history_dir())
-            .into_iter()
-            .filter(|h| !h.partial)
-            .map(|h| (folder::same_file_key(&h.source_path), h.id))
-            .collect();
-        let active: std::collections::HashSet<String> = self
-            .snapshot()
-            .queue
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let scan_id = format!("scan-{}-{:03}", now_ms(), n % 1000);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancels.lock().unwrap().insert(scan_id.clone(), cancel.clone());
+        self.update(|s| s.scans.push(ScanView { id: scan_id.clone(), folder: dir.display().to_string(), ..Default::default() }));
+        let mut told = Instant::now();
+        let found = folder::scan(dir, &cancel, &mut |found, looked| {
+            if told.elapsed() >= STATE_EVERY {
+                told = Instant::now();
+                self.update(|s| {
+                    if let Some(x) = s.scans.iter_mut().find(|x| x.id == scan_id) {
+                        (x.found, x.looked) = (found, looked);
+                    }
+                });
+            }
+        });
+        self.update(|s| s.scans.retain(|x| x.id != scan_id));
+        self.cancels.lock().unwrap().remove(&scan_id);
+        if cancel.load(Ordering::SeqCst) {
+            return FolderScan { added: Vec::new(), already: 0, stopped: true };
+        }
+
+        let history = history::list(&self.paths.history_dir());
+        let finished: HashMap<String, String> = history.iter().filter(|h| !h.partial).map(|h| (folder::same_file_key(&h.source_path), h.id.clone())).collect();
+        let snap = self.snapshot();
+        let active: std::collections::HashSet<String> = snap.queue.iter().filter(|j| ACTIVE_JOB.contains(&j.status.as_str())).map(|j| folder::same_file_key(&j.path)).collect();
+        let written: std::collections::HashSet<String> = history
             .iter()
-            .filter(|j| ACTIVE_JOB.contains(&j.status.as_str()))
-            .map(|j| folder::same_file_key(&j.path))
+            .flat_map(|h| h.outputs.iter())
+            .chain(snap.queue.iter().flat_map(|j| j.outputs.iter()))
+            .map(|p| folder::same_file_key(p))
             .collect();
+        let known = folder::known(history.iter().filter(|h| !h.partial).map(|h| h.source_path.clone()));
         let formats = self.settings.lock().unwrap().folder_formats();
         let mut todo = Vec::new();
         let mut already = 0;
-        for rec in folder::recordings_in(dir) {
+        for rec in found {
             let path = rec.display().to_string();
             let key = folder::same_file_key(&path);
+            if written.contains(&key) || folder::is_own_output(&rec, &known) {
+                continue;
+            }
             if active.contains(&key) {
                 already += 1;
             } else if let Some(id) = finished.get(&key) {
@@ -588,18 +656,35 @@ impl Core {
                 let missing = folder::missing_outputs(&rec, &formats);
                 if !missing.is_empty() {
                     if let Ok(t) = self.transcript(id) {
-                        let _ = folder::write_outputs(&t, &missing);
+                        if let Ok(files) = folder::write_outputs(&t, &missing) {
+                            self.remember_outputs(id, &files);
+                        }
                     }
                 }
             } else {
                 todo.push(path);
             }
         }
-        FolderScan { added: self.add_jobs(todo, language, steps, true), already }
+        FolderScan { added: self.add_jobs(todo, language, steps, true), already, stopped: false }
+    }
+
+    /// Note in a transcript the files Dawwin wrote for it.
+    pub fn remember_outputs(&self, transcript: &str, files: &[PathBuf]) {
+        if files.is_empty() || self.is_live(transcript) {
+            return;
+        }
+        let _ = history::modify(&self.paths.history_dir(), transcript, |t| {
+            for f in files {
+                let f = f.display().to_string();
+                if !t.outputs.contains(&f) {
+                    t.outputs.push(f);
+                }
+            }
+        });
     }
 
     fn add_jobs(&self, paths: Vec<String>, language: String, steps: Steps, from_folder: bool) -> Vec<String> {
-        let mut ids = Vec::new();
+        let mut jobs = Vec::new();
         for p in paths {
             let path = PathBuf::from(&p);
             if !path.is_file() {
@@ -609,8 +694,8 @@ impl Core {
             let id = format!("{}-{:03}", now_ms(), n % 1000);
             let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| p.clone());
             self.cancels.lock().unwrap().insert(id.clone(), Arc::new(AtomicBool::new(false)));
-            let job = JobView {
-                id: id.clone(),
+            jobs.push(JobView {
+                id,
                 title,
                 path: p,
                 language: language.clone(),
@@ -618,10 +703,13 @@ impl Core {
                 status: "queued".into(),
                 folder: from_folder,
                 ..Default::default()
-            };
-            self.update(|s| s.queue.push(job));
+            });
+        }
+        let ids: Vec<String> = jobs.iter().map(|j| j.id.clone()).collect();
+        // all of them in one change: a thousand recordings are one message to the interface
+        self.update(|s| s.queue.extend(jobs));
+        for id in &ids {
             self.send(Msg::Job(id.clone()));
-            ids.push(id);
         }
         ids
     }
@@ -722,6 +810,7 @@ impl Core {
         self.update(|s| s.queue.push(job));
         let core = self.clone();
         let job_id = id.clone();
+        let transcript_id = transcript.to_string();
         std::thread::spawn(move || {
             let _awake = KeepAwake::new();
             let started = Instant::now();
@@ -734,6 +823,9 @@ impl Core {
                 });
             });
             let cancelled = cancel.load(Ordering::SeqCst);
+            if result.is_ok() {
+                core.remember_outputs(&transcript_id, std::slice::from_ref(&dest));
+            }
             core.update_job(&job_id, |j| {
                 j.eta_s = None;
                 j.elapsed_s = started.elapsed().as_secs_f64();
@@ -1176,7 +1268,10 @@ fn run_translation(core: &Arc<Core>, translator: &mut Option<TranslatorProcess>,
         let t = history::load(&core.paths.history_dir(), &transcript)?;
         if crate::video::is_video(Path::new(&t.source_path)) {
             match subtitle_video(core, id, &t, &crate::transcript::View::Both(language.clone()), job.steps.burn) {
-                Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                Ok(file) => {
+                    core.remember_outputs(&transcript, std::slice::from_ref(&file));
+                    core.update_job(id, |j| j.outputs.push(file.display().to_string()));
+                }
                 // stopped while it burned the subtitles in: that is not a failure
                 Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(e) => next_error = Some(format!("{e:#}")),
@@ -1397,6 +1492,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
         partial: false,
         timed: false,
+        outputs: vec![],
         segments: Vec::new(),
         translations: Vec::new(),
     };
@@ -1482,6 +1578,8 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     t.elapsed_s = t_start.elapsed().as_secs_f64();
     t.partial = cancelled || failure.is_some();
     t.timed = time_words && !t.partial;
+    // the sound it saved, if any: a folder run never takes it for a recording
+    t.outputs = core.snapshot().queue.into_iter().find(|j| j.id == id).map(|j| j.outputs).unwrap_or_default();
     let saved = !t.segments.is_empty();
     if saved {
         history::save(&core.paths.history_dir(), &t)?;
@@ -1493,9 +1591,12 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     }
     if job.folder && saved && !cancelled {
         let formats = core.settings.lock().unwrap().folder_formats();
-        if let Err(e) = folder::write_outputs(&t, &formats) {
-            core.update_job(id, |j| j.saved = saved);
-            return Err(anyhow!(crate::tr!("Transcribed, but the files could not be saved next to the recording: {}", e)));
+        match folder::write_outputs(&t, &formats) {
+            Ok(files) => core.remember_outputs(id, &files),
+            Err(e) => {
+                core.update_job(id, |j| j.saved = saved);
+                return Err(anyhow!(crate::tr!("Transcribed, but the files could not be saved next to the recording: {}", e)));
+            }
         }
     }
     // the next steps: a translation (which then does the video), or straight to the video
@@ -1507,7 +1608,10 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
             }
         } else if steps.video && crate::video::is_video(&source) {
             match subtitle_video(core, id, &t, &crate::transcript::View::Original, steps.burn) {
-                Ok(file) => core.update_job(id, |j| j.outputs.push(file.display().to_string())),
+                Ok(file) => {
+                    core.remember_outputs(id, std::slice::from_ref(&file));
+                    core.update_job(id, |j| j.outputs.push(file.display().to_string()));
+                }
                 Err(_) if cancel.load(Ordering::SeqCst) => {}
                 Err(e) => next_error = Some(format!("{e:#}")),
             }
@@ -1670,6 +1774,7 @@ mod tests {
             model: String::new(),
             partial: false,
             timed: false,
+            outputs: vec![],
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
         };

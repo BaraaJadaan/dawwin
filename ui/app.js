@@ -33,6 +33,11 @@ const S = {
   steps: loadSteps(),   // what happens to recordings dropped on the window
   told: new Set(),      // jobs whose saved files were announced
   timingAsked: new Set(), // transcripts Follow words asked to place in time, once a session
+  rows: [],             // the rows of the transcript's lines drawn so far, by line
+  visible: new Set(),   // the lines on the screen or near it
+  stale: new Set(),     // lines whose search marks are to be painted when they come near the screen
+  painted: new Map(),   // what each drawn line shows of the search
+  hitLines: new Map(),  // the search's hits, by line
   spoken: store.get("lang", "ar"), // the language of the recordings
   stamps: store.get("stamps", "1") === "1",
   follow: store.get("follow", "0") === "1",
@@ -351,36 +356,108 @@ function jobLine(j) {
   }
 }
 
+/** Write `text` into `el` only when it says something else: a list redrawn ten times a second
+ *  keeps its text nodes, its selection and the focus inside it. */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+
+/** A list kept in step with `items` by key: a row is made once, then only what changed in it is
+ *  written, and rows are moved, not made again, so a click or the keyboard focus on one stays.
+ *  `make(li, item)` builds a new row's parts and handlers; `paint(li, item)` brings it up to date. */
+function keyedList(ul, items, make, paint) {
+  const old = new Map();
+  for (const li of ul.children) old.set(li.dataset.key, li);
+  let at = ul.firstElementChild;
+  for (const it of items) {
+    let li = old.get(it.key);
+    if (li) old.delete(it.key);
+    else {
+      li = document.createElement("li");
+      li.dataset.key = it.key;
+      li.tabIndex = 0;
+      li.setAttribute("role", "button");
+      li.addEventListener("keydown", (ev) => {
+        if (ev.target === li && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); li.click(); }
+      });
+      make(li, it);
+    }
+    paint(li, it);
+    if (li !== at) ul.insertBefore(li, at);
+    else at = at.nextElementSibling;
+  }
+  for (const li of old.values()) li.remove();
+}
+
+/** A job's row: what it is, how far it is, and its stop or dismiss button. */
+function makeJobRow(li) {
+  li.innerHTML = `<div class="title" dir="auto"></div><div class="sub doing"></div><div class="sub line"></div>`
+    + `<div class="progress"><div class="bar"></div></div><button class="icon-btn x">×</button>`;
+  li.onclick = () => {
+    const j = jobById(li.dataset.key);
+    if (!j) return;
+    const of = j.transcript || j.id;
+    // a job that only saves the sound has no transcript: it shows the file
+    if (j.kind === "burn" || j.kind === "timing") openTranscript(of);
+    else if (j.kind !== "translate" && !j.steps?.transcribe) { if (j.outputs?.length) invoke("reveal", { path: j.outputs[0] }); }
+    else openTranscript(of, j.target);
+  };
+  li.querySelector(".x").onclick = (ev) => {
+    ev.stopPropagation();
+    const j = jobById(li.dataset.key);
+    if (j && ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
+    else invoke("dismiss_job", { id: li.dataset.key });
+  };
+}
+
+function paintJobRow(li, j) {
+  const of = j.transcript || j.id;
+  li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
+  setText(li.querySelector(".title"), j.title);
+  const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "timing" ? t("job.timing") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
+  const d = li.querySelector(".doing");
+  setText(d, doing);
+  d.hidden = !doing;
+  setText(li.querySelector(".line"), jobLine(j));
+  // burning the subtitles in takes a while, and says how far it is
+  const indet = ["decoding", "loading", "saving_audio", "saving_video", "queued"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
+  const bar = li.querySelector(".progress");
+  bar.hidden = !ACTIVE.has(j.status);
+  bar.classList.toggle("indeterminate", indet && j.status !== "queued");
+  const width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
+  if (bar.firstElementChild.style.width !== width) bar.firstElementChild.style.width = width;
+  const x = li.querySelector(".x");
+  const label = t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss");
+  if (x.getAttribute("aria-label") !== label) x.setAttribute("aria-label", label);
+}
+
+/** Looking through a folder for recordings: its row, with how many it found so far. */
+function makeScanRow(li) {
+  li.innerHTML = `<div class="title" dir="auto"></div><div class="sub line"></div>`
+    + `<div class="progress indeterminate"><div class="bar"></div></div><button class="icon-btn x">×</button>`;
+  li.onclick = () => {};
+  li.querySelector(".x").onclick = (ev) => { ev.stopPropagation(); invoke("cancel_job", { id: li.dataset.key }); };
+}
+
+function paintScanRow(li, s) {
+  li.className = "item";
+  setText(li.querySelector(".title"), s.folder.split(/[\\/]/).filter(Boolean).pop() || s.folder);
+  setText(li.querySelector(".line"), t("scan.looking", { n: s.found, files: s.looked }));
+  li.querySelector(".x").setAttribute("aria-label", t("job.cancel"));
+}
+
 function renderQueue() {
   if (!S.snap) return;
   const jobs = S.snap.queue.filter((j) => j.status !== "done");
-  $("queue-section").hidden = jobs.length === 0;
+  const scans = S.snap.scans || [];
+  $("queue-section").hidden = jobs.length + scans.length === 0;
   $("queue-cancel-all").hidden = jobs.filter((j) => ACTIVE.has(j.status)).length < 2;
-  const ul = $("queue");
-  ul.innerHTML = "";
-  for (const j of jobs) {
-    const li = document.createElement("li");
-    const of = j.transcript || j.id;
-    li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
-    // burning the subtitles in takes a while, and says how far it is
-    const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
-    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "timing" ? t("job.timing") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
-    const what = doing ? `<div class="sub">${esc(doing)}</div>` : "";
-    li.innerHTML = `
-      <div class="title" dir="auto">${esc(j.title)}</div>
-      ${what}
-      <div class="sub">${esc(jobLine(j))}</div>
-      ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
-      <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
-    // a job that only saves the sound has no transcript: it shows the file
-    li.onclick = () => (j.kind === "burn" || j.kind === "timing" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
-    li.querySelector(".x").onclick = (ev) => {
-      ev.stopPropagation();
-      if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
-      else invoke("dismiss_job", { id: j.id });
-    };
-    ul.append(li);
-  }
+  keyedList(
+    $("queue"),
+    [...scans.map((s) => ({ key: s.id, scan: s })), ...jobs.map((j) => ({ key: j.id, job: j }))],
+    (li, it) => (it.scan ? makeScanRow(li) : makeJobRow(li)),
+    (li, it) => (it.scan ? paintScanRow(li, it.scan) : paintJobRow(li, it.job)),
+  );
 }
 
 // ------------------------------------------------------------------ history
@@ -390,21 +467,22 @@ async function loadHistory() {
   renderHistory();
 }
 
+function makeHistoryRow(li) {
+  li.innerHTML = `<div class="title" dir="auto"></div><div class="sub"></div><div class="preview" dir="auto"></div>`;
+  li.onclick = () => openTranscript(li.dataset.key);
+}
+
+function paintHistoryRow(li, h) {
+  li.className = "item" + (S.current?.id === h.id && S.view === "transcript" ? " active" : "");
+  setText(li.querySelector(".title"), h.title);
+  setText(li.querySelector(".sub"), [date(h.created_ms), dur(h.duration_s), h.partial ? t("hist.partial") : ""].filter(Boolean).join(" · "));
+  setText(li.querySelector(".preview"), h.preview);
+}
+
 function renderHistory() {
   const q = $("history-filter").value.trim().toLowerCase();
-  const ul = $("history");
-  ul.innerHTML = "";
   const items = S.history.filter((h) => !q || h.title.toLowerCase().includes(q) || h.preview.toLowerCase().includes(q));
-  for (const h of items) {
-    const li = document.createElement("li");
-    li.className = "item" + (S.current?.id === h.id && S.view === "transcript" ? " active" : "");
-    li.innerHTML = `
-      <div class="title" dir="auto">${esc(h.title)}</div>
-      <div class="sub"><span>${esc(date(h.created_ms))}</span><span>·</span><span>${esc(dur(h.duration_s))}</span>${h.partial ? `<span>· ${esc(t("hist.partial"))}</span>` : ""}</div>
-      <div class="preview" dir="auto">${esc(h.preview)}</div>`;
-    li.onclick = () => openTranscript(h.id);
-    ul.append(li);
-  }
+  keyedList($("history"), items.map((h) => ({ key: h.id, h })), makeHistoryRow, (li, it) => paintHistoryRow(li, it.h));
   $("history-empty").hidden = S.history.length > 0;
 }
 
@@ -795,7 +873,15 @@ function renderTranscript() {
   box.innerHTML = "";
   if (!same) { box.dataset.for = cur.id; clearWordHighlight(); }
   wordCache.clear();
-  cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
+  S.rows = [];
+  S.painted = new Map();
+  S.rowsLive = live;
+  watchRows();
+  clearTimeout(S.rowTimer);
+  // the first screens at once, the rest a portion at a time: a long transcript shows in an instant
+  growRows(PORTION);
+  if (same) while (S.rows.length < cur.segments.length && box.scrollHeight < keep + 2 * box.clientHeight) growRows(PORTION);
+  moreRows();
   if (!cur.segments.length) box.append(emptyLive());
   box.scrollTop = same ? keep : 0;
   runSearch(false);
@@ -978,7 +1064,7 @@ async function saveTranslation(i, el) {
     await invoke("update_translation", { id: cur.id, language: lang, index: i, text });
     while (tr.lines.length < cur.segments.length) tr.lines.push({ text: "", from: "", edited: false });
     tr.lines[i] = { text, from: cur.segments[i].text, edited: true };
-    el.closest(".seg").replaceWith(segRow(cur.segments[i], i, false));
+    replaceRow(i);
     paintTranslationMenu();
   } catch (err) {
     toast(String(err));
@@ -999,7 +1085,7 @@ function onTranslated({ id, language, index, text, from }) {
   if (cur.segments[index]?.text !== from) return; // edited meanwhile: it waits for another turn
   tr.lines[index] = { text, from, edited: false };
   if (S.view !== "transcript" || S.shown !== language) return;
-  const el = $("segments").querySelector(`.seg[data-i="${index}"] .trans`);
+  const el = S.rows?.[index]?.querySelector(".trans");
   if (el && document.activeElement !== el) paintTranslationLine(el, tr.lines[index], cur.segments[index]);
 }
 
@@ -1009,13 +1095,12 @@ async function saveSegment(i, el) {
   const text = el.innerText.replace(/\s+/g, " ").trim();
   if (text === seg.text) { paintSegment(i); return; }
   try {
-    await invoke("update_segment", { id: cur.id, index: i, text });
+    const fresh = await invoke("update_segment", { id: cur.id, index: i, text });
     seg.text = text;
     seg.edited = true;
-    seg.words = []; // timed again by the app
+    seg.words = fresh?.words || []; // placed in time again by the app, from what it heard
     wordCache.delete(i);
-    const row = el.closest(".seg");
-    row.replaceWith(segRow(seg, i, false));
+    replaceRow(i);
     if (S.shown) paintTranslationMenu();
     runSearch(false);
   } catch (err) {
@@ -1047,35 +1132,74 @@ function renderLiveProgress() {
 
 // ------------------------------------------------------------------ search
 
+/** A line as search compares it, worked out once and kept until its text changes. */
+const NORMS = new WeakMap();
+function normOf(seg) {
+  let n = NORMS.get(seg);
+  if (!n || n.text !== seg.text) {
+    n = { text: seg.text, ...normMap(seg.text) };
+    NORMS.set(seg, n);
+  }
+  return n;
+}
+
+/** Find the words typed in every line. The hits are kept by line, and only the lines whose hits
+ *  changed, or which hold the current hit now or did before, are drawn again. */
 function runSearch(scroll) {
   const q = $("search").value.trim();
-  S.hits = [];
   const segs = S.current?.segments || [];
   const nq = q ? normMap(q).norm : "";
-  segs.forEach((s, i) => {
-    if (!nq) return;
-    const { norm, map } = normMap(s.text);
-    let from = 0, k;
-    while ((k = norm.indexOf(nq, from)) !== -1) {
-      S.hits.push({ i, a: map[k], b: map[k + nq.length - 1] + 1 });
-      from = k + nq.length;
+  const hits = [];
+  const byLine = new Map();
+  if (nq) {
+    for (let i = 0; i < segs.length; i++) {
+      const { norm, map } = normOf(segs[i]);
+      let from = 0, k;
+      while ((k = norm.indexOf(nq, from)) !== -1) {
+        const h = { i, a: map[k], b: map[k + nq.length - 1] + 1, n: hits.length };
+        hits.push(h);
+        let line = byLine.get(i);
+        if (!line) byLine.set(i, (line = []));
+        line.push(h);
+        from = k + nq.length;
+      }
     }
-  });
-  if (S.hit >= S.hits.length) S.hit = S.hits.length - 1;
-  if (S.hit < 0 && S.hits.length) S.hit = 0;
-  $("search-count").textContent = q ? (S.hits.length ? `${S.hit + 1} / ${S.hits.length}` : t("t.noMatches")) : "";
-  segs.forEach((_, i) => paintSegment(i));
+  }
+  S.hits = hits;
+  if (S.hit >= hits.length) S.hit = hits.length - 1;
+  if (S.hit < 0 && hits.length) S.hit = 0;
+  setText($("search-count"), q ? (hits.length ? `${S.hit + 1} / ${hits.length}` : t("t.noMatches")) : "");
+  const before = S.hitLines || new Map();
+  S.hitLines = byLine;
+  // the lines on the screen now; the others when they come near it (see `seen`)
+  for (const i of before.keys()) if (!byLine.has(i)) paintLater(i);
+  for (const i of byLine.keys()) paintLater(i);
   if (scroll) scrollToHit();
 }
 
-function paintSegment(i) {
-  const row = $("segments").querySelector(`.seg[data-i="${i}"]`);
-  if (!row) return;
+/** Paint line `i` now if it is on the screen or near it, or when it gets there. */
+function paintLater(i) {
+  if (S.visible.has(i)) paintSegment(i);
+  else S.stale.add(i);
+}
+
+/** What line `i` shows of the search: its hits, and which one is the current one. */
+function hitSig(i) {
+  return (S.hitLines?.get(i) || []).map((h) => `${h.a}-${h.b}${h.n === S.hit ? "*" : ""}`).join(",");
+}
+
+function paintSegment(i, force) {
+  const row = S.rows?.[i];
+  if (!row) return; // not drawn yet: it is painted when it is
+  S.stale.delete(i);
   const el = row.querySelector(".text");
   if (document.activeElement === el) return;
-  shownWord = ""; // the highlight sits on the text nodes replaced here: draw it again
+  const sig = hitSig(i);
+  if (!force && (S.painted.get(i) ?? "") === sig) return;
+  S.painted.set(i, sig);
+  if (shownWord.startsWith(`${S.current.id}:${i}:`)) shownWord = ""; // the highlight sat on the text replaced here
   const text = S.current.segments[i].text;
-  const hits = S.hits.map((h, n) => ({ ...h, n })).filter((h) => h.i === i);
+  const hits = S.hitLines?.get(i) || [];
   if (!hits.length) { el.textContent = text; return; }
   let html = "", at = 0;
   for (const h of hits) {
@@ -1086,8 +1210,78 @@ function paintSegment(i) {
 }
 
 function scrollToHit() {
-  const m = $("segments").querySelector("mark.current");
+  const h = S.hits[S.hit];
+  if (!h) return;
+  rowOf(h.i); // drawn, if it was not yet
+  paintSegment(h.i);
+  const m = S.rows[h.i]?.querySelector("mark.current");
   if (m) m.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+// ------------------------------------------------------------------ long transcripts
+
+/** Lines drawn at once, then a portion at a time. */
+const PORTION = 120;
+
+/** Draw the next `n` lines of the transcript on screen. */
+function growRows(n) {
+  const cur = S.current, box = $("segments");
+  if (!cur) return;
+  const start = S.rows.length;
+  const end = Math.min(cur.segments.length, start + n);
+  if (end <= start) return;
+  const frag = document.createDocumentFragment();
+  for (let i = start; i < end; i++) {
+    const row = segRow(cur.segments[i], i, S.rowsLive);
+    S.rows[i] = row;
+    frag.append(row);
+  }
+  box.append(frag);
+  for (let i = start; i < end; i++) {
+    S.seen?.observe(S.rows[i]);
+    if (S.hitLines?.has(i)) S.stale.add(i);
+  }
+}
+
+/** Which lines are on the screen or near it: those get painted for the search at once. */
+function watchRows() {
+  S.seen?.disconnect();
+  S.visible = new Set();
+  S.stale = new Set();
+  S.seen = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const i = Number(e.target.dataset.i);
+      if (e.isIntersecting) {
+        S.visible.add(i);
+        if (S.stale.has(i)) paintSegment(i);
+      } else S.visible.delete(i);
+    }
+  }, { root: $("segments"), rootMargin: "800px 0px" });
+}
+
+/** The rest of the lines, a portion each time the window has a moment. */
+function moreRows() {
+  clearTimeout(S.rowTimer);
+  if (!S.current || S.rows.length >= S.current.segments.length) return;
+  S.rowTimer = setTimeout(() => { growRows(PORTION * 4); moreRows(); }, 0);
+}
+
+/** Draw line `i` again, after it changed. */
+function replaceRow(i) {
+  const old = S.rows?.[i];
+  if (!old) return;
+  const row = segRow(S.current.segments[i], i, S.rowsLive);
+  old.replaceWith(row);
+  S.rows[i] = row;
+  S.painted.delete(i);
+  paintSegment(i);
+}
+
+/** Line `i`'s row, drawn first if it was not yet. */
+function rowOf(i) {
+  if (!S.current || !S.rows || i < 0 || i >= S.current.segments.length) return null;
+  if (i >= S.rows.length) growRows(i + 1 - S.rows.length);
+  return S.rows[i];
 }
 
 function stepHit(d) {
@@ -1288,7 +1482,7 @@ function followTick() {
     let k = -1;
     for (let j = 0; j < words.length; j++) { if (words[j].t <= now + 0.05) k = j; else break; }
     const key = `${S.current.id}:${i}:${k}`;
-    const row = $("segments").querySelector(`.seg[data-i="${i}"]`);
+    const row = rowOf(i);
     const el = row?.querySelector(".text");
     if (el && el.textContent !== S.current.segments[i].text) {
       // the line is being edited: its characters no longer match the timings of its words
@@ -1406,7 +1600,7 @@ $("audio").addEventListener("timeupdate", () => {
   if (i === playingIdx) return;
   $("segments").querySelector(".seg.playing")?.classList.remove("playing");
   playingIdx = i;
-  if (i >= 0) $("segments").querySelector(`.seg[data-i="${i}"]`)?.classList.add("playing");
+  if (i >= 0) rowOf(i)?.classList.add("playing");
 });
 
 // ------------------------------------------------------------------ actions
@@ -1442,8 +1636,7 @@ async function addFiles(paths) {
   const steps = stepsForJob();
   if (!stepsReady(steps)) return;
   const ids = await invoke("enqueue", { paths: ok, language: S.spoken, steps });
-  S.snap = await invoke("get_state");
-  renderQueue();
+  onState(await invoke("get_state"));
   if (ids.length && steps.transcribe) openTranscript(ids[0]);
 }
 
@@ -1455,9 +1648,9 @@ async function chooseFiles() {
 async function addFolder(path) {
   const steps = stepsForJob();
   if (!stepsReady(steps)) return;
-  const { added, already } = await invoke("enqueue_folder", { path, language: S.spoken, steps });
-  S.snap = await invoke("get_state");
-  renderQueue();
+  const { added, already, stopped } = await invoke("enqueue_folder", { path, language: S.spoken, steps });
+  onState(await invoke("get_state"));
+  if (stopped) return;
   const parts = [];
   if (added.length) parts.push(t("toast.folderAdded", { n: added.length }));
   if (already) parts.push(t("toast.folderAlready", { n: already }));
@@ -1584,6 +1777,8 @@ async function renameCurrent() {
 
 function onState(snap) {
   const prev = S.snap;
+  // a state older than the one shown, overtaken on its way: nothing to learn from it
+  if (prev && snap.seq < prev.seq) return;
   S.snap = snap;
   if (!(prev && spokenModel(prev.setup)) && spokenModel(snap.setup)) S.setupStep = null;
   renderChips();
@@ -1650,15 +1845,56 @@ function onSegment({ id, segment }) {
   const box = $("segments");
   box.querySelector(".empty-live")?.remove();
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
-  box.append(segRow(segment, cur.segments.length - 1, true));
+  rowOf(cur.segments.length - 1);
   if (nearBottom) box.scrollTop = box.scrollHeight;
   if ($("search").value.trim()) runSearch(false);
   renderMeta();
 }
 
+// ------------------------------------------------------------------ size and keyboard
+
+/** Ctrl and plus, minus or zero: the whole interface larger, smaller, or as it comes. By the
+ *  key's place, so it works on any keyboard layout; remembered in the settings. */
+function wireZoom() {
+  document.addEventListener("keydown", async (ev) => {
+    if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
+    const now = S.snap?.setup?.zoom || 1;
+    let to = null;
+    if (ev.code === "Equal" || ev.code === "NumpadAdd") to = now + 0.1;
+    else if (ev.code === "Minus" || ev.code === "NumpadSubtract") to = now - 0.1;
+    else if (ev.code === "Digit0" || ev.code === "Numpad0") to = 1;
+    if (to === null) return;
+    ev.preventDefault();
+    try { await invoke("set_zoom", { level: to }); onState(await invoke("get_state")); } catch (err) { toast(String(err)); }
+  });
+  // the mouse wheel with Ctrl does the same, a step at a time
+  document.addEventListener("wheel", async (ev) => {
+    if (!ev.ctrlKey) return;
+    ev.preventDefault();
+    const now = S.snap?.setup?.zoom || 1;
+    try { await invoke("set_zoom", { level: now + (ev.deltaY < 0 ? 0.1 : -0.1) }); onState(await invoke("get_state")); } catch { /* the next one */ }
+  }, { passive: false });
+}
+
+/** Escape closes whatever menu is open, and gives the focus back to the button that opened it. */
+function wireEscape() {
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key !== "Escape") return;
+    const menu = $("export-menu");
+    if (!menu.hidden) {
+      menu.hidden = true;
+      $("btn-export").focus();
+      ev.preventDefault();
+    }
+    if (!$("ctx-menu").hidden) { hideCtx(); ev.preventDefault(); }
+  });
+}
+
 // ------------------------------------------------------------------ wiring
 
 function wire() {
+  wireZoom();
+  wireEscape();
   wireListen();
   wireVolume();
   wirePlayer();
@@ -1669,6 +1905,13 @@ function wire() {
   });
   $("dropzone").addEventListener("keydown", (ev) => {
     if (ev.target === $("dropzone") && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); chooseFiles(); }
+  });
+  // "a folder" is reached with Tab like the rest, and opened with Enter
+  const folderLink = $("home-folder");
+  folderLink.tabIndex = 0;
+  folderLink.setAttribute("role", "button");
+  folderLink.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); ev.stopPropagation(); chooseFolder(); }
   });
   $("queue-cancel-all").onclick = () => invoke("cancel_all_jobs");
   for (const menu of [$("spoken"), $("setup-spoken")]) menu.onchange = () => setSpoken(menu.value);
@@ -1747,7 +1990,12 @@ function wire() {
 
   $("history-filter").addEventListener("input", renderHistory);
 
-  $("search").addEventListener("input", () => { S.hit = 0; runSearch(true); });
+  // each key is answered on the next frame: keys typed faster than that are one search
+  $("search").addEventListener("input", () => {
+    S.hit = 0;
+    cancelAnimationFrame(S.searchFrame);
+    S.searchFrame = requestAnimationFrame(() => runSearch(true));
+  });
   $("search").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); stepHit(ev.shiftKey ? -1 : 1); }
     if (ev.key === "Escape") { $("search").value = ""; runSearch(false); }

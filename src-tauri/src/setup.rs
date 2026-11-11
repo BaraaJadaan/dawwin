@@ -240,6 +240,9 @@ pub struct Settings {
     /// What transcribing a folder writes next to each recording; unset means text only
     #[serde(default)]
     pub folder_formats: Option<Vec<String>>,
+    /// How large the interface is drawn: the webview's zoom, 1 as it comes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
 }
 
 impl Settings {

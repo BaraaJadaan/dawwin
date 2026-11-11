@@ -577,6 +577,12 @@ function renderSetup() {
       if (rate > 0) line += ` · ${rateText(rate)} · ` + t("dl.left", { dur: dur((total - doneBytes) / rate) });
     }
     $("download-text").textContent = line;
+    // it cannot connect, and has tried five times: why, and the other way to get the file
+    const why = d.active && d.retry_reason;
+    $("download-why").hidden = !why;
+    $("download-why").textContent = why ? t("dl.why", { reason: d.retry_reason }) : "";
+    $("btn-download-hand").hidden = !why;
+    $("btn-download-hand").dataset.model = dm.id;
     const bd = $("btn-download");
     bd.textContent = t(d.active ? "dl.pause" : "dl.resume");
     bd.className = "btn " + (d.active ? "" : "btn-primary");
@@ -721,7 +727,9 @@ function renderRows(box, st, models) {
     const pctOf = (n, of = m.size) => Math.floor((100 * n) / of);
     // "use" only means something where there is a choice of file for the same languages
     const choice = all.filter((x) => x.family === m.family).length > 1;
-    row.querySelector(".status").textContent = first
+    row.querySelector(".status").textContent = going && d.retry_reason
+      ? t("dl.why", { reason: d.retry_reason })
+      : first
       ? t("dl.translatorFirst", { pct: pctOf(d.done, d.total) })
       : going
       ? (d.verifying ? t("dl.verifying") : t("set.modelGoing", { pct: pctOf(d.done) }))
@@ -1979,6 +1987,10 @@ function wire() {
     S.setupStep = "download";
     invoke("download_model", { id: m.id });
     renderSetup();
+  };
+  $("btn-download-hand").onclick = () => {
+    const m = S.snap.setup.models.find((x) => x.id === $("btn-download-hand").dataset.model);
+    if (m) invoke("open_url", { url: m.page });
   };
   $("btn-manual").onclick = () => {
     const m = S.snap.setup.models.find((x) => x.id === S.pick);

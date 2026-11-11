@@ -7,6 +7,7 @@ mod folder;
 mod history;
 pub mod i18n;
 mod models;
+mod net;
 mod queue;
 mod script;
 mod setup;

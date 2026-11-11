@@ -117,6 +117,8 @@ pub struct DownloadView {
     /// after a dropped connection: seconds until it resumes, and the attempt number
     pub retry_wait: Option<u64>,
     pub retry_attempt: Option<u64>,
+    /// Why it cannot connect, after a few tries that got nowhere (it keeps trying)
+    pub retry_reason: Option<String>,
     /// All of it arrived, and it is being read back to check it
     pub verifying: bool,
     pub error: Option<String>,
@@ -531,10 +533,14 @@ impl Core {
                             d.done = done;
                             d.retry_wait = None;
                             d.retry_attempt = None;
+                            d.retry_reason = None;
                         }
-                        models::Event::Retrying { wait_s, attempt } => {
+                        models::Event::Retrying { wait_s, attempt, reason } => {
                             d.retry_wait = Some(wait_s);
                             d.retry_attempt = Some(attempt);
+                            if reason.is_some() {
+                                d.retry_reason = reason;
+                            }
                         }
                         models::Event::Verifying { done } => {
                             d.done = done;

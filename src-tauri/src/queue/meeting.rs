@@ -617,6 +617,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     let mut last_saved = Instant::now();
     let pieces = sess.pieces.lock().unwrap().take();
     let delay = test_delay();
+    let mut shown_s = -1.0;
     if let Some(rx) = pieces {
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
@@ -640,7 +641,10 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                     let r = &mut resume[idx(p.track)];
                     *r = Some(r.map_or(p.start, |x| x.min(p.start)));
                 }
-                core.update_job(id, |x| x.duration_s = now_s);
+                if now_s.floor() != shown_s {
+                    shown_s = now_s.floor();
+                    core.update_job(id, |x| x.duration_s = now_s);
+                }
                 continue;
             }
             if let Some(p) = next_piece(&mut pending) {
@@ -663,10 +667,14 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                     }
                 }
             }
-            core.update_job(id, |x| {
-                x.duration_s = now_s;
-                x.elapsed_s = started.elapsed().as_secs_f64();
-            });
+            // the whole state once a second: the levels have an event of their own
+            if now_s.floor() != shown_s {
+                shown_s = now_s.floor();
+                core.update_job(id, |x| {
+                    x.duration_s = now_s;
+                    x.elapsed_s = started.elapsed().as_secs_f64();
+                });
+            }
             if last_saved.elapsed() > Duration::from_secs(20) && !t.segments.is_empty() {
                 t.duration_s = now_s;
                 let _ = history::save(&core.paths.history_dir(), &t);

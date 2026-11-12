@@ -160,9 +160,15 @@ function recordPanel(withText) {
 }
 
 /** The start page's Record bar: Record and what to record, or the recording that runs. */
+/** A menu of the panel is open: drawing it again would close the menu under the pointer. */
+function choosing(box) {
+  const el = document.activeElement;
+  return !!el && el.tagName === "SELECT" && box.contains(el);
+}
+
 function renderRecordBar() {
   const bar = $("record-bar");
-  if (!bar) return;
+  if (!bar || choosing(bar)) return;
   const job = recordJob();
   let html = "";
   if (job) html = recordPanel(true);
@@ -192,7 +198,7 @@ function renderRecordBar() {
 /** The levels and Stop above the text of the recording on screen. */
 function recordProgress(j) {
   const box = $("t-rec");
-  if (!box) return;
+  if (!box || choosing(box)) return;
   const on = j?.kind === "record" && j.status === "recording";
   box.hidden = !on;
   if (on) box.innerHTML = recordPanel(false);
@@ -241,6 +247,7 @@ async function onRecordClick(ev) {
 async function onRecordChange(ev) {
   const el = ev.target.closest("select[data-rec]");
   if (!el) return;
+  el.blur();
   try {
     if (el.dataset.rec === "sources") REC.setup.settings = await invoke("set_record_sources", { sources: el.value });
     else REC.setup.settings = await invoke("choose_microphone", { id: el.value || null });

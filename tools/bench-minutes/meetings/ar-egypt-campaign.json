@@ -1,0 +1,283 @@
+{
+  "id": "ar-egypt-campaign",
+  "language": "ar",
+  "variety": "Egyptian Arabic with English marketing terms",
+  "kind": "meeting",
+  "speakers": "none",
+  "people": [
+    [
+      "كريم",
+      "karim",
+      "kareem"
+    ],
+    [
+      "منى",
+      "mona",
+      "muna"
+    ],
+    [
+      "هبة",
+      "هبه",
+      "heba",
+      "hiba"
+    ],
+    [
+      "عمرو",
+      "amr",
+      "amro",
+      "amru"
+    ],
+    [
+      "سلوى",
+      "salwa"
+    ],
+    [
+      "مجدي",
+      "magdy",
+      "magdi",
+      "majdi"
+    ],
+    [
+      "ندى فودي",
+      "ندى",
+      "nada foodie",
+      "nada"
+    ],
+    [
+      "زيزو",
+      "zizo",
+      "zizou"
+    ]
+  ],
+  "decisions": [
+    {
+      "text": "الـ launch event هيبقى يوم الخميس 17 ديسمبر.",
+      "lines": [
+        12,
+        14,
+        15
+      ]
+    },
+    {
+      "text": "تقسيم ميزانية الـ 600 ألف جنيه: 40% TikTok و35% influencers و25% Instagram.",
+      "lines": [
+        28,
+        31
+      ]
+    },
+    {
+      "text": "الحملة هتشتغل مع اتنين influencers بس: ندى فودي وزيزو.",
+      "lines": [
+        43
+      ]
+    },
+    {
+      "text": "الهاشتاج الرسمي للحملة هو قرمشها.",
+      "lines": [
+        55
+      ]
+    },
+    {
+      "text": "الـ KPI الأساسي 3 مليون view على TikTok في أول أسبوعين بعد الـ launch.",
+      "lines": [
+        64,
+        66
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "who": [
+        "هبة",
+        "هبه",
+        "heba",
+        "hiba"
+      ],
+      "what": "تبعت الـ brief وتقفل العقود مع ندى فودي وزيزو",
+      "due": [
+        "26 نوفمبر",
+        "٢٦ نوفمبر",
+        "november 26",
+        "26 november",
+        "nov 26",
+        "26 nov",
+        "26th",
+        "26/11"
+      ],
+      "lines": [
+        44,
+        45
+      ]
+    },
+    {
+      "who": [
+        "منى",
+        "mona",
+        "muna"
+      ],
+      "what": "تبعت الـ content calendar النهائي على الجروب",
+      "due": [
+        "الحد",
+        "الأحد",
+        "الاحد",
+        "sunday"
+      ],
+      "lines": [
+        56,
+        57
+      ]
+    },
+    {
+      "who": [
+        "عمرو",
+        "amr",
+        "amro",
+        "amru"
+      ],
+      "what": "يعمل dashboard لمتابعة الـ KPIs",
+      "due": [],
+      "lines": [
+        71,
+        72
+      ]
+    },
+    {
+      "who": [
+        "عمرو",
+        "amr",
+        "amro",
+        "amru"
+      ],
+      "what": "يكلم مجدي ويعاين الـ rooftop في الزمالك ويحجزه للـ event",
+      "due": [
+        "الاتنين",
+        "الاثنين",
+        "الإثنين",
+        "اتنين",
+        "اثنين",
+        "monday"
+      ],
+      "lines": [
+        80,
+        81
+      ]
+    },
+    {
+      "who": [
+        "كريم",
+        "karim",
+        "kareem"
+      ],
+      "what": "يبعت لسلوى ملخص الاجتماع وتقسيمة الميزانية عشان تعتمدها",
+      "due": [
+        "بكرة",
+        "بكره",
+        "غدا",
+        "غداً",
+        "tomorrow"
+      ],
+      "lines": [
+        85,
+        86
+      ]
+    }
+  ],
+  "open_questions": [
+    {
+      "text": "لو الـ engagement طلع ضعيف في أول أسبوع، نحول فلوس من TikTok لـ Instagram؟",
+      "lines": [
+        69
+      ]
+    },
+    {
+      "text": "الـ event هيبقى بالدعوات بس ولا مفتوح للجمهور؟",
+      "lines": [
+        82
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "title": "ميعاد ومكان الـ launch event",
+      "line": 9
+    },
+    {
+      "title": "الـ budget وتقسيمه",
+      "line": 16
+    },
+    {
+      "title": "الـ influencers",
+      "line": 35
+    },
+    {
+      "title": "الـ content calendar والهاشتاج",
+      "line": 49
+    },
+    {
+      "title": "الـ KPIs",
+      "line": 61
+    }
+  ],
+  "facts": [
+    [
+      "قرمش",
+      "ليمون",
+      "qarmash",
+      "karmash",
+      "lemon"
+    ],
+    [
+      "17 ديسمبر",
+      "١٧ ديسمبر",
+      "december 17",
+      "17 december",
+      "dec 17",
+      "17 dec",
+      "17th",
+      "17/12"
+    ],
+    [
+      "600",
+      "٦٠٠",
+      "ستمية",
+      "ستمائة"
+    ],
+    [
+      "ندى",
+      "nada",
+      "زيزو",
+      "zizo"
+    ],
+    [
+      "3 مليون",
+      "٣ مليون",
+      "3 ملايين",
+      "٣ ملايين",
+      "تلات ملايين",
+      "ثلاثة ملايين",
+      "3 million",
+      "three million",
+      "3m view"
+    ],
+    [
+      "40%",
+      "40 %",
+      "٤٠٪",
+      "٤٠ ٪",
+      "40 percent",
+      "40 في",
+      "٤٠ في"
+    ]
+  ],
+  "traps": [
+    "No speaker labels at all: owners are only known from how people are addressed (e.g. line 2 'يا كريم', 44 'يا هبة', 56 'يا منى', 72 and 80 'يا عمرو', 86 'تمام يا كريم' after Karim's own task in 85).",
+    "Rejected proposal: Amr suggests a billboard on the Ring Road (18-22); it costs about half the budget (23) and Karim rejects it (24). It is not a decision to do it.",
+    "Self-correction of a day: the event is first said as Wednesday the 16th, then corrected to Thursday 17 December (12). The old idea of 'early December' (10-11) is dropped.",
+    "Self-correction of a number: the TikTok target is first 2 million views, corrected to 3 million (64, confirmed 66). Nada Foodie's 1.8 million followers (37) is not a target.",
+    "Task moved: checking and booking Magdy's rooftop venue is first given to Heba (77), then moved to Amr (79-81) because she travels; final owner Amr, due Monday.",
+    "Dates that are not deadlines: Heba's trip from 28 November to 3 December (78); Karim's other call at twelve o'clock (7, 84); the Ramadan event (76) is past.",
+    "Task with no deadline: Amr's KPI dashboard (71-73), 'مش مستعجل، على راحتك'.",
+    "Not a decision: YouTube ads 'نفكر فيها بعد الـ launch' (58-59).",
+    "Heba's contracts are due 26 November (45), which is before her 28 November trip; the deadline is the 26th, not the 28th."
+  ]
+}

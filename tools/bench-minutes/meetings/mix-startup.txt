@@ -1,0 +1,89 @@
+00:03	ليث	okay، صباح الخير يا جماعة. Hi Mark، can you hear us okay?
+00:10	Mark	Yeah, loud and clear. Morning, everyone.
+00:13	سارة	صباح النور. Mark، how was the flight?
+00:18	Mark	Long. I landed around two a.m., so bear with me if I'm slow today.
+00:25	عمر	ههه، الزلمة نايم ساعتين بس، خلينا نخلص بسرعة.
+00:30	ليث	طيب يلا، خلينا نبلش. So the main thing today is the investor demo.
+00:36	ليث	الـ demo مع Diane والـ fund تبعها يوم الثلاثاء 24 تشرين التاني، الساعة 11 الصبح.
+00:44	Mark	And who's coming from their side?
+00:48	ليث	Diane and two partners, I think. Maybe their analyst too.
+00:53	Mark	Good. Diane told me their investment committee meets on December 10th, so if they like us, that's the timeline on their end.
+01:03	عمر	يعني حتى لو مشي الحال، ما في قرار قبل 10 كانون الأول.
+01:09	ليث	exactly. بس هاد عندهم مش عنا، إحنا بدنا نركز على الـ demo نفسه.
+01:15	سارة	okay بس لازم نخلص الـ onboarding flow قبل الـ demo، هسا هو سبع خطوات وهاد كتير.
+01:22	Mark	Seven steps? Yeah, that's way too long. People drop off after three or four.
+01:30	سارة	بالزبط. الـ data من الـ beta بتقول إنه 40% من الناس بطلعوا عند خطوة ربط البنك.
+01:38	عمر	لأنه ربط البنك بدو OTP، والـ API تبع البنك بطيء كتير.
+01:44	Mark	So what if we just pull the bank linking out of onboarding? Let them do it later.
+01:53	سارة	That's exactly what I was thinking. نخليها optional، بعد ما يفوت على الـ dashboard.
+02:00	ليث	طيب، وقديش خطوة بتصير؟
+02:03	سارة	أربعة. الـ sign up، اسم المحل، نوع المحل، وأول فاتورة.
+02:08	عمر	وال... والـ phone verification؟ وين بتروح؟
+02:13	سارة	بتصير جوا الـ sign up، نفس الشاشة.
+02:17	ليث	تمام. So we agree: onboarding is four steps, and bank linking moves out, optional, later.
+02:25	Mark	Agreed.
+02:28	عمر	ماشي، أنا معكم.
+02:31	ليث	سارة، بتلحقي تخلصيه قبل الـ demo؟
+02:36	سارة	إذا ما حدا غيّر الـ design مرة تانية، آه. بخلصه يوم الخميس.
+02:42	ليث	الخميس، ممتاز. Mark، Sara will have the new onboarding done by Thursday.
+02:49	Mark	Great.
+02:52	ليث	Next thing، الـ demo account. بدنا account فيه data شكلها حقيقي، مش test test test.
+02:59	ليث	سارة، إنتِ بتعملي الـ demo account كمان؟
+03:04	سارة	Honestly، مش رح ألحق. الـ onboarding رح ياكل كل الأسبوع.
+03:09	عمر	خلص، أنا بعمله. عندي script بعبي فواتير ومنتجات fake.
+03:14	ليث	okay، عمر بعمل الـ demo account. Omar's taking the demo account, Mark.
+03:20	Mark	By when?
+03:23	عمر	By Sunday. يوم الأحد بكون جاهز إن شاء الله.
+03:28	Mark	Perfect. And please make the shop names realistic. The last demo I saw had a shop called asdf.
+03:37	عمر	ههههه لا لا، رح أحط أسامي محلات من جبل عمّان.
+03:43	ليث	طيب، الـ pricing. هاد يمكن أهم إشي.
+03:47	ليث	Diane أكيد رح تسأل عن الـ pricing، فلازم يكون عنا جواب واضح.
+03:53	Mark	Can I throw something out there? What about a free tier, forever? Freemium. Get the user numbers up before the round.
+04:03	عمر	Free forever؟ امم، بس كل user بكلفنا server و support.
+04:09	سارة	وكمان المحلات الصغيرة هون، إذا أخدوها ببلاش مرة، مستحيل يدفعوا بعدين.
+04:15	ليث	Yeah, I hear you Mark، بس I don't think free forever works here. The support cost alone would kill us.
+04:25	Mark	Fair enough. You know the market better than I do. Let's drop it.
+04:31	ليث	So my proposal: two plans. Basic بـ 7 دنانير بالشهر... لا sorry، 9، 9 دنانير، الـ 7 كان السعر القديم.
+04:41	ليث	و Pro بـ 19 دينار، وفيه الـ inventory والـ multiple users.
+04:47	سارة	والـ free trial؟
+04:50	ليث	14 يوم free trial على الخطتين.
+04:54	عمر	14 يوم منيحة، الـ beta users أصلاً بقرروا من أول أسبوع.
+05:00	Mark	Nine and nineteen, fourteen-day trial. That's clean. I like it.
+05:06	ليث	خلص، we're going with that: Basic 9، Pro 19، و 14 يوم trial.
+05:13	عمر	طب والـ annual plan؟ نعطيهم شهرين ببلاش إذا دفعوا سنة كاملة؟
+05:19	ليث	امم، فكرة حلوة، بس خلينا نفكر فيها بعد الـ demo. مش هلأ.
+05:26	سارة	وفي إشي كمان، الـ 300 beta users اللي عنا، شو بصير فيهم لما يبلش الـ pricing؟ بضلوا ببلاش ولا بدفعوا؟
+05:36	عمر	والله سؤال.
+05:39	Mark	Sorry, what was that? You lost me in the Arabic.
+05:45	سارة	Sorry Mark. The 300 beta users, do they stay free or do they start paying?
+05:53	Mark	Hmm. That's a tricky one.
+05:56	ليث	طيب خلينا نكمل، الوقت ماشي.
+05:59	ليث	Mark، I'll update the deck with the new pricing by Monday.
+06:06	Mark	Monday works. Send it to me before it goes to Diane.
+06:12	ليث	أكيد، أكيد.
+06:15	ليث	هلأ، مين بقدّم شو يوم الثلاثاء؟
+06:19	Mark	My two cents: Laith does the story and the numbers, Sara does the product. Investors love seeing founders show their own thing.
+06:29	سارة	أنا؟ live demo؟ يا رب ما يوقع الـ server.
+06:34	عمر	ما رح يوقع، I promise. بس لازم نوقف أي deploy قبلها.
+06:40	ليث	بالزبط، وهاد بجيبني لنقطة مهمة: feature freeze. No new features until after the demo.
+06:47	عمر	ولا حتى الـ export to Excel؟ أنا تقريباً خلصته.
+06:53	ليث	ولا حتى الـ export. بعد الـ demo بتعمله deploy.
+06:58	عمر	ماشي، ماشي. زعلان بس ماشي.
+07:01	ليث	So: أنا بعمل الـ pitch، سارة بتعمل الـ live demo، and nothing new gets deployed until after Tuesday.
+07:09	Mark	Love it.
+07:12	Mark	One more thing. Are we going to show them the churn numbers from the beta? Because they will ask.
+07:22	ليث	امم... الـ churn.
+07:25	سارة	الـ churn مش منيح بصراحة، 18% بالشهر.
+07:29	عمر	بس هاد كان قبل ما نصلّح الـ sync bug.
+07:34	ليث	I honestly don't know, Mark.
+07:37	Mark	Okay. I'll write up the questions they're likely to ask, churn included, and send it over. No rush on that.
+07:47	ليث	Thanks Mark، هاد رح يساعدنا كتير.
+07:52	ليث	And I'll email Diane today to confirm the 11 o'clock slot.
+07:57	سارة	ليث، اسألها كمان إذا في screen بالغرفة، ولا نجيب اللابتوب تبعنا.
+08:03	ليث	آه صح، بسألها بنفس الإيميل.
+08:07	عمر	يعني الـ timeline هيك: الخميس الـ onboarding، الأحد الـ demo account، الاثنين الـ deck، والثلاثاء الـ demo.
+08:15	ليث	بالزبط.
+08:18	Mark	Alright, I've got to jump on another call. Good stuff, guys.
+08:24	سارة	Thanks Mark، bye.
+08:27	عمر	يلا، سلام.
+08:30	ليث	يلا، يعطيكم العافية.

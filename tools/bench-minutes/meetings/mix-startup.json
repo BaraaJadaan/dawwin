@@ -1,0 +1,268 @@
+{
+  "id": "mix-startup",
+  "language": "ar",
+  "variety": "Jordanian Arabic and English, switching",
+  "kind": "meeting",
+  "speakers": "named",
+  "people": [
+    [
+      "ليث",
+      "laith",
+      "layth",
+      "leith"
+    ],
+    [
+      "سارة",
+      "سارا",
+      "ساره",
+      "sara",
+      "sarah"
+    ],
+    [
+      "عمر",
+      "omar",
+      "umar"
+    ],
+    [
+      "مارك",
+      "mark"
+    ],
+    [
+      "ديان",
+      "دايان",
+      "diane",
+      "dian"
+    ]
+  ],
+  "decisions": [
+    {
+      "text": "الـ onboarding يصير 4 خطوات، وربط البنك يطلع منه ويصير optional بعدين.",
+      "lines": [
+        23,
+        24
+      ]
+    },
+    {
+      "text": "الـ pricing: خطة Basic بـ 9 دنانير بالشهر وخطة Pro بـ 19 دينار، مع free trial لمدة 14 يوم، وبدون free tier دائم.",
+      "lines": [
+        51,
+        52
+      ]
+    },
+    {
+      "text": "يوم الـ demo ليث بعمل الـ pitch وسارة بتعمل الـ live demo.",
+      "lines": [
+        72
+      ]
+    },
+    {
+      "text": "feature freeze: ما في features جديدة ولا deploy لحد ما يخلص الـ demo.",
+      "lines": [
+        68,
+        70,
+        72
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "who": [
+        "سارة",
+        "سارا",
+        "ساره",
+        "sara",
+        "sarah"
+      ],
+      "what": "تخلص الـ onboarding flow الجديد (4 خطوات)",
+      "due": [
+        "الخميس",
+        "خميس",
+        "thursday"
+      ],
+      "lines": [
+        27,
+        28
+      ]
+    },
+    {
+      "who": [
+        "عمر",
+        "omar",
+        "umar"
+      ],
+      "what": "يجهز الـ demo account بـ data واقعية",
+      "due": [
+        "الأحد",
+        "الاحد",
+        "sunday"
+      ],
+      "lines": [
+        34,
+        36
+      ]
+    },
+    {
+      "who": [
+        "ليث",
+        "laith",
+        "layth",
+        "leith"
+      ],
+      "what": "يحدّث الـ pitch deck بالـ pricing الجديد ويبعته لـ Mark قبل Diane",
+      "due": [
+        "الاثنين",
+        "الإثنين",
+        "اثنين",
+        "الاتنين",
+        "monday"
+      ],
+      "lines": [
+        61,
+        62
+      ]
+    },
+    {
+      "who": [
+        "مارك",
+        "mark"
+      ],
+      "what": "يكتب الأسئلة المتوقعة من المستثمرين، ومنها الـ churn",
+      "due": [],
+      "lines": [
+        79
+      ]
+    },
+    {
+      "who": [
+        "ليث",
+        "laith",
+        "layth",
+        "leith"
+      ],
+      "what": "يبعت إيميل لـ Diane يأكد موعد الساعة 11 ويسأل عن الشاشة",
+      "due": [
+        "اليوم",
+        "today"
+      ],
+      "lines": [
+        81,
+        83
+      ]
+    }
+  ],
+  "open_questions": [
+    {
+      "text": "الـ 300 beta users بضلوا ببلاش ولا بدفعوا لما يبلش الـ pricing؟",
+      "lines": [
+        55,
+        58
+      ]
+    },
+    {
+      "text": "هل نعرض أرقام الـ churn من الـ beta على المستثمرين؟",
+      "lines": [
+        74
+      ]
+    }
+  ],
+  "topics": [
+    {
+      "title": "الـ investor demo مع Diane",
+      "line": 6
+    },
+    {
+      "title": "الـ onboarding flow",
+      "line": 13
+    },
+    {
+      "title": "الـ pricing",
+      "line": 39
+    },
+    {
+      "title": "مين بقدم والـ feature freeze",
+      "line": 64
+    },
+    {
+      "title": "أرقام الـ churn وأسئلة المستثمرين",
+      "line": 74
+    }
+  ],
+  "facts": [
+    [
+      "24 تشرين",
+      "24 نوفمبر",
+      "٢٤ تشرين",
+      "٢٤ نوفمبر",
+      "november 24",
+      "24 november",
+      "nov 24",
+      "24 nov",
+      "24th",
+      "24/11",
+      "الثلاثاء",
+      "tuesday"
+    ],
+    [
+      "4 خطوات",
+      "٤ خطوات",
+      "أربع خطوات",
+      "اربع خطوات",
+      "أربعة خطوات",
+      "4 steps",
+      "four steps",
+      "four-step",
+      "4-step"
+    ],
+    [
+      "9 دنانير",
+      "9 دينار",
+      "٩ دنانير",
+      "٩ دينار",
+      "تسعة دنانير",
+      "9 jod",
+      "9 jd",
+      "9 dinar",
+      "jod 9",
+      "jd 9",
+      "nine dinar",
+      "basic 9",
+      "basic: 9",
+      "basic بـ 9"
+    ],
+    [
+      "14 يوم",
+      "١٤ يوم",
+      "14 days",
+      "14-day",
+      "14 day",
+      "fourteen",
+      "أسبوعين",
+      "two weeks",
+      "two-week"
+    ],
+    [
+      "diane",
+      "ديان",
+      "دايان"
+    ],
+    [
+      "freeze",
+      "فريز",
+      "تجميد",
+      "no new features",
+      "ميزات جديدة",
+      "features جديدة",
+      "feature جديدة"
+    ]
+  ],
+  "traps": [
+    "Rejected proposal: Mark proposes a free-forever (freemium) tier (41); Omar and Sara object (42-43), Laith rejects it (44) and Mark drops it (45). It is not a decision.",
+    "Date that is not a deadline: the fund's investment committee meets on December 10th (10-11); that is the investors' timeline, not a task for the team.",
+    "Task moved: the demo account is first asked of Sara (31), she says she cannot (32), Omar takes it (33-34, due Sunday 36); final owner Omar.",
+    "Self-correction of a number: the Basic plan is first said as 7 dinars, corrected to 9 (46); 7 was the old price.",
+    "Task with no deadline: Mark's write-up of likely investor questions, 'No rush on that' (79).",
+    "Not a decision: the annual plan with two months free, 'خلينا نفكر فيها بعد الـ demo' (53-54). The Excel export is postponed by the feature freeze (69-70), not assigned.",
+    "Two open questions are raised and left hanging: free or paid for the 300 beta users (55-60) and whether to show the 18% churn (74-78).",
+    "Mark speaks only English; Arabic speakers switch to English when they address him (28, 34, 44, 58), so the same fact is often stated twice in two languages."
+  ]
+}

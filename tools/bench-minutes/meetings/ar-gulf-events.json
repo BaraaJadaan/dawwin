@@ -1,0 +1,55 @@
+{
+  "id": "ar-gulf-events",
+  "language": "ar",
+  "variety": "Saudi (Najdi) Gulf Arabic with English terms",
+  "kind": "meeting",
+  "speakers": "numbered",
+  "people": [
+    ["نورة", "نوره", "noura", "nora", "norah", "nourah"],
+    ["فهد", "fahad", "fahd"],
+    ["عبدالله", "عبد الله", "abdullah", "abdallah", "abdulla"],
+    ["ريم", "reem"]
+  ],
+  "decisions": [
+    {"text": "الملتقى يكون في قاعة الفندق الأول اللي تاخذ 300 شخص، مو outdoor في خيمة.", "lines": [17, 18]},
+    {"text": "الـ budget 180 ألف، و20 ألف احتياط ما تنلمس إلا للضرورة.", "lines": [31, 33]},
+    {"text": "الغدا buffet مفتوح مع coffee break الصبح والعصر، وطاولة خاصة للـ VIP بنفس الـ buffet.", "lines": [45, 47]},
+    {"text": "كل جلسة ما تزيد عن نص ساعة، الـ keynote 45 دقيقة، والبرنامج يخلص الساعة أربع العصر.", "lines": [56, 58]}
+  ],
+  "actions": [
+    {"who": ["فهد", "fahad", "fahd"], "what": "يأكد الـ booking حق الفندق ويدفع العربون", "due": ["أربعاء", "اربعاء", "أربعا", "اربعا", "wednesday"], "lines": [22, 23, 75]},
+    {"who": ["عبدالله", "عبد الله", "abdullah", "abdallah", "abdulla"], "what": "يجيب ثلاث عروض أسعار من الـ vendors حق الـ catering", "due": ["أحد", "احد", "sunday"], "lines": [38, 40, 75]},
+    {"who": ["ريم", "reem"], "what": "تعدل الـ agenda وترسلها للمتحدثين", "due": ["20 نوفمبر", "٢٠ نوفمبر", "20 تشرين", "november 20", "20 november", "20/11"], "lines": [59, 61, 76]},
+    {"who": ["فهد", "fahad", "fahd"], "what": "يحجز غرف في الفندق للمتحدثين اللي جايين من الفروع", "due": [], "lines": [64, 65, 66]},
+    {"who": ["نورة", "نوره", "noura", "nora", "norah", "nourah"], "what": "تجهز قائمة الـ VIP مع مكتب المدير التنفيذي وترسلها للفريق", "due": ["ثلاثاء", "ثلاثا", "tuesday"], "lines": [68, 76]}
+  ],
+  "open_questions": [
+    {"text": "هل بنسوي live stream للفروع اللي ما يقدرون يحضرون؟", "lines": [69, 70]},
+    {"text": "مين بيقدم الحفل، MC من برا ولا أحد من الفريق؟", "lines": [72, 73]}
+  ],
+  "topics": [
+    {"title": "الـ venue: الفندق ولا outdoor", "line": 8},
+    {"title": "الـ budget", "line": 27},
+    {"title": "الـ catering والـ vendors", "line": 35},
+    {"title": "الـ agenda والجلسات", "line": 51},
+    {"title": "غرف المتحدثين ودعوات الـ VIP", "line": 63}
+  ],
+  "facts": [
+    ["9 ديسمبر", "٩ ديسمبر", "9 كانون", "9 december", "december 9", "9/12"],
+    ["180", "١٨٠"],
+    ["فندق", "hotel"],
+    ["buffet", "بوفيه", "بوفية"],
+    ["نص ساعة", "نصف ساعة", "30 دقيقة", "٣٠ دقيقة", "30 min", "half an hour", "half-hour", "thirty"]
+  ],
+  "traps": [
+    "Speakers are numbered and names occur only in speech: Speaker 1 is Noura (addressed at lines 2 and 21), Speaker 2 is Fahad (lines 8-9, 20-21), Speaker 3 is Abdullah (lines 5-6, 39-40), Speaker 4 is Reem (lines 3-4, 51-52, 60-61).",
+    "Rejected proposal (lines 13-17): Abdullah proposes an outdoor tent instead of the hotel; cost, rain and dust kill it and he drops it. The decision is the first hotel, 300 seats (line 18).",
+    "Self-correction (lines 20-22): the booking deadline is first 'before Thursday', then Noura corrects herself to Wednesday because the hotel's hold ends Thursday morning. Thursday is wrong.",
+    "Moved task (lines 35-40): the catering quotes are first given to Fahad (line 35); he is busy and Abdullah takes them (lines 37-38). The owner is Abdullah, due Sunday.",
+    "Dates that are not deadlines: 9 December is the conference date, fixed by management and not decided here (lines 24-25); 14 November was last year's conference (line 26).",
+    "Budget numbers that are not the decision: 200 thousand is management's ceiling and 150 a misunderstanding (lines 27-29); the decision is 180 plus 20 in reserve (line 33).",
+    "No deadline (lines 64-66): Fahad books rooms for the speakers from the branches; nobody gives a date. Flights go to the travel desk, which is no named person.",
+    "Not a decision (lines 48-50): gifts for attendees, 'we will think about it'. Not an action (line 34): the expense sheet already exists.",
+    "Open, not decided: live stream for the branches (69-71) and who will be the MC (72-73)."
+  ]
+}

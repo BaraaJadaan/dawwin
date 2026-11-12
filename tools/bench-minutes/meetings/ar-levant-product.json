@@ -1,0 +1,56 @@
+{
+  "id": "ar-levant-product",
+  "language": "ar",
+  "variety": "Levantine (Syrian) Arabic with English terms",
+  "kind": "meeting",
+  "speakers": "named",
+  "people": [
+    ["سارة", "ساره", "sara", "sarah"],
+    ["عمر", "omar", "omer"],
+    ["رامي", "rami", "ramy"],
+    ["لينا", "lina", "leena"],
+    ["خالد", "khaled", "khalid"],
+    ["نور", "nour", "noor"]
+  ],
+  "decisions": [
+    {"text": "الـ dark mode بيتأجّل للسبرنت الجاي وما بيطلع بهالـ release.", "lines": [27, 88]},
+    {"text": "الأندرويد والـ iOS بيطلعوا سوا بنفس اليوم، مش الأندرويد أول.", "lines": [56, 88]},
+    {"text": "الـ release يوم الأربعا 15 نيسان.", "lines": [60, 63]},
+    {"text": "أول نسخة من الـ dashboard فيها بس تلات metrics: الـ active users والـ crashes والـ sign-ups.", "lines": [73, 75, 76]}
+  ],
+  "actions": [
+    {"who": ["عمر", "omar", "omer"], "what": "يصلّح الـ login crash عالأندرويد", "due": ["اثنين", "إثنين", "اتنين", "monday"], "lines": [18, 19, 87]},
+    {"who": ["رامي", "rami", "ramy"], "what": "يعمل full regression عالـ staging", "due": ["ثلاثاء", "ثلاثا", "تلاتا", "tuesday"], "lines": [36, 37, 87]},
+    {"who": ["لينا", "lina", "leena"], "what": "تجمع الـ feedback من الـ beta testers بملف واحد", "due": ["أحد", "احد", "sunday"], "lines": [44, 45, 87]},
+    {"who": ["سارة", "ساره", "sara", "sarah"], "what": "تكتب الـ release notes وتبعتن لنور تبع الـ marketing", "due": ["بكرا", "بكرة", "بكره", "غدا", "tomorrow"], "lines": [64, 87]},
+    {"who": ["لينا", "lina", "leena"], "what": "تعمل الـ mockups النهائية للـ dashboard", "due": [], "lines": [77, 78]}
+  ],
+  "open_questions": [
+    {"text": "الـ dashboard بس للفريق ولا الـ clients كمان رح يشوفوه؟", "lines": [79, 80]},
+    {"text": "مين رح يكون on call بالويكند بعد الـ release؟", "lines": [83, 85]}
+  ],
+  "topics": [
+    {"title": "وضع السبرنت والـ bugs، الـ login crash", "line": 9},
+    {"title": "الـ dark mode", "line": 22},
+    {"title": "الـ QA والـ staging والـ beta testers", "line": 29},
+    {"title": "موعد الـ release", "line": 47},
+    {"title": "الـ dashboard", "line": 68}
+  ],
+  "facts": [
+    ["15 نيسان", "15 أبريل", "15 ابريل", "١٥ نيسان", "١٥ أبريل", "١٥ ابريل", "april 15", "15 april", "15/4"],
+    ["login", "لوجن", "لوغن", "لوجين", "تسجيل الدخول", "تسجيل دخول"],
+    ["dark mode", "الوضع الداكن", "الوضع الليلي", "الوضع المظلم", "دارك مود"],
+    ["ios", "آي أو إس", "اي او اس"],
+    ["dashboard", "داشبورد", "لوحة"]
+  ],
+  "traps": [
+    "Rejected proposal (lines 51-55): Omar proposes releasing Android first and iOS a week later; Lina, Sara and Rami object and he withdraws it. The decision is both platforms on the same day (line 56).",
+    "Self-correction (line 60): Sara first says Thursday 16, then corrects herself to Wednesday 15 April because of server maintenance on Thursday. Thursday 16 is wrong.",
+    "Dates that are not deadlines: 9 April was the old plan that cannot be met (line 48), 2 March was the last rushed release (line 49), 10 April is when Khaled is back from travel (line 62); 'last Thursday' is when staging went down (line 30).",
+    "Moved task (lines 38-45): collecting beta-tester feedback is first taken by Rami (line 40), then Lina takes it because Rami has the regression (lines 41-44). The owner is Lina, due Sunday.",
+    "No deadline (lines 77-78): Lina's final dashboard mockups; 'not before the release' is not a deadline and Sara says there is no deadline.",
+    "Not a decision (lines 65-67): an open beta for all users is left to think about after the release.",
+    "Not actions: the Arabic font bug was already fixed yesterday (line 20); asking Khaled before fixing the date is dropped because he said it is the team's call (lines 62-63).",
+    "Open, not decided: whether clients will see the dashboard (79-82) and who is on call the weekend after the release (83-85)."
+  ]
+}

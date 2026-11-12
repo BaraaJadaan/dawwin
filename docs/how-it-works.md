@@ -21,7 +21,11 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
 | `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time. |
-| `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
+| `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are, with each language's line length. |
+| `src-tauri/src/timing.rs` | When each word is said: the timing pass (each stretch between two pauses heard again) and the match of what was heard to the line's text. `timing/bench.rs` measures it. |
+| `src-tauri/src/script.rs` | How each writing system puts its words down: words in scripts without spaces, marks that stay with their letter, widths on a line. |
+| `src-tauri/src/net.rs` | The way out to the internet: the proxy Windows or `HTTPS_PROXY` names, and why a connection failed. |
+| `src-tauri/src/saving.rs` | Where the files Dawwin makes go: next to the recording, or a folder of one's own. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
 | `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
@@ -43,9 +47,17 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   11.2 % and 8.9 % word errors with speech detection, 6.5 % with padding, 5.2 % without either.
 - **One piece at a time.** Batches are 1.7 times faster on a GPU, but the padding of their shorter
   pieces made the Q8 model invent English sentences past the end of the speech on a recitation.
-- **Word timings.** The engine gives none, so the word being said is estimated from
-  `audio::voice_profile` (where the speech is in the line). Transcripts from older versions keep the
-  timings they were saved with.
+- **Word timings.** The models give none (Cohere and Canary none at all, Whisper only for phrases, in
+  transcribe.cpp 0.4.1), and a line is a piece of up to 30 s. A share of the text over the speech put
+  words seconds early around a pause. So when subtitles or Follow words are first wanted, the **timing
+  pass** (`timing.rs`) transcribes each stretch of a line between two pauses again, only to learn which
+  words fall in it (`Segment::heard`); those rough texts are matched word by word, with Arabic letters
+  folded, to the line's own text, which is never changed. Inside a stretch the words go by their share
+  of it. Measured on talks made with the voices of Windows (`tools/timing`): 98 % of the words within
+  half a second, against 47 % before. It costs about 1.5 times the transcription again, and runs only
+  for a video with subtitles, a folder run that writes SRT or VTT, a subtitle export (which waits for it),
+  Follow words and **Fix the timing**. Edited lines are matched again from what was heard, without the
+  audio. Lines still guessed keep a subtitle that ends at a pause on screen 0.8 s into the speech after it.
 - **Which model.** `models_for` in `models.rs` lists the models of each spoken language, the best first:
   Cohere for Arabic, Canary for the European languages (fewer mistakes than Whisper, and several times
   faster), Whisper for the rest. A recording goes to the first one on the disk. A model file is told apart
@@ -54,7 +66,14 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 - **Model download.** `<file>.part` holds the bytes, and `<file>.part.ok` how many of them are known to
   be on the disk (synced every 8 MB). A restart asks for the rest with an HTTP range request. The file
   takes its real name only after its SHA-256 matches, and a model in use is never rewritten in place,
-  because the engine memory-maps it. `HF_ENDPOINT` selects a mirror.
+  because the engine memory-maps it. `HF_ENDPOINT` selects a mirror. Downloads and the update check go
+  through the manual proxy of the Windows settings (read from the registry) or `HTTPS_PROXY`
+  (`net.rs`); after five tries that got nowhere, the reason of the last one is shown, and it goes on.
+- **The queue keeps going.** A panic in a job is caught and fails that job only. Loading a model has a
+  time limit of five minutes (a stuck graphics driver): then the engine is ended and the job retried on
+  the CPU. A stop reaches a busy engine, which is ended if it does not answer within three seconds.
+  State reaches the interface at most ten times a second, numbered, and lists are updated in place.
+  The translator's port is checked to be held by the translator itself before any line goes to it.
 - **Translation.** A finished transcript is translated a line at a time, in the queue, by Xiaomi's
   [MiLMMT-46](https://huggingface.co/collections/xiaomi-research/milmmt-46) through llama.cpp's server
   (downloaded with the first translation model, see **Tools**). The
@@ -67,9 +86,13 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 - **Subtitles.** `captions.rs` follows the rules Netflix and the BBC give their subtitlers: two lines
   of 42 characters at most, between 5/6 of a second and 7 seconds on screen, 17 characters a second
   (20 for English), two frames between subtitles, gaps under half a second closed, and breaks where a
-  sentence or clause ends or the speaker pauses. The model times whole lines, so inside a line the
-  words are placed by where the speech and the pauses are (`audio::pauses`, recorded with each line
-  since 1.3), and a translation by the same share of its text. **Video with subtitles** runs ffmpeg with
+  sentence or clause ends or the speaker pauses. Each language's own Netflix guide sets its line and
+  reading speed: Chinese 16 and 9, Japanese 13 and 4, Korean 16 and 12 (Latin letters, spaces and
+  punctuation count half), Thai 35 without its marks above and below; Khmer, Lao and Burmese have no
+  guide and take Thai's. In scripts without spaces each character is a word (`script.rs`), breaks
+  prefer their punctuation and particles, and a word longer than a line is cut too. The words are
+  placed by the timing pass, or else by where the speech and the pauses are (`audio::pauses`), and a
+  translation goes under the subtitle where the middle of each of its sentences is said, whole. **Video with subtitles** runs ffmpeg with
   `-c copy`: MP4 and MOV whose streams an MP4 holds give an MP4 with `mov_text` tracks, a MOV it cannot
   hold (ProRes, PCM sound) stays a MOV, anything else an MKV that keeps all its streams. Only the tracks
   added are written as text; the video's own subtitles (PGS, VobSub, styled ASS) are copied as they are.

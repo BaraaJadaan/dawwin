@@ -81,6 +81,8 @@ Object.assign(I18N.en.s, {
   "look.making": "Burning one second of your video…",
   "set.toolUpdate": "Update",
   "set.toolOutdated": "A newer build is available",
+  "guide.speakersTitle": "Who said what",
+  "guide.speakersText": "Tick Tell speakers apart, and each line gets its speaker where the speaker changes. Click a name to rename that person everywhere, or to merge two that are one. Right-click a line to give it to someone else. Names go into every export. More ▾ finds the speakers of an older transcript, and applies your words and names to it.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -161,6 +163,8 @@ Object.assign(I18N.ar.s, {
   "look.making": "جارٍ دمج ثانية من الفيديو…",
   "set.toolUpdate": "تحديث",
   "set.toolOutdated": "يتوفّر إصدار أحدث",
+  "guide.speakersTitle": "من قال ماذا",
+  "guide.speakersText": "فعّل «تمييز المتحدثين» فيأخذ كل سطر متحدثه حيث يتغير المتحدث. انقر على اسم لتغييره في كل مكان، أو لدمج اثنين هما شخص واحد. انقر بالزر الأيمن على سطر لتنسبه إلى شخص آخر. تظهر الأسماء في كل تصدير. ومن «المزيد ▾» تجد متحدثي تفريغ قديم، وتطبّق عليه كلماتك وأسماءك.",
 });
 
 const WHO = {

@@ -124,7 +124,7 @@ function showView(v) {
 // ------------------------------------------------------------------ how to use
 
 /** Each part of the app: a picture of it (in the interface language), and what to do with it. */
-const GUIDE = ["drop", "steps", "live", "listen", "translate", "export", "settings"];
+const GUIDE = ["drop", "steps", "live", "listen", "speakers", "translate", "export", "settings"];
 
 function renderGuide() {
   const box = $("guide-items");

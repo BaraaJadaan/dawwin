@@ -144,6 +144,8 @@ def main(art, listen, keydir):
                 for p in TEXTS["passages"]]
     passages += [{"id": f"gallery-{lang}", "lang": lang, "title": f"Every built-in voice ({'Arabic' if lang == 'ar' else 'English'})",
                   "text": [TEXTS["gallery"][lang]]} for lang in ("ar", "en")]
+    # Arabic, then English, then the built-in voices (a stable sort keeps the order within each)
+    passages.sort(key=lambda p: (p["id"].startswith("gallery"), p["lang"] != "ar"))
     data = {"passages": passages, "samples": samples, "letters": sorted(letters.values())}
     page = open(os.path.join(HERE, "listen.html"), encoding="utf-8").read()
     page = page.replace("/*DATA*/null", json.dumps(data, ensure_ascii=False))

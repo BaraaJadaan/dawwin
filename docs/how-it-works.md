@@ -125,8 +125,9 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   let the clearer of the two decide. The decision is among the languages with a model on the disk;
   when they hold under a quarter of the probability, the language heard is reported and its model
   offered. Arabic with English in it stays Arabic, which the Arabic model writes.
-- **Words and names** are put right on every new line, folded like the search (hamzas, ة/ه, ى/ي, no
-  diacritics, any Latin case), as whole words; a Whisper model also gets them as its `vocabulary`.
+- **Words and names** are put right on every new line, as whole words, with diacritics and tatweel
+  left out and Latin letters in any case, but not folded like the search: folded, the name "علي" is
+  the preposition "على". A Whisper model also gets them as its `vocabulary`.
 - **Subtitle look.** A setting (`look::Look`) turned into libass's `force_style` (whose `Alignment`
   takes SSA's old numbers: 2 is the bottom, 6 the top). A video under 1080p is enlarged first (lanczos)
   when sharp text is on, and its bitrate grows with its height. Fonts are the PC's own that hold Arabic

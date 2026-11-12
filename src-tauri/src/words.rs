@@ -1,8 +1,13 @@
 //! Words and names: how to write the words Dawwin keeps getting wrong. Each entry is the right form
 //! and, if the user knows them, the wrong forms it is heard as. Every new transcript has them put
-//! right as whole words, with Arabic letters folded the way the search folds them (أ إ آ ا, ة ه,
-//! ى ئ ي, ؤ و, no diacritics) and Latin letters in any case; "Apply my words" does the same to an
-//! older one. A Whisper model also gets the right forms as hints, so it hears them right at once.
+//! right as whole words, whatever their diacritics, tatweel or Latin case; "Apply my words" does the
+//! same to an older one. A Whisper model also gets the right forms as hints, so it hears them right
+//! at once.
+//!
+//! The letters themselves are compared as written, unlike the search, which folds أ إ آ to ا, ة to ه
+//! and ى ئ to ي: a search may find too much, a replacement must not. Folded, the name "علي" is the
+//! preposition "على", and "إلى" is "الي". A form that comes out with another hamza or ending is
+//! listed as a wrong form of its own.
 
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +15,7 @@ use serde::{Deserialize, Serialize};
 pub struct Entry {
     /// How to write it
     pub write: String,
-    /// What it comes out as, wrongly; it is also found written in another case or with other hamzas
+    /// What it comes out as, wrongly; also found with other diacritics, or in another Latin case
     #[serde(default)]
     pub heard: Vec<String>,
 }
@@ -20,19 +25,12 @@ fn ignored(c: char) -> bool {
     matches!(c, '\u{064B}'..='\u{065F}' | '\u{0670}' | '\u{06D6}'..='\u{06ED}' | '\u{0640}')
 }
 
+/// A letter as it is compared: in lower case (Arabic has none, so its letters stay as written).
 fn fold(c: char) -> char {
-    match c {
-        'أ' | 'إ' | 'آ' | 'ٱ' => 'ا',
-        'ة' => 'ه',
-        'ى' | 'ئ' => 'ي',
-        'ؤ' => 'و',
-        c => {
-            let mut l = c.to_lowercase();
-            match (l.next(), l.next()) {
-                (Some(x), None) => x,
-                _ => c,
-            }
-        }
+    let mut l = c.to_lowercase();
+    match (l.next(), l.next()) {
+        (Some(x), None) => x,
+        _ => c,
     }
 }
 
@@ -189,10 +187,13 @@ mod tests {
         // (as heard, as written)
         let cases = [
             ("نشتغل في ثمانية من سنتين", "نشتغل في Thmanyah من سنتين"),
-            // other letters for the same word, a diacritic, punctuation right next to it
-            ("في ثمانيه، قالوا", "في Thmanyah، قالوا"),
+            // a listed wrong form, with a diacritic or a tatweel, punctuation right next to it
+            ("في تمانيه، قالوا", "في Thmanyah، قالوا"),
             ("ثمانيةٌ؟ نعم", "Thmanyah؟ نعم"),
+            ("ثمانـية.", "Thmanyah."),
             ("(تمانيه)", "(Thmanyah)"),
+            // another ending is another word, unless it is listed
+            ("في ثمانيه، قالوا", "في ثمانيه، قالوا"),
             // part of a longer word: left alone
             ("الثمانية أيام", "الثمانية أيام"),
             ("ثمانيةعشر", "ثمانيةعشر"),
@@ -200,15 +201,35 @@ mod tests {
             ("we use Open AI and thmanyah.", "we use OpenAI and Thmanyah."),
             ("THMANYAH, openai", "Thmanyah, OpenAI"),
             ("opening ai", "opening ai"),
-            // a name of two words, with another hamza
+            // a name of two words, heard without its hamza (a listed form)
             ("مع سامي الاحمد اليوم", "مع سامي الأحمد اليوم"),
-            ("مع سامي إلاحمد", "مع سامي الأحمد"),
+            ("مع سامي إلاحمد", "مع سامي إلاحمد"),
             ("", ""),
         ];
         for (heard, want) in cases {
             assert_eq!(apply(heard, &list()), want, "{heard}");
         }
         assert_eq!(apply("ثمانية", &[]), "ثمانية");
+    }
+
+    #[test]
+    fn a_name_is_never_written_over_a_word_that_only_looks_like_it() {
+        // "Always write it like this…" on the name علي: the preposition على stays
+        let ali = vec![Entry { write: "Ali".into(), heard: vec!["علي".into()] }];
+        assert_eq!(apply("ذهب علي إلى البيت، وسلّم على أمه.", &ali), "ذهب Ali إلى البيت، وسلّم على أمه.");
+        assert_eq!(apply("عليّ هنا", &ali), "Ali هنا", "a shadda is a diacritic");
+        // إلى is not الي, nor أحمد احمد
+        let to = vec![Entry { write: "إلى".into(), heard: vec!["الي".into()] }];
+        assert_eq!(apply("رجع الي البيت ثم إلى العمل", &to), "رجع إلى البيت ثم إلى العمل");
+        let ahmad = vec![Entry { write: "Ahmad".into(), heard: vec!["أحمد".into()] }];
+        assert_eq!(apply("احمد وأحمد وإحمد", &ahmad), "احمد وأحمد وإحمد", "وأحمد is one word, and the others are other spellings");
+        assert_eq!(apply("أحمد قال", &ahmad), "Ahmad قال");
+        // Latin still in any case
+        assert_eq!(apply("ALI and ali", &ali_latin()), "Ali and Ali");
+    }
+
+    fn ali_latin() -> Vec<Entry> {
+        vec![Entry { write: "Ali".into(), heard: vec![] }]
     }
 
     #[test]

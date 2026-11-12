@@ -78,7 +78,8 @@ subscription, no limit on hours.
   **More ▾ → Transcribe again in** fixes a wrong guess in one press. One download of 27 MB.
 - **Words and names** in Settings: how to write the words Dawwin keeps getting wrong ("Thmanyah", not
   "ثمانية"), with the wrong forms they come out as if you know them. Every new transcript writes them
-  your way, as whole words, whatever the hamza or the case; an "All languages" (Whisper) model also
+  your way, as whole words, whatever their diacritics or Latin case (another spelling is listed as
+  a wrong form, so a name never replaces a word that only looks like it); an "All languages" (Whisper) model also
   hears them better. Select a word in a transcript and right-click → **Always write it like this…**, or
   **More ▾ → Apply my words** on an older one. Save the list to a file and load it on another PC.
 

@@ -19,6 +19,54 @@ pub fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub fn no_window(_cmd: &mut Command) {}
 
+/// Kill a child and everything it started. The `ffmpeg.exe` Chocolatey or Scoop put on the PATH is
+/// a shim that runs the real one as its own child: killing the shim alone leaves that one running,
+/// holding the pipes and the half-written file until it has encoded everything.
+pub fn kill_tree(child: &mut std::process::Child) {
+    if matches!(child.try_wait(), Ok(None)) {
+        // its id cannot belong to another process while `child` holds its handle
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new("taskkill");
+            cmd.args(["/T", "/F", "/PID", &child.id().to_string()]);
+            cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            no_window(&mut cmd);
+            let _ = cmd.status();
+        }
+    }
+    let _ = child.kill();
+}
+
+/// Run `work`, and kill `children` (with all they started) the moment `cancel` is set, even while
+/// `work` is blocked on one of their pipes: a stop must not wait for ffmpeg's next bytes, which on a
+/// slow machine can take seconds. A killed child closes its pipes, so `work` then ends too.
+pub fn killing_on_stop<T>(children: &[&std::sync::Mutex<std::process::Child>], cancel: &std::sync::atomic::AtomicBool, work: impl FnOnce() -> T) -> T {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Relaxed) {
+                    for c in children {
+                        kill_tree(&mut c.lock().unwrap_or_else(|e| e.into_inner()));
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        // set however `work` ends, so the watcher ends with it
+        let _done = Done(&finished);
+        work()
+    })
+}
+
 /// While one of these lives, the computer does not go to sleep by itself: a long download or
 /// transcription should still be running when the user comes back.
 pub struct KeepAwake;

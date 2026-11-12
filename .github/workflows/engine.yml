@@ -83,6 +83,19 @@ jobs:
           $output = $requests | & .\engine-out\dawwin-engine.exe
           $output | ForEach-Object { Write-Host $_ }
           if (@($output | Where-Object { $_ -match '"ok":true' }).Count -ne 4) { throw "the engine failed" }
+      - name: Words placed in time with this model, measured (tools/timing)
+        # talks made with the voices of Windows, so the moment of every word is known; the runner has
+        # the English voices only. The table this prints is the measurement for this model.
+        shell: pwsh
+        env:
+          DAWWIN_TIMING_DIR: ${{ runner.temp }}\voices
+          DAWWIN_TIMING_ENGINE: ${{ github.workspace }}\engine-out\dawwin-engine.exe
+          DAWWIN_TIMING_CPU: "1"
+        run: |
+          pwsh -NoProfile -File tools/timing/speak.ps1 -Out $env:DAWWIN_TIMING_DIR
+          if (-not (Get-ChildItem "$env:DAWWIN_TIMING_DIR\*.truth.json" -ErrorAction SilentlyContinue)) { throw "no voice made a talk" }
+          $env:DAWWIN_TIMING_MODEL = (Get-ChildItem "${{ runner.temp }}\models\*.gguf" | Select-Object -First 1).FullName
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib timing::tests::bench -- --ignored --nocapture
 
   translator:
     # The translator as the app ships it (llama.cpp's official build), with each translation model,

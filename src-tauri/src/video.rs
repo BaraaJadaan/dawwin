@@ -369,6 +369,10 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
     let part = dest.with_extension("part.mp4");
     let mut why = String::new();
     for encoder in encoders {
+        // stopped already: start nothing that would then have to be killed
+        if cancel.load(Ordering::Relaxed) {
+            bail!("cancelled");
+        }
         let mut cmd = Command::new(ffmpeg);
         cmd.args(burn_arguments(video, subtitles, encoder, &p, &part)).current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         no_window(&mut cmd);
@@ -403,7 +407,7 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
             crate::setup::kill_tree(&mut child);
             let _ = child.wait();
             // its stderr is not waited for: what it started may hold it open
-            let _ = std::fs::remove_file(&part);
+            crate::setup::remove_when_free(&part);
             bail!("cancelled");
         }
         let status = child.wait()?;
@@ -414,7 +418,7 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
             on_progress(1.0);
             return Ok(());
         }
-        let _ = std::fs::remove_file(&part);
+        crate::setup::remove_when_free(&part);
         why = stderr.trim().to_string();
         // an encoder that could not even start (no such chip, an old driver): the next one
         if moved {

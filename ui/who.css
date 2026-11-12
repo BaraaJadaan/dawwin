@@ -16,7 +16,7 @@
 #ctx-who:empty { display: none; }
 #ctx-who { display: flex; flex-direction: column; border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
 
-#search-who { max-width: 180px; }
+#search-who { min-width: 0; max-width: 150px; }
 
 /* words and names */
 .word-list { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 4px; }

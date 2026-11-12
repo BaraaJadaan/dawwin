@@ -68,6 +68,8 @@ subscription, no limit on hours.
   at the start of a subtitle when the speaker changes. A translation keeps the same speakers.
 - Search within one speaker's lines. **More ▾ → Find the speakers** does it for an older transcript.
 
+![A meeting in Arabic with the speakers' names where the speaker changes, and a speaker's menu open: Rename, Same person as Speaker 2, Search their lines.](docs/screenshots/speakers.png)
+
 **The language, and your words** (new in 1.4)
 
 - **Detect the language**, at the top of the language menu: Dawwin listens to the first half minute of

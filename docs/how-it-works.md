@@ -258,8 +258,9 @@ releases are built on the maintainer's PC, with the engine from GitHub Actions.
 2. Put `thmanyahsans-Regular.otf`, `-Medium.otf` and `-Bold.otf` in `ui/fonts/`.
 3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads every real model
    with a pause in the middle and loads them, measures how well each speech model's words are placed in
-   time (`tools/timing`, which must meet its pass mark), and translates with each translation model
-   through the translator Dawwin downloads.
+   time (`tools/timing`, which must meet its pass mark), translates with each translation model
+   through the translator Dawwin downloads, and writes the minutes of two made-up meetings with each
+   minutes model through it.
 4. If a tool changes (llama.cpp, ffmpeg): create the release as a draft
    (`gh release create vX.Y.Z --draft --target <commit>`), run the **Tools** workflow by hand with the
    tag, and put the sizes and SHA-256 it prints, with the new file names and `RELEASE`, into `tools.rs`.

@@ -183,7 +183,9 @@ fn main() {
             let user = req["messages"].as_array().and_then(|m| m.last()).and_then(|m| m["content"].as_str()).unwrap_or_default().to_string();
             let schema_ok = req["response_format"]["json_schema"]["schema"]["properties"]["kind"].is_object();
             let task = user.lines().rev().find(|l| l.starts_with("Write ")).unwrap_or("").to_string();
-            eprintln!("minutes request: {task} (schema: {schema_ok}, {})", req["chat_template_kwargs"]);
+            // a recorded meeting comes with who is who first (minutes::who_is_who)
+            let recorded = user.starts_with("This is a call recorded");
+            eprintln!("minutes request: {task} (schema: {schema_ok}, {}, recorded: {recorded})", req["chat_template_kwargs"]);
             lines += 1;
             if crash_after.is_some_and(|n| lines > n) {
                 eprintln!("fake GPU driver crash");

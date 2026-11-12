@@ -1145,6 +1145,62 @@ mod tests {
         assert_eq!(m["summary"], "2 notes");
     }
 
+    /// A made-up meeting of the minutes bench, with its speakers named, as a transcript.
+    fn bench_meeting(text: &str, language: &str) -> Transcript {
+        let rows: Vec<Vec<&str>> = text.lines().filter(|l| !l.trim().is_empty()).map(|l| l.splitn(3, '\t').collect()).collect();
+        let at = |t: &str| t.split(':').fold(0.0, |a, x| a * 60.0 + x.trim().parse::<f64>().unwrap_or(0.0));
+        let mut t = transcript(&rows.iter().map(|r| (at(r[0]), r[2])).collect::<Vec<_>>());
+        t.language = language.into();
+        let mut names: Vec<&str> = Vec::new();
+        for (s, r) in t.segments.iter_mut().zip(&rows) {
+            if !r[1].is_empty() {
+                if !names.contains(&r[1]) {
+                    names.push(r[1]);
+                }
+                s.speaker = Some(names.iter().position(|n| *n == r[1]).unwrap() as u32 + 1);
+            }
+        }
+        t.speakers = names.iter().enumerate().map(|(i, n)| crate::transcript::Speaker { id: i as u32 + 1, name: n.to_string() }).collect();
+        t
+    }
+
+    /// A real minutes model through the translator Dawwin ships, on the processor, as the app asks
+    /// (the Engine workflow runs it for each one): an English meeting and an Arabic one. Needs
+    /// DAWWIN_TEST_TRANSLATOR (llama-server.exe), DAWWIN_TEST_MODEL_FILE and DAWWIN_TEST_MODEL (its id).
+    #[test]
+    #[ignore]
+    fn real_minutes() {
+        use std::sync::atomic::AtomicBool;
+        let env = |k: &str| std::env::var(k).unwrap_or_else(|_| panic!("{k}"));
+        let spec = model(&env("DAWWIN_TEST_MODEL"));
+        assert!(!spec.id.is_empty(), "not a minutes model");
+        let root = std::env::temp_dir().join(format!("dawwin-min-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        let paths = crate::setup::Paths { local: root.clone(), roaming: root };
+        let exe = std::path::PathBuf::from(env("DAWWIN_TEST_TRANSLATOR"));
+        let mut w = crate::translate::TranslatorProcess::spawn_with(&exe, &paths, &env("DAWWIN_TEST_MODEL_FILE"), true, None, spec.context, true).unwrap();
+        w.wait_ready(&AtomicBool::new(false)).unwrap();
+        for (text, language) in [
+            (include_str!("../../tools/bench-minutes/meetings/en-sprint.txt"), "en"),
+            (include_str!("../../tools/bench-minutes/meetings/ar-levant-product.txt"), "ar"),
+        ] {
+            let t = bench_meeting(text, language);
+            let ls = lines(&t, &speakers(&t));
+            let a = ask_whole(&ls, language, language);
+            let started = std::time::Instant::now();
+            let reply = w.ask_json(&a.messages, &a.schema, spec.no_thinking, 4096, &AtomicBool::new(false), &mut |_| {}).unwrap();
+            let answer: Value = serde_json::from_str(&reply.content).unwrap_or_else(|e| panic!("{e}: {}", reply.content));
+            assert!(is_answer(&answer), "{answer}");
+            let m = check(&answer, &t, &ls, true);
+            println!("{language}: {:.0} s, {} tokens; {} decisions, {} actions; owners {:?}; {}", started.elapsed().as_secs_f32(), reply.tokens, m.decisions.len(), m.actions.len(), m.actions.iter().map(|x| x.who.as_str()).collect::<Vec<_>>(), m.summary);
+            assert_eq!(m.kind, "meeting");
+            assert!(!m.actions.is_empty() && m.actions.iter().any(|x| !x.who.is_empty()), "tasks, with their owners");
+            assert!(m.summary.chars().count() >= 20);
+            assert_eq!(m.summary.chars().any(|c| ('\u{0600}'..='\u{06ff}').contains(&c)), language == "ar", "the summary in the language asked for");
+        }
+        w.shutdown();
+    }
+
     /// The minutes change only their own field of the transcript's file: the speakers, the tracks
     /// and anything a later version adds are still there after they are written and corrected.
     #[test]

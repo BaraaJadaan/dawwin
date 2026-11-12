@@ -11,6 +11,8 @@ on:
       - "engine/**"
       - "src-tauri/src/models.rs"
       - "src-tauri/src/translate.rs"
+      - "src-tauri/src/minutes.rs"
+      - "src-tauri/prompts/**"
       - "tools/stage-engine.mjs"
       - ".github/workflows/engine.yml"
 
@@ -170,3 +172,32 @@ jobs:
           $env:DAWWIN_TEST_MODEL_FILE = (Get-ChildItem "$env:RUNNER_TEMP\models\*.gguf" | Select-Object -First 1).FullName
           $env:DAWWIN_TEST_CPU = "1"
           cargo test --manifest-path src-tauri/Cargo.toml --locked real_translation -- --ignored --nocapture
+
+  minutes:
+    # Each minutes model through the translator as the app ships it, on a machine without a GPU:
+    # download with a pause, then the minutes of a made-up meeting in English and one in Arabic, asked
+    # for and checked the way the app does (minutes::tests::real_minutes).
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        model: [min-jais3-0.9b, min-ministral3-3b, min-jais3-7b]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The translator, as the app's build stages it
+        run: node tools/stage-engine.mjs --translator-only
+      - name: Download the model, pause, resume, check
+        env:
+          DAWWIN_TEST_MODEL: ${{ matrix.model }}
+          DAWWIN_TEST_DIR: ${{ runner.temp }}\models
+        run: cargo test --manifest-path src-tauri/Cargo.toml --locked real_download -- --ignored --nocapture
+      - name: The minutes of two meetings, as the app asks for them
+        shell: pwsh
+        env:
+          DAWWIN_TEST_MODEL: ${{ matrix.model }}
+        run: |
+          $env:DAWWIN_TEST_TRANSLATOR = (Resolve-Path src-tauri\engine-bin\translate\llama-server.exe).Path
+          $env:DAWWIN_TEST_MODEL_FILE = (Get-ChildItem "$env:RUNNER_TEMP\models\*.gguf" | Select-Object -First 1).FullName
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_minutes -- --ignored --nocapture

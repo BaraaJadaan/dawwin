@@ -41,8 +41,12 @@ pub struct Sentence {
     pub kind: Kind,
     #[serde(skip)]
     pub pause: f32,
-    #[serde(skip)]
-    pub runs: Vec<Run>,
+}
+
+/// What a sentence is read as: cleaned, in runs of one language, numbers in words. Worked out when
+/// the sentence is made, so that opening a long book does not wait for all of it.
+pub fn spoken(text: &str, doc_lang: Lang) -> Vec<Run> {
+    text::runs(&text::normalize(text), doc_lang).into_iter().map(|r| Run { text: numbers::speakable(&r.text, r.lang), lang: r.lang }).collect()
 }
 
 pub struct Doc {
@@ -63,8 +67,7 @@ pub fn sentences_of(blocks: &[Block]) -> (Lang, Vec<Sentence>) {
         let parts = if b.kind == Kind::Heading { vec![b.text.clone()] } else { text::sentences(&b.text) };
         let n = parts.len();
         for (k, s) in parts.into_iter().enumerate() {
-            let clean = text::normalize(&s);
-            if clean.is_empty() {
+            if !s.chars().any(|c| c.is_alphanumeric()) {
                 continue;
             }
             let pause = match (b.kind, k + 1 == n) {
@@ -72,8 +75,7 @@ pub fn sentences_of(blocks: &[Block]) -> (Lang, Vec<Sentence>) {
                 (_, true) => PAUSE_PARAGRAPH,
                 _ => PAUSE_SENTENCE,
             };
-            let runs = text::runs(&clean, lang).into_iter().map(|r| Run { text: numbers::speakable(&r.text, r.lang), lang: r.lang }).collect();
-            out.push(Sentence { text: s, block: bi, kind: b.kind, pause, runs });
+            out.push(Sentence { text: s, block: bi, kind: b.kind, pause });
         }
     }
     (lang, out)
@@ -359,7 +361,7 @@ impl Reader {
         std::fs::create_dir_all(&dir)?;
         let mut pieces = Vec::new();
         let mut device = String::new();
-        for (k, run) in s.runs.iter().enumerate() {
+        for (k, run) in spoken(&s.text, doc.lang).iter().enumerate() {
             let (m, v) = self.voice_for(run.lang).ok_or_else(|| anyhow!(crate::tr!("There is no voice for {} yet. Choose one in Settings.", lang_name(run.lang))))?;
             let gpu = m.gpu && !self.no_gpu.load(Ordering::SeqCst) && crate::setup::Settings::load(&self.paths).run_on() != "cpu" && !self.gpu_busy();
             let load = voice::Load { family: m.family.into(), model: voices::file(&self.paths, &m), gpu, options: Vec::new() };
@@ -429,6 +431,7 @@ pub struct ModelView {
     pub license: String,
     pub license_url: String,
     pub restricted: bool,
+    pub samples: bool,
     pub installed: bool,
     pub downloading: bool,
     pub partial: u64,
@@ -473,6 +476,7 @@ impl Reader {
                     license: m.license.into(),
                     license_url: m.license_url.into(),
                     restricted: m.restricted,
+                    samples: m.samples,
                     installed: voices::installed(&self.paths, m),
                     downloading: downloading.contains_key(m.id),
                     partial: crate::models::downloaded(&voices::file(&self.paths, m)),
@@ -672,11 +676,11 @@ mod tests {
         assert_eq!((s[0].kind, s[0].pause), (Kind::Heading, PAUSE_HEADING));
         assert_eq!(s[1].pause, PAUSE_SENTENCE);
         assert_eq!(s[2].pause, PAUSE_PARAGRAPH, "the last sentence of a paragraph");
-        assert_eq!(s[1].runs.iter().map(|r| r.lang).collect::<Vec<_>>(), vec![Lang::Ar, Lang::En]);
+        assert_eq!(spoken(&s[1].text, lang).iter().map(|r| r.lang).collect::<Vec<_>>(), vec![Lang::Ar, Lang::En]);
         // numbers are worded in the language around them; what is shown stays as written
-        assert_eq!(s[2].runs[0].text, "ارتفعت الأسعار خمسة عشر بالمئة.");
+        assert_eq!(spoken(&s[2].text, lang)[0].text, "ارتفعت الأسعار خمسة عشر بالمئة.");
         assert_eq!(s[2].text, "ارتفعت الأسعار 15%.");
-        assert_eq!(s[3].runs[0].lang, Lang::En);
+        assert_eq!(spoken(&s[3].text, lang)[0].lang, Lang::En);
     }
 
     #[test]

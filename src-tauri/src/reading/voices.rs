@@ -37,6 +37,9 @@ pub struct VoiceModel {
     pub gpu: bool,
     /// The model's own code for Arabic and for English; empty for a model that takes none
     pub codes: [&'static str; 2],
+    /// It has a sample in each language shipped with the app, to hear before downloading it
+    /// (`ui/voices/<id>-ar.ogg` and `-en.ogg`)
+    pub samples: bool,
     pub voices: &'static [Voice],
 }
 
@@ -64,6 +67,7 @@ pub const SUPERTONIC: VoiceModel = VoiceModel {
     restricted: true,
     gpu: false,
     codes: ["ar", "en"],
+    samples: true,
     voices: &[
         v("F1", Lang::Ar, true, 1), v("F2", Lang::Ar, true, 2), v("F3", Lang::Ar, true, 3), v("F4", Lang::Ar, true, 4), v("F5", Lang::Ar, true, 5),
         v("M1", Lang::Ar, false, 1), v("M2", Lang::Ar, false, 2), v("M3", Lang::Ar, false, 3), v("M4", Lang::Ar, false, 4), v("M5", Lang::Ar, false, 5),
@@ -87,6 +91,7 @@ pub const STAND_IN: VoiceModel = VoiceModel {
     restricted: false,
     gpu: true,
     codes: ["ar", "en"],
+    samples: false,
     voices: &[v("ar-m", Lang::Ar, false, 1), v("ar-f", Lang::Ar, true, 1), v("en-m", Lang::En, false, 1), v("en-f", Lang::En, true, 1)],
 };
 

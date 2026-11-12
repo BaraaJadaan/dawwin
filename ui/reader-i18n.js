@@ -35,6 +35,8 @@ Object.assign(I18N.en.s, {
   "read.voiceTip": "The voice that reads the {lang} parts",
   "read.lang.ar": "Arabic",
   "read.lang.en": "English",
+  "read.hear.ar": "Hear it in Arabic",
+  "read.hear.en": "Hear it in English",
 });
 
 Object.assign(I18N.ar.s, {
@@ -71,4 +73,6 @@ Object.assign(I18N.ar.s, {
   "read.voiceTip": "الصوت الذي يقرأ الأجزاء {lang}",
   "read.lang.ar": "العربية",
   "read.lang.en": "الإنجليزية",
+  "read.hear.ar": "استمع إليه بالعربية",
+  "read.hear.en": "استمع إليه بالإنجليزية",
 });

@@ -67,7 +67,12 @@ function buildReadView() {
         readEl("h1", { class: "t-title", id: "read-title", dir: "auto" }),
         readEl("button", { class: "btn btn-sm btn-ghost", id: "read-other", text: t("read.other"), on: { click: closeReading } })),
       readEl("div", { class: "toolbar read-voices", id: "read-voices" })),
-    readEl("div", { class: "read-text-box", id: "read-body", on: { wheel: () => (READ.lastUserScroll = Date.now()), touchmove: () => (READ.lastUserScroll = Date.now()) } }),
+    readEl("div", { class: "read-text-box", id: "read-body", on: {
+      wheel: () => (READ.lastUserScroll = Date.now()),
+      touchmove: () => (READ.lastUserScroll = Date.now()),
+      // a click on a sentence reads from there
+      click: (e) => { const rs = e.target.closest?.(".rs"); if (rs) readFrom(Number(rs.dataset.i)); },
+    } }),
     readEl("div", { class: "error read-error", id: "read-error", dir: "auto", hidden: true },
       readEl("span", { id: "read-error-text" }),
       readEl("button", { class: "btn btn-sm", text: t("read.again"), on: { click: () => readFrom(READ.i) } })),
@@ -153,15 +158,25 @@ function renderReadDoc() {
   body.innerHTML = "";
   body.dir = d.lang === "ar" ? "rtl" : "ltr";
   body.lang = d.lang;
+  // a long book has thousands of sentences: plain elements in one go, one click handler for all
+  const frag = document.createDocumentFragment();
   let block = -1, el = null;
   d.sentences.forEach((s, i) => {
     if (s.block !== block) {
       block = s.block;
-      el = readEl(s.kind === "heading" ? "h2" : s.kind === "item" ? "li" : "p", { class: "read-block read-" + s.kind, dir: "auto" });
-      body.append(el);
+      el = document.createElement(s.kind === "heading" ? "h2" : s.kind === "item" ? "li" : "p");
+      el.className = "read-block read-" + s.kind;
+      el.dir = "auto";
+      frag.append(el);
     } else el.append(" ");
-    el.append(readEl("span", { class: "rs", dir: "auto", "data-i": String(i), text: s.text, on: { click: () => readFrom(i) } }));
+    const span = document.createElement("span");
+    span.className = "rs";
+    span.dir = "auto";
+    span.dataset.i = String(i);
+    span.textContent = s.text;
+    el.append(span);
   });
+  body.append(frag);
   renderVoicePickers();
   markSentence(false);
   paintReadPlayer();
@@ -315,6 +330,16 @@ async function renderReadingSettings() {
       readEl("p", { class: "muted small" }, readEl("a", { class: "link", href: "#", text: `${t("read.license")}: ${m.license}`, on: { click: (e) => { e.preventDefault(); invoke("open_url", { url: m.license_url }); } } })),
       readEl("p", { class: "muted small status", text: READ.dl?.[m.id]?.state === "program" ? t("read.programFirst", { pct: Math.floor((100 * READ.dl[m.id].done) / (READ.dl[m.id].total || 1)) }) : status }));
     row.append(text);
+    if (m.samples) {
+      for (const lang of ["ar", "en"]) {
+        row.append(readEl("button", { class: "btn btn-sm btn-ghost", text: t("read.hear." + lang), on: { click: () => {
+          stopReading();
+          READ.sample = READ.sample || new Audio();
+          READ.sample.src = `voices/${m.id}-${lang}.ogg`;
+          READ.sample.play().catch(() => {});
+        } } }));
+      }
+    }
     if (!m.installed) {
       row.append(readEl("button", { class: "btn btn-sm", text: t(m.downloading ? "dl.pause" : m.partial > 0 ? "dl.resume" : "dl.download"), on: { click: async () => {
         if (m.downloading) return invoke("reading_pause_voice", { id: m.id });

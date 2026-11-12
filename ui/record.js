@@ -100,15 +100,6 @@ function recordWaiting() {
   return S.snap?.queue.some((j) => j.kind === "record" && ACTIVE.has(j.status) && j.status !== "queued") ? t("job.waitRecording") : "";
 }
 
-/** "Me" or "Them" before a line of a recorded meeting. */
-function whoLabel(s) {
-  if (!s.track) return null;
-  const el = document.createElement("span");
-  el.className = "who who-" + s.track;
-  el.textContent = t(s.track === "me" ? "rec.me" : "rec.them");
-  return el;
-}
-
 async function loadRecordSetup() {
   try { REC.setup = await invoke("record_setup"); } catch { /* recording is not there */ }
 }

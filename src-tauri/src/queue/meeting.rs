@@ -16,7 +16,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::{ensure_engine, fix_loops, give_up_on_gpu, now_ms, show_loaded, Core, JobView, Msg, Steps};
+use super::{detect_language, ensure_engine, find_turns, fix_loops, give_up_on_gpu, now_ms, show_loaded, Core, JobView, Msg, Steps};
 use crate::audio;
 use crate::engine::{Audio, Engine, EngineFailed, EngineProcess, OutOfMemory};
 use crate::history;
@@ -24,7 +24,10 @@ use crate::models;
 use crate::record::journal::{self, Journal};
 use crate::record::{self, cutter::Cutter, echo, source, Piece, Recorder, Sources, Status, Track, SR};
 use crate::setup::{self, Paths};
-use crate::transcript::{Segment, Transcript};
+use crate::language;
+use crate::models::Family;
+use crate::speakers;
+use crate::transcript::{Segment, Speaker, Transcript};
 
 /// Live text stops when the engine is this far behind the recording.
 fn behind_limit() -> f64 {
@@ -36,11 +39,17 @@ fn behind_limit() -> f64 {
     120.0
 }
 
-/// Where recordings are kept: Documents\Dawwin, or, when Documents is in OneDrive (Windows 11
-/// often puts it there), Dawwin in the user's own folder, which OneDrive does not take. A recording
-/// is not to leave the computer by itself. Release 1.3.2 brings a folder for what Dawwin saves,
-/// chosen in Settings: this is the one place to switch to it (and `synced` says when it is in OneDrive).
-pub fn recordings_dir(paths: &Paths) -> PathBuf {
+/// Where recordings are kept: the folder of one's own chosen in Settings ("Where files go"), like
+/// every file Dawwin makes; without one, Documents\Dawwin, or, when Documents is in OneDrive (Windows
+/// 11 often puts it there), Dawwin in the user's own folder, which OneDrive does not take: a
+/// recording is not to leave the computer by itself. A chosen folder inside OneDrive is the user's
+/// choice, and is said where Record is (`synced`).
+pub fn recordings_dir(paths: &Paths, settings: &crate::setup::Settings) -> PathBuf {
+    crate::saving::own_folder(settings).unwrap_or_else(|| default_dir(paths))
+}
+
+/// The folder recordings go to when none is chosen.
+fn default_dir(paths: &Paths) -> PathBuf {
     if std::env::var_os("DAWWIN_HOME").is_some_and(|h| !h.is_empty()) {
         // everything in one folder, also for trying things out
         return paths.roaming.join("recordings");
@@ -49,6 +58,13 @@ pub fn recordings_dir(paths: &Paths) -> PathBuf {
     match dirs::document_dir() {
         Some(d) if !synced(&d, &roots) => d.join("Dawwin"),
         _ => dirs::home_dir().unwrap_or_else(|| paths.roaming.clone()).join("Dawwin"),
+    }
+}
+
+impl Core {
+    /// Where this recording goes now.
+    pub fn recordings_dir(&self) -> PathBuf {
+        recordings_dir(&self.paths, &self.settings.lock().unwrap())
     }
 }
 
@@ -85,8 +101,8 @@ pub fn synced(dir: &Path, roots: &[PathBuf]) -> bool {
 }
 
 /// Whether recordings would go to a folder OneDrive uploads.
-pub fn recordings_synced(paths: &Paths) -> bool {
-    synced(&recordings_dir(paths), &onedrive_roots())
+pub fn recordings_synced(core: &Core) -> bool {
+    synced(&core.recordings_dir(), &onedrive_roots())
 }
 
 /// How recording is set up, in a file of its own beside the settings.
@@ -240,10 +256,14 @@ impl Core {
         if is_recording() {
             return Err(anyhow!(crate::tr!("A recording is already running.")));
         }
-        if setup::model_for(&self.paths, &self.settings.lock().unwrap(), &language).is_none() {
+        if language == language::AUTO {
+            if !setup::model_status(&self.paths, &self.settings.lock().unwrap(), Family::Language).found {
+                return Err(anyhow!(crate::tr!("Detecting the language needs its model. Download it in Settings.")));
+            }
+        } else if setup::model_for(&self.paths, &self.settings.lock().unwrap(), &language).is_none() {
             return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
         }
-        let dir = recordings_dir(&self.paths);
+        let dir = self.recordings_dir();
         std::fs::create_dir_all(&dir).map_err(|e| anyhow!(crate::tr!("Cannot make the folder for recordings, {}: {}", dir.display(), e)))?;
         if record::free_space(&dir).is_some_and(|f| f < record::DISK_STOP) {
             return Err(anyhow!(crate::tr!("The disk of {} is nearly full. Free some space to record.", dir.display())));
@@ -369,8 +389,10 @@ impl Core {
     /// Recordings that did not end cleanly (a crash, the power, a forced close).
     pub fn interrupted_recordings(&self) -> Vec<Interrupted> {
         let busy: Vec<String> = SESSIONS.lock().unwrap().iter().map(|s| s.id.clone()).collect();
-        journal::interrupted(&recordings_dir(&self.paths))
-            .into_iter()
+        let mut dirs = vec![self.recordings_dir(), default_dir(&self.paths)];
+        dirs.dedup();
+        dirs.iter()
+            .flat_map(|d| journal::interrupted(d))
             .filter(|(_, j)| !busy.contains(&j.id))
             .filter_map(|(p, j)| {
                 let wav = j.wav_path(&p)?;
@@ -388,8 +410,8 @@ impl Core {
     /// An interrupted recording: transcribe it (`keep`), the job's id; or delete it.
     pub fn recover_recording(self: &Arc<Self>, journal_file: &str, keep: bool) -> Result<Option<String>> {
         let path = PathBuf::from(journal_file);
-        let dir = recordings_dir(&self.paths);
-        if path.parent() != Some(dir.as_path()) || !path.to_string_lossy().ends_with(journal::SUFFIX) {
+        let dirs = [self.recordings_dir(), default_dir(&self.paths)];
+        if !path.parent().is_some_and(|p| dirs.iter().any(|d| d == p)) || !path.to_string_lossy().ends_with(journal::SUFFIX) {
             return Err(anyhow!("not a recording of Dawwin's"));
         }
         let j = Journal::load(&path)?;
@@ -530,7 +552,7 @@ impl Lines {
 /// The speech engine, for one piece. A GPU that fails costs the GPU: the piece is heard again on
 /// the CPU. Pieces without speech never reach the model.
 #[allow(clippy::too_many_arguments)]
-fn hear(core: &Arc<Core>, engine: &mut Option<EngineProcess>, model: &str, id: &str, piece: &Piece, language: &str, gates: &mut [echo::Gate; 2]) -> Result<Vec<Segment>> {
+fn hear(core: &Arc<Core>, engine: &mut Option<EngineProcess>, model: &str, id: &str, piece: &Piece, language: &str, gates: &mut [echo::Gate; 2], sources: Sources) -> Result<Vec<Segment>> {
     if !gates[idx(piece.track)].admit(&piece.samples) {
         return Ok(Vec::new());
     }
@@ -572,6 +594,8 @@ fn hear(core: &Arc<Core>, engine: &mut Option<EngineProcess>, model: &str, id: &
                 p[2] += off as f32;
             }
             s.track = Some(piece.track.key().into());
+            s.speaker = Some(speaker_id(sources, piece.track));
+            s.text = crate::words::apply(&s.text, &core.settings.lock().unwrap().words);
             // a piece can begin in a long silence (the others listening): the line starts where the speech does
             if let (Some(first), Some(last)) = (s.voice.first(), s.voice.last()) {
                 s.start = s.start.max(*first as f64 - 0.2).min(s.end);
@@ -580,6 +604,131 @@ fn hear(core: &Arc<Core>, engine: &mut Option<EngineProcess>, model: &str, id: &
             s
         })
         .collect())
+}
+
+/// The language of `samples`, heard by the language model: Ok(Ok(language)) when there is a model
+/// for it, Ok(Err(what to say)) when there is none (and its model is offered), Err when the model
+/// could not tell (too little speech).
+fn heard_language(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str, samples: &[f32]) -> Result<std::result::Result<String, String>> {
+    let d = detect_language(core, engine, id, samples)?;
+    if d.has_model {
+        return Ok(Ok(d.language));
+    }
+    let offer = models::models_for(&d.language).first().map(|v| v.id);
+    let _ = core.app.emit("language-needs-model", serde_json::json!({ "id": id, "language": d.language, "name": d.name, "model": offer }));
+    let name = if models::known_language(&d.language) { models::language_name(&d.language).to_string() } else { d.name.clone() };
+    Ok(Err(crate::tr!("This recording is in {}, and there is no model for it yet. Download one in Settings.", name)))
+}
+
+/// The language heard, kept: on the job, the transcript (as heard) and the journal.
+fn settle_language(core: &Arc<Core>, sess: &Session, t: &mut Transcript, language: &str) {
+    t.language = language.to_string();
+    t.detected = Some(language.to_string());
+    if let Some(lt) = core.live.lock().unwrap().get_mut(&sess.id) {
+        lt.language = language.to_string();
+        lt.detected = Some(language.to_string());
+    }
+    core.update_job(&sess.id, |x| x.language = language.to_string());
+    let mut j = sess.journal.lock().unwrap();
+    j.language = language.to_string();
+    let _ = j.save(&sess.journal_path);
+}
+
+/// The speaker a track is: "Me" first when the microphone is recorded, then "Them".
+fn speaker_id(sources: Sources, track: Track) -> u32 {
+    match track {
+        Track::Them if sources.has(Track::Me) => 2,
+        _ => 1,
+    }
+}
+
+/// "Me" and "Them" as the speakers of a meeting, in the interface's language (names the user can
+/// change like any other).
+fn meeting_speakers(sources: Sources) -> Vec<Speaker> {
+    sources
+        .tracks()
+        .into_iter()
+        .rev()
+        .map(|t| Speaker { id: speaker_id(sources, t), name: if t == Track::Me { crate::tr!("Me") } else { crate::tr!("Them") } })
+        .collect()
+}
+
+/// A transcript of a recorded meeting: its lines come from the two tracks.
+pub fn is_meeting(t: &Transcript) -> bool {
+    t.segments.iter().any(|s| s.track.is_some())
+}
+
+/// The "them" lines told apart by voice, from `turns` the speaker model heard on the PC's track
+/// alone; the "me" lines stay "Me". A "them" voice that was given a name keeps it.
+pub fn split_them(t: &mut Transcript, turns: &[speakers::Turn]) {
+    let me = t.segments.iter().find(|s| s.track.as_deref() == Some("me")).and_then(|s| s.speaker);
+    let offset = u32::from(me.is_some());
+    let me_speaker = me.and_then(|m| t.speakers.iter().find(|x| x.id == m).cloned());
+    let (them, rest): (Vec<Segment>, Vec<Segment>) = t.segments.drain(..).partition(|s| s.track.as_deref() == Some("them"));
+    let mut others = Transcript {
+        speakers: t.speakers.iter().filter(|x| Some(x.id) != me).map(|x| Speaker { id: x.id.saturating_sub(offset), name: x.name.clone() }).collect(),
+        segments: them.into_iter().map(|mut s| { s.speaker = s.speaker.map(|x| x.saturating_sub(offset)); s }).collect(),
+        ..Default::default()
+    };
+    speakers::give_speakers(&mut others, turns);
+    let first = offset + 1;
+    let count = others.speakers.len();
+    for s in others.segments.iter_mut() {
+        // one voice, or a line in nobody's turn: "Them" as before
+        s.speaker = Some(match s.speaker {
+            Some(x) if count > 1 => x + offset,
+            _ => first,
+        });
+    }
+    let mut names: Vec<Speaker> = me_speaker.into_iter().collect();
+    if count > 1 {
+        names.extend(others.speakers.iter().map(|x| Speaker { id: x.id + offset, name: x.name.clone() }));
+    } else {
+        let name = others.speakers.first().map(|x| x.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| crate::tr!("Them"));
+        names.push(Speaker { id: first, name });
+    }
+    t.speakers = names;
+    t.segments = rest;
+    t.segments.extend(others.segments);
+    t.segments.sort_by(|a, b| a.start.total_cmp(&b.start));
+}
+
+/// One track of a recorded meeting, from its file (the WAV, or the M4A through ffmpeg): what the
+/// timing pass and the speaker model hear, rather than both sides mixed.
+pub fn channel(core: &Core, source: &Path, track: Track) -> Result<Vec<f32>> {
+    if let Ok(c) = record::wav::check(source) {
+        let (me, them) = record::wav::Reader::open(source, 0)?.next(c.file_frames as usize)?;
+        return Ok(if track == Track::Me { me } else { them });
+    }
+    let ff = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Reading this recording needs ffmpeg. Download it in Settings.")))?;
+    let mut cmd = std::process::Command::new(&ff);
+    let pan = format!("pan=mono|c0=c{}", if track == Track::Me { 0 } else { 1 });
+    cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"]).arg(source).args(["-af", &pan, "-ar", "16000", "-f", "f32le", "pipe:1"]);
+    cmd.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
+    setup::no_window(&mut cmd);
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(anyhow!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim()));
+    }
+    Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+}
+
+/// The timing pass on a recorded meeting: each line heard again on its own track.
+pub fn time_tracks(core: &Core, w: &mut dyn Engine, source: &Path, segments: &mut [Segment], language: &str, cancel: &std::sync::atomic::AtomicBool, mut progress: impl FnMut(f64)) -> Result<()> {
+    let tracks: Vec<Track> = [Track::Me, Track::Them].into_iter().filter(|t| segments.iter().any(|s| s.track.as_deref() == Some(t.key()))).collect();
+    for (k, tr) in tracks.iter().enumerate() {
+        let audio = Audio { id: format!("timing-{}", tr.key()), samples: channel(core, source, *tr)? };
+        let idx: Vec<usize> = (0..segments.len()).filter(|&i| segments[i].track.as_deref() == Some(tr.key())).collect();
+        let mut mine: Vec<Segment> = idx.iter().map(|&i| segments[i].clone()).collect();
+        let n = tracks.len() as f64;
+        let r = crate::timing::pass(w, &audio, &mut mine, language, cancel, |f| progress((k as f64 + f) / n));
+        w.forget(&audio.id);
+        r?;
+        for (i, s) in idx.into_iter().zip(mine) {
+            segments[i] = s;
+        }
+    }
+    Ok(())
 }
 
 /// The next piece to hear: the earliest, "them" first on a tie.
@@ -624,6 +773,8 @@ fn prepare(core: &Arc<Core>, engine: &mut Option<EngineProcess>, language: &str)
     let w = ensure_engine(core, engine, Some(&model.path))?;
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
+    let words = core.settings.lock().unwrap().words.clone();
+    w.set_vocabulary(if family == Family::Whisper { crate::words::hints(&words) } else { Vec::new() });
     let device = match &info.gpu {
         Some(g) if info.device == "gpu" => format!("GPU · {g}"),
         _ => "CPU".into(),
@@ -648,7 +799,11 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     let id = sess.id.as_str();
     let started = Instant::now();
     let j = sess.journal.lock().unwrap().clone();
-    let language = j.language.clone();
+    // "Detect the language": the first piece with speech tells it, and nothing is heard before
+    let mut language = j.language.clone();
+    let mut known = language != language::AUTO;
+    let mut no_model: Option<String> = None;
+    let mut tried: Vec<(usize, usize)> = Vec::new();
     let cancelled = || core.cancels.lock().unwrap().get(id).is_some_and(|c| c.load(Ordering::SeqCst));
     let live_now = sess.recorder.lock().unwrap().is_some();
     // a recording found after a crash and stopped while it waited: it is offered again
@@ -662,8 +817,8 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     let overflow = sess.recorder.lock().unwrap().as_ref().map(|r| r.overflow());
     // an engine that does not start (a damaged model, the antivirus, the GPU) never stops the
     // recording: the text then comes from the file after Stop
-    let mut ready = prepare(core, engine, &language);
-    if ready.is_err() {
+    let mut ready = if known { prepare(core, engine, &language) } else { Err(anyhow!("the language is not known yet")) };
+    if known && ready.is_err() {
         sess.behind.store(true, Ordering::SeqCst);
     }
     let (device, model_label) = ready.as_ref().map(|(_, d, m)| (d.clone(), m.clone())).unwrap_or_default();
@@ -678,8 +833,9 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         device,
         model: model_label,
         partial: true,
-        segments: Vec::new(),
-        translations: Vec::new(),
+        // "Me" and "Them" are its speakers from the first line
+        speakers: meeting_speakers(j.sources),
+        ..Default::default()
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     let _ = core.app.emit("transcript-started", id);
@@ -728,12 +884,47 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 }
                 continue;
             }
+            if !known {
+                // the earliest piece with speech not tried yet
+                let candidate = (0..pending.len())
+                    .filter(|&i| !tried.contains(&(idx(pending[i].track), pending[i].start)))
+                    .min_by_key(|&i| (pending[i].start, idx(pending[i].track) == 0))
+                    .filter(|&i| echo::Gate::default().admit(&pending[i].samples));
+                if let Some(i) = candidate {
+                    tried.push((idx(pending[i].track), pending[i].start));
+                    let samples = pending[i].samples.clone();
+                    match heard_language(core, engine, id, &samples) {
+                        Ok(Ok(found)) => {
+                            language = found;
+                            known = true;
+                            settle_language(core, sess, &mut t, &language);
+                            ready = prepare(core, engine, &language);
+                            if ready.is_err() {
+                                sess.behind.store(true, Ordering::SeqCst);
+                            }
+                        }
+                        Ok(Err(message)) => {
+                            // a language without a model: the recording goes on, the text waits
+                            no_model = Some(message);
+                            sess.behind.store(true, Ordering::SeqCst);
+                        }
+                        Err(_) => {} // too little speech in it: the next one
+                    }
+                }
+                if !known {
+                    if now_s.floor() != shown_s {
+                        shown_s = now_s.floor();
+                        core.update_job(id, |x| x.duration_s = now_s);
+                    }
+                    continue;
+                }
+            }
             let model_path = ready.as_ref().map(|r| r.0.clone()).unwrap_or_default();
             if let Some(p) = next_piece(&mut pending) {
                 if let Some(d) = delay {
                     std::thread::sleep(d);
                 }
-                let got = hear(core, engine, &model_path, id, &p, &language, &mut gates);
+                let got = hear(core, engine, &model_path, id, &p, &language, &mut gates, j.sources);
                 match got {
                     Ok(segs) => {
                         lines.add(p.track, (p.start + p.samples.len()) as f64 / SR as f64, segs);
@@ -777,6 +968,17 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
             resume[idx(tr)] = Some(0);
         }
     }
+    if let Some(message) = no_model {
+        return Err(anyhow!(message));
+    }
+    if !known {
+        core.update_job(id, |x| x.status = "detecting".into());
+        // the first three minutes, both sides together
+        let (me, them) = record::wav::Reader::open(&sess.wav, 0)?.next(SR * 180)?;
+        let mix: Vec<f32> = me.iter().zip(&them).map(|(a, b)| a + b).collect();
+        language = heard_language(core, engine, id, &mix)?.map_err(|m| anyhow!(m))?;
+        settle_language(core, sess, &mut t, &language);
+    }
     if ready.is_err() {
         core.update_job(id, |x| x.status = "loading".into());
         ready = prepare(core, engine, &language);
@@ -817,7 +1019,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
             return Ok(());
         }
         let end = p.start + p.samples.len();
-        let segs = hear(core, engine, &model, id, &p, &language, &mut gates)?;
+        let segs = hear(core, engine, &model, id, &p, &language, &mut gates, j.sources)?;
         lines.add(p.track, end as f64 / SR as f64, segs);
         for s in lines.release(false) {
             show(core, &mut t, id, s);
@@ -855,7 +1057,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                     return Ok(());
                 }
                 let end = p.start + p.samples.len();
-                let segs = hear(core, engine, &model, id, &p, &language, &mut gates)?;
+                let segs = hear(core, engine, &model, id, &p, &language, &mut gates, j.sources)?;
                 lines.add(p.track, end as f64 / SR as f64, segs);
                 for s in lines.release(false) {
                     show(core, &mut t, id, s);
@@ -877,6 +1079,25 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     for s in lines.release(true) {
         show(core, &mut t, id, s);
     }
+    let mut next_error = None;
+    let them_lines = t.segments.iter().any(|s| s.track.as_deref() == Some("them"));
+    if j.steps.speakers && them_lines {
+        core.update_job(id, |x| {
+            x.status = "speakers".into();
+            x.eta_s = None;
+        });
+        let turns = channel(core, &sess.wav, Track::Them).and_then(|samples| {
+            let audio = Audio { id: format!("{id}-them"), samples };
+            let w = ensure_engine(core, engine, None)?;
+            let turns = find_turns(core, w, &audio);
+            w.forget(&audio.id);
+            turns
+        });
+        match turns {
+            Ok(turns) => split_them(&mut t, &turns),
+            Err(e) => next_error = Some(crate::tr!("Transcribed, but the speakers could not be told apart: {}", format!("{e:#}"))),
+        }
+    }
 
     // kept small: an M4A when there is ffmpeg, the WAV only once that is checked
     core.update_job(id, |x| x.status = "saving_audio".into());
@@ -885,6 +1106,9 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         let _ = std::fs::remove_file(&sess.wav);
     }
     t.source_path = kept.display().to_string();
+    // the sound it kept is its own: a folder run never takes it for a recording
+    t.outputs = vec![kept.display().to_string()];
+    t.outputs_listed = true;
     t.partial = false;
     t.elapsed_s = started.elapsed().as_secs_f64();
     core.live.lock().unwrap().remove(id);
@@ -892,8 +1116,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     let _ = std::fs::remove_file(&sess.journal_path);
     let _ = core.app.emit("history-changed", id);
     // the steps chosen on the start page: a translation
-    let mut next_error = None;
-    if !t.segments.is_empty() {
+    if !t.segments.is_empty() && next_error.is_none() {
         if let Some(lang) = j.steps.translate.as_deref().filter(|l| *l != t.language) {
             if let Err(e) = core.translate_then(id, lang, false, false) {
                 next_error = Some(format!("{e:#}"));
@@ -962,7 +1185,7 @@ fn core_of(app: &AppHandle) -> Arc<Core> {
 #[tauri::command]
 pub fn start_recording(app: AppHandle, language: String, steps: Option<Steps>) -> R<String> {
     let core = core_of(&app);
-    let language = if models::known_language(&language) { language } else { "ar".into() };
+    let language = if models::known_language(&language) || language == language::AUTO { language } else { "ar".into() };
     core.start_recording(language, steps.unwrap_or_default()).map_err(|e| format!("{e:#}"))
 }
 
@@ -989,7 +1212,7 @@ pub struct RecordSetup {
 pub async fn record_setup(app: AppHandle) -> RecordSetup {
     let core = core_of(&app);
     let microphones = tauri::async_runtime::spawn_blocking(microphones).await.unwrap_or_default();
-    RecordSetup { settings: core.record_settings(), microphones, folder: recordings_dir(&core.paths).display().to_string(), synced: recordings_synced(&core.paths) }
+    RecordSetup { settings: core.record_settings(), microphones, folder: core.recordings_dir().display().to_string(), synced: recordings_synced(&core) }
 }
 
 #[tauri::command]
@@ -1007,7 +1230,7 @@ pub fn choose_microphone(app: AppHandle, id: Option<String>) -> R<RecordSettings
 pub async fn recording_notice(app: AppHandle) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     let core = core_of(&app);
-    let synced = recordings_synced(&core.paths);
+    let synced = recordings_synced(&core);
     // shown once; again whenever the recordings would go to OneDrive, so that it is never untrue
     if core.record_settings().notice_shown && !synced {
         return true;
@@ -1015,7 +1238,7 @@ pub async fn recording_notice(app: AppHandle) -> bool {
     let text = if synced {
         crate::tr!(
             "Recording a call may need the consent of everyone on it. Tell the others before you start. The recordings folder, {}, is in OneDrive, so OneDrive will upload the recording.",
-            recordings_dir(&core.paths).display()
+            core.recordings_dir().display()
         )
     } else {
         crate::tr!("Recording a call may need the consent of everyone on it. Tell the others before you start. The recording stays on this computer.")

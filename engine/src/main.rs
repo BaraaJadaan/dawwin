@@ -14,17 +14,36 @@
 //!
 //!   load:       {"model": <.gguf file>} -> where it runs
 //!   transcribe: {"path": <raw little-endian f32, 16 kHz mono>, "ranges": [[start, end], ...],
-//!                "language": "ar" | "da" | ...} -> {"texts": [...], "stopped": [...]}, one per range.
+//!                "language": "ar" | "da" | ..., "vocabulary": ["Thmanyah", ...]}
+//!                -> {"texts": [...], "stopped": [...]}, one per range.
 //!                `stopped`: the model looped or ran out of tokens, so the text ends early.
+//!                `vocabulary`: words the model should hear right, for a model that takes them
+//!                (Whisper); the others go without.
+//!   speakers:   {"model": <speaker model>, "path": <raw f32>} -> {"turns": [[start_ms, end_ms, speaker], ...],
+//!                "max_speakers": 4}: who speaks when, speakers numbered from 1 in the order they
+//!                first speak. Turns of different speakers may overlap.
+//!   language:   {"model": <language model>, "path": <raw f32>, "ranges": [[start, end], ...]}
+//!                -> {"candidates": [[code, name, p], ...]}: the ranges heard as one clip (at most
+//!                its first 30 s count), every language the model knows, the likeliest first.
+//!   stop:       {"target": <id>}: stop that request (a `speakers` one) as soon as it can; it then
+//!                fails with `"stopped": true`. No reply of its own.
+//!
+//! The speaker and language models run on the processor, next to the speech model wherever that
+//! runs: they are small, and never take the GPU's memory from it.
 //!
 //! `--cpu` keeps the GPU driver out of the process altogether.
 
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 use serde_json::{json, Value};
-use transcribe_cpp::{Backend, BackendMask, Device, DeviceType, Error, Model, ModelOptions, RunOptions, Session, SessionOptions, TimestampKind};
+use transcribe_cpp::{
+    Backend, BackendMask, CancelToken, Device, DeviceType, DiarizeExtension, DiarizeOptions, DiarizeSession, DiarizeSessionOptions, Error, Feature,
+    LangIdOptions, LangIdSession, LangIdSessionOptions, Model, ModelOptions, RunOptions, Session, SessionOptions, SortformerDiarizeOptions,
+    SortformerPreset, TimestampKind,
+};
 
 /// The model cannot read less than this; it could not hold speech anyway.
 const MIN_SAMPLES: usize = 160;
@@ -51,12 +70,33 @@ impl log::Log for StderrLog {
 struct Loaded {
     session: Session,
     status: Value,
+    /// The model takes a list of words to hear right
+    vocabulary: bool,
+}
+
+/// A model of another role than transcribing, on the processor: the file it came from, so another
+/// file replaces it.
+struct Helper<S> {
+    path: String,
+    session: S,
+    max_speakers: i32,
+    min_samples: usize,
 }
 
 struct Engine {
     cpu_only: bool,
     backends_ready: bool,
     loaded: Option<Loaded>,
+    speakers: Option<Helper<DiarizeSession>>,
+    language: Option<Helper<LangIdSession>>,
+}
+
+/// Which request runs now, and a stop that came for one: a stop can arrive before its request
+/// starts, while it runs, or just after it ended.
+#[derive(Default)]
+struct Stops {
+    running: Option<(Value, CancelToken)>,
+    wanted: Option<Value>,
 }
 
 impl Engine {
@@ -101,7 +141,7 @@ impl Engine {
                 fallback = Some("gpu-too-small".to_string());
             } else {
                 match open(model_path, Some(gpu.clone())) {
-                    Ok(session) => {
+                    Ok((session, vocabulary)) => {
                         let status = json!({
                             "device": "gpu",
                             "gpu": gpu.description,
@@ -110,7 +150,7 @@ impl Engine {
                             "load_seconds": started.elapsed().as_secs_f32(),
                         });
                         log::info!("loaded on {status}");
-                        self.loaded = Some(Loaded { session, status: status.clone() });
+                        self.loaded = Some(Loaded { session, status: status.clone(), vocabulary });
                         return Ok(status);
                     }
                     Err(e) => {
@@ -120,7 +160,7 @@ impl Engine {
                 }
             }
         }
-        let session = open(model_path, None)?;
+        let (session, vocabulary) = open(model_path, None)?;
         let status = json!({
             "device": "cpu",
             "batch": BATCH,
@@ -128,7 +168,7 @@ impl Engine {
             "load_seconds": started.elapsed().as_secs_f32(),
         });
         log::info!("loaded on {status}");
-        self.loaded = Some(Loaded { session, status: status.clone() });
+        self.loaded = Some(Loaded { session, status: status.clone(), vocabulary });
         Ok(status)
     }
 
@@ -136,14 +176,12 @@ impl Engine {
         if self.loaded.is_none() {
             self.load(req)?;
         }
-        let session = &mut self.loaded.as_mut().expect("just loaded").session;
+        let loaded = self.loaded.as_mut().expect("just loaded");
+        let session = &mut loaded.session;
+        let vocabulary: Vec<String> = if loaded.vocabulary { strings(req.get("vocabulary")) } else { Vec::new() };
         let path = req.get("path").and_then(Value::as_str).unwrap_or_default();
         let language = req.get("language").and_then(Value::as_str).unwrap_or("ar");
-        let ranges: Vec<(usize, usize)> = req
-            .get("ranges")
-            .and_then(Value::as_array)
-            .map(|r| r.iter().filter_map(|p| Some((p.get(0)?.as_u64()? as usize, p.get(1)?.as_u64()? as usize))).collect())
-            .unwrap_or_default();
+        let ranges = ranges_of(req);
 
         let pcm = read_ranges(path, &ranges).map_err(|e| Error::InvalidArgument(format!("{path}: {e}")))?;
         // too short for the model: it would fail the whole batch, and it holds no speech
@@ -154,6 +192,7 @@ impl Engine {
             let options = RunOptions {
                 language: Some(language.to_string()),
                 timestamps: TimestampKind::None,
+                vocabulary,
                 ..RunOptions::default()
             };
             let batch: Vec<&[f32]> = usable.iter().map(|&i| pcm[i].as_slice()).collect();
@@ -165,6 +204,66 @@ impl Engine {
             }
         }
         Ok(json!({ "texts": texts, "stopped": stopped }))
+    }
+
+    /// Who speaks when in the whole file: Sortformer at its offline operating point (it looks about
+    /// 30 s ahead), which is the one NVIDIA's accuracy figures are for.
+    fn speakers(&mut self, req: &Value, stop: &CancelToken) -> Result<Value, Error> {
+        self.backends()?;
+        let model_path = req.get("model").and_then(Value::as_str).unwrap_or_default();
+        if self.speakers.as_ref().is_some_and(|h| h.path != model_path) {
+            self.speakers = None;
+        }
+        if self.speakers.is_none() {
+            let model = load_on_cpu(model_path)?;
+            let info = model.diarize_info()?;
+            let session = model.diarize_session_with(&DiarizeSessionOptions { n_threads: cpu_threads() })?;
+            self.speakers = Some(Helper { path: model_path.to_string(), session, max_speakers: info.max_speakers, min_samples: 0 });
+        }
+        let helper = self.speakers.as_mut().expect("just loaded");
+        let path = req.get("path").and_then(Value::as_str).unwrap_or_default();
+        let pcm = read_all(path).map_err(|e| Error::InvalidArgument(format!("{path}: {e}")))?;
+        if pcm.len() < MIN_SAMPLES {
+            return Ok(json!({ "turns": [], "max_speakers": helper.max_speakers }));
+        }
+        let started = Instant::now();
+        helper.session.set_cancel_token(stop);
+        let options = DiarizeOptions {
+            family: Some(DiarizeExtension::Sortformer(SortformerDiarizeOptions { preset: Some(SortformerPreset::VeryHighLatency) })),
+        };
+        let result = helper.session.run(&pcm, &options);
+        helper.session.clear_cancel_token();
+        let mut turns: Vec<[i64; 3]> = result?.iter().filter(|s| s.speaker_id > 0 && s.t1_ms > s.t0_ms).map(|s| [s.t0_ms, s.t1_ms, s.speaker_id as i64]).collect();
+        turns.sort();
+        log::info!("{} speaker turns in {:.1} s of sound, found in {:.1} s", turns.len(), pcm.len() as f64 / 16000.0, started.elapsed().as_secs_f64());
+        Ok(json!({ "turns": turns, "max_speakers": helper.max_speakers }))
+    }
+
+    /// Which language the ranges are in, by every language the model knows. The app decides
+    /// among the ones it has a model for, which the probabilities of all of them let it do.
+    fn language(&mut self, req: &Value) -> Result<Value, Error> {
+        self.backends()?;
+        let model_path = req.get("model").and_then(Value::as_str).unwrap_or_default();
+        if self.language.as_ref().is_some_and(|h| h.path != model_path) {
+            self.language = None;
+        }
+        if self.language.is_none() {
+            let model = load_on_cpu(model_path)?;
+            let info = model.langid_info()?;
+            let session = model.langid_session_with(&LangIdSessionOptions { n_threads: cpu_threads() })?;
+            let min_samples = (info.min_audio_ms.max(0) as usize) * info.sample_rate.max(1) as usize / 1000;
+            self.language = Some(Helper { path: model_path.to_string(), session, max_speakers: 0, min_samples });
+        }
+        let helper = self.language.as_mut().expect("just loaded");
+        let path = req.get("path").and_then(Value::as_str).unwrap_or_default();
+        let pcm: Vec<f32> = read_ranges(path, &ranges_of(req)).map_err(|e| Error::InvalidArgument(format!("{path}: {e}")))?.concat();
+        if pcm.len() < helper.min_samples.max(MIN_SAMPLES) {
+            return Ok(json!({ "candidates": [], "too_short": true }));
+        }
+        let result = helper.session.run(&pcm, &LangIdOptions { allowed: None })?;
+        let candidates: Vec<Value> = result.candidates.iter().map(|c| json!([c.code, c.name, c.p])).collect();
+        log::info!("language: {:?} in {:.1} s of speech", result.code(), pcm.len() as f64 / 16000.0);
+        Ok(json!({ "candidates": candidates }))
     }
 }
 
@@ -188,7 +287,8 @@ fn best_gpu() -> Option<Device> {
         .max_by_key(|d| (matches!(d.device_type, DeviceType::Gpu), d.memory_total))
 }
 
-fn open(path: &str, gpu: Option<Device>) -> Result<Session, Error> {
+/// The speech model's session, and whether it takes a list of words to hear right.
+fn open(path: &str, gpu: Option<Device>) -> Result<(Session, bool), Error> {
     let on_gpu = gpu.is_some();
     let options = ModelOptions {
         backend: if on_gpu { Backend::Auto } else { Backend::Cpu },
@@ -200,7 +300,37 @@ fn open(path: &str, gpu: Option<Device>) -> Result<Session, Error> {
     let available = std::thread::available_parallelism().map_or(1, |n| n.get());
     // on the GPU the threads only feed it; on the CPU more than eight gains nothing
     let threads = if on_gpu { available.saturating_sub(2).max(1) } else { available.min(8) };
-    model.session_with(&SessionOptions { n_threads: threads as i32, ..SessionOptions::default() })
+    let session = model.session_with(&SessionOptions { n_threads: threads as i32, ..SessionOptions::default() })?;
+    Ok((session, model.supports(Feature::Vocabulary)))
+}
+
+/// Threads for a model on the processor: more than eight gains nothing.
+fn cpu_threads() -> i32 {
+    std::thread::available_parallelism().map_or(1, |n| n.get()).min(8) as i32
+}
+
+/// A model of another role, loaded on the processor.
+fn load_on_cpu(path: &str) -> Result<Model, Error> {
+    let model = Model::load_with(path, &ModelOptions { backend: Backend::Cpu, ..ModelOptions::default() })?;
+    log::info!("model on the processor: {}", model.arch());
+    Ok(model)
+}
+
+fn strings(v: Option<&Value>) -> Vec<String> {
+    v.and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str()).map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default()
+}
+
+fn ranges_of(req: &Value) -> Vec<(usize, usize)> {
+    req.get("ranges")
+        .and_then(Value::as_array)
+        .map(|r| r.iter().filter_map(|p| Some((p.get(0)?.as_u64()? as usize, p.get(1)?.as_u64()? as usize))).collect())
+        .unwrap_or_default()
+}
+
+/// The whole raw file.
+fn read_all(path: &str) -> std::io::Result<Vec<f32>> {
+    let bytes = std::fs::read(path)?;
+    Ok(bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect())
 }
 
 fn read_ranges(path: &str, ranges: &[(usize, usize)]) -> std::io::Result<Vec<Vec<f32>>> {
@@ -228,9 +358,29 @@ fn reply(id: &Value, result: Result<Value, Error>) -> Value {
         }
         Err(e) => {
             log::error!("{e}");
-            json!({ "id": id, "ok": false, "error": e.to_string(), "oom": matches!(e, Error::OutOfMemory(_)), "device": matches!(e, Error::Backend(_)) })
+            json!({
+                "id": id,
+                "ok": false,
+                "error": e.to_string(),
+                "oom": matches!(e, Error::OutOfMemory(_)),
+                "device": matches!(e, Error::Backend(_)),
+                "stopped": matches!(e, Error::Aborted { .. }),
+            })
         }
     }
+}
+
+/// A request that can be stopped while it runs: it gets a token of its own, already pulled when
+/// its stop came first.
+fn stoppable(stops: &Mutex<Stops>, id: &Value) -> CancelToken {
+    let token = CancelToken::new();
+    let mut s = stops.lock().unwrap();
+    if s.wanted.as_ref() == Some(id) {
+        token.cancel();
+        s.wanted = None;
+    }
+    s.running = Some((id.clone(), token.clone()));
+    token
 }
 
 fn main() {
@@ -243,17 +393,50 @@ fn main() {
         cpu_only: std::env::args().any(|a| a == "--cpu"),
         backends_ready: false,
         loaded: None,
+        speakers: None,
+        language: None,
     };
-    let stdin = std::io::stdin();
+    // Requests are read on a thread of their own, so a stop reaches the one that runs.
+    let stops = Arc::new(Mutex::new(Stops::default()));
+    let (tx, rx) = mpsc::channel::<Value>();
+    let reader_stops = stops.clone();
+    std::thread::spawn(move || {
+        for line in std::io::stdin().lock().lines().map_while(Result::ok) {
+            let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+            if req.get("cmd").and_then(Value::as_str) == Some("stop") {
+                let target = req.get("target").cloned().unwrap_or(Value::Null);
+                let mut s = reader_stops.lock().unwrap();
+                match &s.running {
+                    Some((id, token)) if *id == target => token.cancel(),
+                    _ => s.wanted = Some(target),
+                }
+                continue;
+            }
+            if tx.send(req).is_err() {
+                return;
+            }
+        }
+        // the app closed its end of the pipe: what runs stops, and the engine ends after it,
+        // so none stays behind holding the GPU
+        if let Some((_, token)) = &reader_stops.lock().unwrap().running {
+            token.cancel();
+        }
+    });
+
     let mut stdout = std::io::stdout();
-    // the app closing its end of the pipe ends the loop: no engine stays behind holding the GPU
-    for line in stdin.lock().lines().map_while(Result::ok) {
-        let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };
+    for req in rx {
         let id = req.get("id").cloned().unwrap_or(Value::Null);
         let answer = match req.get("cmd").and_then(Value::as_str) {
             Some("probe") => reply(&id, engine.probe()),
             Some("load") => reply(&id, engine.load(&req)),
             Some("transcribe") => reply(&id, engine.transcribe(&req)),
+            Some("speakers") => {
+                let token = stoppable(&stops, &id);
+                let answer = reply(&id, engine.speakers(&req, &token));
+                stops.lock().unwrap().running = None;
+                answer
+            }
+            Some("language") => reply(&id, engine.language(&req)),
             Some("quit") => {
                 let _ = writeln!(stdout, "{}", json!({ "id": id, "ok": true }));
                 let _ = stdout.flush();

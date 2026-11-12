@@ -83,6 +83,60 @@ jobs:
           $output = $requests | & .\engine-out\dawwin-engine.exe
           $output | ForEach-Object { Write-Host $_ }
           if (@($output | Where-Object { $_ -match '"ok":true' }).Count -ne 4) { throw "the engine failed" }
+      - name: Words placed in time with this model, measured (tools/timing)
+        # talks made with the voices of Windows, so the moment of every word is known; the runner has
+        # the English voices only. The table this prints is the measurement for this model.
+        shell: pwsh
+        env:
+          DAWWIN_TIMING_DIR: ${{ runner.temp }}\voices
+          DAWWIN_TIMING_ENGINE: ${{ github.workspace }}\engine-out\dawwin-engine.exe
+          DAWWIN_TIMING_CPU: "1"
+        run: |
+          pwsh -NoProfile -File tools/timing/speak.ps1 -Out $env:DAWWIN_TIMING_DIR
+          if (-not (Get-ChildItem "$env:DAWWIN_TIMING_DIR\*.truth.json" -ErrorAction SilentlyContinue)) { throw "no voice made a talk" }
+          $env:DAWWIN_TIMING_MODEL = (Get-ChildItem "${{ runner.temp }}\models\*.gguf" | Select-Object -First 1).FullName
+          cargo test --manifest-path src-tauri/Cargo.toml --locked --lib timing::tests::bench -- --ignored --nocapture
+
+  speakers-and-language:
+    # The speaker model and the language model, on a machine without a GPU: each downloaded with a
+    # pause, then the engine tells the speakers apart in transcribe.cpp's own two-voice and
+    # one-voice recordings, stops a long run when asked, and names the language of its samples.
+    needs: engine
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/download-artifact@v4
+        with:
+          name: dawwin-engine-windows-x64
+          path: engine-out
+      - name: Download both models, pause, resume, check
+        shell: pwsh
+        run: |
+          foreach ($m in "speakers", "language") {
+            $env:DAWWIN_TEST_MODEL = $m
+            $env:DAWWIN_TEST_DIR = "$env:RUNNER_TEMP\models"
+            cargo test --manifest-path src-tauri/Cargo.toml --locked real_download -- --ignored --nocapture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Sample recordings of transcribe.cpp (at the version the engine pins)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory samples | Out-Null
+          foreach ($f in "sortformer-2spk-mix.wav", "multitalker-2spk-mix.wav", "jfk.wav", "dots-full.wav", "ar-short.wav", "fleurs-en.wav", "fleurs-de.wav", "fleurs-fr.wav", "fleurs-es.wav", "ru-short.wav", "ja-short.wav", "zh-short.wav") {
+            curl.exe -L --fail --retry 5 -s -o "samples\$f" "https://raw.githubusercontent.com/handy-computer/transcribe.cpp/v0.4.1/samples/$f"
+            if ($LASTEXITCODE -ne 0) { throw "no $f" }
+          }
+          Get-ChildItem samples | Format-Table Name, Length
+      - name: Who speaks, and which language
+        shell: pwsh
+        run: |
+          $env:DAWWIN_TEST_ENGINE = (Resolve-Path engine-out\dawwin-engine.exe).Path
+          $env:DAWWIN_TEST_SPEAKERS = "$env:RUNNER_TEMP\models\diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf"
+          $env:DAWWIN_TEST_LANGUAGE = "$env:RUNNER_TEMP\models\lang-id-voxlingua107-ecapa-Q8_0.gguf"
+          $env:DAWWIN_TEST_SAMPLES = (Resolve-Path samples).Path
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_speakers_and_language -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
   translator:
     # The translator as the app ships it (llama.cpp's official build), with each translation model,

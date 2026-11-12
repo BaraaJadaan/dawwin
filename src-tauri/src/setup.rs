@@ -216,6 +216,12 @@ pub fn folder_size(dir: &Path) -> u64 {
 
 /// The speech engine ships in a folder next to the app.
 pub fn engine_exe() -> Option<PathBuf> {
+    // for trying the app with a stand-in engine (examples/fake_engine.rs); not in release builds
+    if cfg!(debug_assertions) {
+        if let Some(exe) = std::env::var_os("DAWWIN_TEST_ENGINE").map(PathBuf::from).filter(|p| p.is_file()) {
+            return Some(exe);
+        }
+    }
     let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("dawwin-engine.exe");
     exe.is_file().then_some(exe)
 }
@@ -299,6 +305,25 @@ pub struct Settings {
     /// What transcribing a folder writes next to each recording; unset means text only
     #[serde(default)]
     pub folder_formats: Option<Vec<String>>,
+    /// How to write the words Dawwin keeps getting wrong (see `words`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<crate::words::Entry>,
+    /// The speaker's name at the start of a subtitle where the speaker changes, in SRT and burned in
+    #[serde(default)]
+    pub names_in_srt: bool,
+    /// The speaker in WebVTT's voice tag; unset means yes
+    #[serde(default)]
+    pub names_in_vtt: Option<bool>,
+    /// How burned-in subtitles look
+    #[serde(default)]
+    pub look: crate::look::Look,
+    /// How large the interface is drawn: the webview's zoom, 1 as it comes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+    /// Where the steps save the sound and the videos, and save dialogs open: unset means next
+    /// to the recording (see `saving`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_dir: Option<String>,
 }
 
 impl Settings {
@@ -346,6 +371,12 @@ impl Settings {
             Some("cpu") | Some("cpu-fast") | Some("cpu-exact") => "cpu",
             _ => "auto",
         }
+    }
+
+    /// Tell the exports whether subtitles name the speaker, and how burned-in ones look.
+    pub fn apply_to_subtitles(&self) {
+        crate::speakers::set_subtitle_names(self.names_in_srt, self.names_in_vtt.unwrap_or(true));
+        crate::look::set(self.look.clone());
     }
 
     pub fn folder_formats(&self) -> Vec<String> {

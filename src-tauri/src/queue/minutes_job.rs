@@ -59,8 +59,12 @@ impl Core {
 
     /// The user's corrections to the minutes: what they changed is marked as theirs.
     pub fn edit_minutes(&self, transcript: &str, new: Minutes) -> Result<Minutes> {
-        let (_, m) = history::modify(&self.paths.history_dir(), transcript, |t| {
-            let m = t.minutes.get_or_insert_with(Minutes::default);
+        // a run under way replaces the minutes when it ends: an edit now would be lost without a word
+        if self.snapshot().queue.iter().any(|j| j.kind == "minutes" && j.transcript.as_deref() == Some(transcript) && ACTIVE_JOB.contains(&j.status.as_str())) {
+            return Err(anyhow!(crate::tr!("The minutes are being written again. Correct them when that is done.")));
+        }
+        let (_, m) = history::modify_minutes(&self.paths.history_dir(), transcript, |m| {
+            let m = m.get_or_insert_with(Minutes::default);
             m.apply_edits(new);
             m.clone()
         })?;
@@ -160,29 +164,14 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
             // a part the model could not answer still counts, empty, so the rest goes on
             draft.notes.push(note.unwrap_or_else(|| serde_json::json!({ "kind": "other", "summary": "" })));
             let kept = draft.clone();
-            history::modify(&dir, &transcript, |t| t.minutes.get_or_insert_with(Minutes::default).draft = Some(kept))?;
+            history::modify_minutes(&dir, &transcript, |m| m.get_or_insert_with(Minutes::default).draft = Some(kept))?;
         }
-        let mut notes = draft.notes.clone();
-        let mut times: Vec<(f64, f64)> = parts.iter().map(|&(a, b)| (lines[a].start, lines[b - 1].start)).collect();
+        let times: Vec<(f64, f64)> = parts.iter().map(|&(a, b)| (lines[a].start, lines[b - 1].start)).collect();
         let highest = lines.last().map_or(1, |l| l.index + 1);
-        // too many notes for one pass: a few parts at a time first
-        loop {
-            let groups = minutes::groups(&notes, &times);
-            if groups.len() <= 1 {
-                break;
-            }
-            let mut fewer = Vec::new();
-            let mut fewer_times = Vec::new();
-            for (a, b) in groups {
-                let combined = ask(core, id, w, &spec, &minutes::ask_combine(&notes[a..b], &times[a..b], highest, &source, &language), &cancel, steps - 1, steps, started)?;
-                fewer.push(combined.unwrap_or_else(|| minutes::merge_notes(&notes[a..b])));
-                fewer_times.push((times[a].0, times[b - 1].1));
-            }
-            notes = fewer;
-            times = fewer_times;
-        }
-        let last = ask(core, id, w, &spec, &minutes::ask_combine(&notes, &times, highest, &source, &language), &cancel, steps - 1, steps, started)?;
-        Some(last.unwrap_or_else(|| minutes::merge_notes(&notes)))
+        let last = steps - 1;
+        Some(minutes::combine(draft.notes.clone(), times, |notes, times| {
+            ask(core, id, w, &spec, &minutes::ask_combine(notes, times, highest, &source, &language), &cancel, last, steps, started)
+        })?)
     };
     let Some(answer) = answer else {
         return Err(anyhow!(crate::tr!("The model did not write minutes that Dawwin could read. Try again, or another minutes model.")));
@@ -193,7 +182,7 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     m.written_ms = now_ms();
     m.from = from;
     let kept = m.clone();
-    let (saved, _) = history::modify(&dir, &transcript, |t| t.minutes = Some(kept))?;
+    let (saved, _) = history::modify_minutes(&dir, &transcript, |m| *m = Some(kept))?;
     let _ = core.app.emit("history-changed", &transcript);
     let _ = core.app.emit("minutes-done", &transcript);
 

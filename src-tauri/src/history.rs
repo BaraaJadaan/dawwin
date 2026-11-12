@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
+use crate::minutes::Minutes;
 use crate::transcript::Transcript;
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,14 +34,40 @@ pub fn save(dir: &Path, t: &Transcript) -> Result<()> {
     Ok(())
 }
 
+/// One change to a transcript's file at a time.
+static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Read a transcript, change it and write it back, with no other change in between: an edit in
 /// the window and a translation running in the background both change the same file.
 pub fn modify<T>(dir: &Path, id: &str, f: impl FnOnce(&mut Transcript) -> T) -> Result<(Transcript, T)> {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut t = load(dir, id)?;
     let out = f(&mut t);
     save(dir, &t)?;
+    Ok((t, out))
+}
+
+/// Change only a transcript's minutes, and leave the rest of its file as it is, fields this version
+/// does not know included (a newer version's speakers, say): the minutes are written in the
+/// background, and they are all that changes.
+pub fn modify_minutes<T>(dir: &Path, id: &str, f: impl FnOnce(&mut Option<Minutes>) -> T) -> Result<(Transcript, T)> {
+    let _held = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let path = file(dir, id)?;
+    let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).with_context(|| format!("no transcript {id}"))?)?;
+    let mut t: Transcript = serde_json::from_value(raw.clone())?;
+    let out = f(&mut t.minutes);
+    let Some(fields) = raw.as_object_mut() else { bail!("transcript {id} is not an object") };
+    match &t.minutes {
+        Some(m) => {
+            fields.insert("minutes".into(), serde_json::to_value(m)?);
+        }
+        None => {
+            fields.remove("minutes");
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&raw)?)?;
+    std::fs::rename(&tmp, &path)?;
     Ok((t, out))
 }
 

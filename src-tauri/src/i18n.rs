@@ -49,6 +49,7 @@ static AR: &[(&str, &str)] = &[
     ("There is no minutes model yet. Download one in Settings.", "لا يوجد نموذج محاضر بعد. نزّل واحدًا من الإعدادات."),
     ("The model did not write minutes that Dawwin could read. Try again, or another minutes model.", "لم يكتب النموذج محضرًا يستطيع دَوِّن قراءته. حاول مرة أخرى، أو جرّب نموذج محاضر آخر."),
     ("The minutes are written, but could not be saved next to the recording: {}", "كُتب المحضر، لكن تعذّر حفظه بجانب التسجيل: {}"),
+    ("The minutes are being written again. Correct them when that is done.", "يُكتب المحضر من جديد. صحّحه بعد أن ينتهي."),
     ("There are no minutes of this transcript yet.", "لا يوجد محضر لهذا التفريغ بعد."),
     ("Save the minutes", "حفظ المحضر"),
     // queue

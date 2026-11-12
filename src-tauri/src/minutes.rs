@@ -429,8 +429,8 @@ pub fn cut(lines: &[Line], part_s: f64, part_chars: usize) -> Vec<(usize, usize)
     while first < lines.len() {
         let start = lines[first].start;
         let (mut size, mut last) = (0usize, first);
-        while last < lines.len() && (last == first || (lines[last].start - start < part_s && size + lines[last].text.len() <= part_chars)) {
-            size += lines[last].text.len();
+        while last < lines.len() && (last == first || (lines[last].start - start < part_s && size + chars(&lines[last].text) <= part_chars)) {
+            size += chars(&lines[last].text);
             last += 1;
         }
         if last < lines.len() {
@@ -613,30 +613,63 @@ pub fn is_answer(v: &Value) -> bool {
 
 /// The parts a run goes in, by their lines: one when it fits in one pass.
 pub fn plan(lines: &[Line]) -> Vec<(usize, usize)> {
-    let chars: usize = lines.iter().map(|l| l.text.len()).sum();
+    let size: usize = lines.iter().map(|l| chars(&l.text)).sum();
     let span = lines.last().map_or(0.0, |l| l.end) - lines.first().map_or(0.0, |l| l.start);
     if lines.is_empty() {
         return Vec::new();
     }
-    if span <= PART_S * 1.25 && chars <= PART_CHARS {
+    if span <= PART_S * 1.25 && size <= PART_CHARS {
         return vec![(0, lines.len())];
     }
     cut(lines, PART_S, PART_CHARS)
 }
 
+/// Letters, not bytes: an Arabic letter takes two, and the limits are the benchmark's (Python's).
+fn chars(s: &str) -> usize {
+    s.chars().count()
+}
+
 /// The notes in groups whose text fits one pass: the last pass reads one group's notes at a time.
+/// A note that fits with neither neighbour is a group of its own.
 pub fn groups(notes: &[Value], spans: &[(f64, f64)]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let mut first = 0;
     while first < notes.len() {
         let mut last = first + 1;
-        while last < notes.len() && render_notes(&notes[first..=last], &spans[first..=last]).len() <= NOTES_CHARS {
+        while last < notes.len() && chars(&render_notes(&notes[first..=last], &spans[first..=last])) <= NOTES_CHARS {
             last += 1;
         }
         out.push((first, last));
         first = last;
     }
     out
+}
+
+/// The notes on the parts of a long recording made into the minutes' answer: all of them in one
+/// last pass when they fit, else a few at a time first. `ask` asks the model to combine notes
+/// (`None`: its answer could not be read; such notes are merged without it). Every round joins
+/// notes, so it ends: a note alone in its group is kept as it is, and notes no two of which fit one
+/// pass together, or one note too long for the last pass, are merged without the model.
+pub fn combine(mut notes: Vec<Value>, mut spans: Vec<(f64, f64)>, mut ask: impl FnMut(&[Value], &[(f64, f64)]) -> Result<Option<Value>>) -> Result<Value> {
+    loop {
+        let groups = groups(&notes, &spans);
+        if groups.len() <= 1 {
+            if chars(&render_notes(&notes, &spans)) > NOTES_CHARS {
+                return Ok(merge_notes(&notes));
+            }
+            return Ok(ask(&notes, &spans)?.unwrap_or_else(|| merge_notes(&notes)));
+        }
+        if groups.len() == notes.len() {
+            return Ok(merge_notes(&notes));
+        }
+        let (mut fewer, mut fewer_spans) = (Vec::new(), Vec::new());
+        for (a, b) in groups {
+            fewer.push(if b - a == 1 { notes[a].clone() } else { ask(&notes[a..b], &spans[a..b])?.unwrap_or_else(|| merge_notes(&notes[a..b])) });
+            fewer_spans.push((spans[a].0, spans[b - 1].1));
+        }
+        notes = fewer;
+        spans = fewer_spans;
+    }
 }
 
 pub fn ensure_text(t: &Transcript) -> Result<()> {
@@ -907,7 +940,8 @@ mod tests {
             let sent = line.split("kwargs: '").nth(1).map_or(r#"{"enable_thinking": false}"#, |k| k.split('\'').next().unwrap());
             assert_eq!(serde_json::from_str::<Value>(spec.no_thinking).unwrap(), serde_json::from_str::<Value>(sent).unwrap(), "{key}");
             let variant = crate::models::variant(spec.id).unwrap();
-            assert!(line.contains(variant.file) && line.contains(variant.repository), "{key}: the file measured is the one downloaded");
+            let measured = format!("{}/resolve/{}/{}", variant.repository, variant.revision, variant.file);
+            assert!(line.contains(&measured), "{key}: the file measured is the one downloaded, at its revision");
             assert!(spec.needs > variant.size, "{key}");
         }
     }
@@ -1042,7 +1076,88 @@ mod tests {
         let spans: Vec<(f64, f64)> = (0..120).map(|i| (i as f64 * 600.0, i as f64 * 600.0 + 590.0)).collect();
         let g = groups(&many, &spans);
         assert!(g.len() > 1 && g[0].0 == 0 && g.last().unwrap().1 == 120);
-        assert!(g.iter().all(|(a, b)| render_notes(&many[*a..*b], &spans[*a..*b]).len() <= NOTES_CHARS || b - a == 1));
+        assert!(g.iter().all(|(a, b)| chars(&render_notes(&many[*a..*b], &spans[*a..*b])) <= NOTES_CHARS || b - a == 1));
+    }
+
+    /// Long Arabic notes on a meeting of hours: combining them ends, whatever the model answers.
+    #[test]
+    fn combining_notes_always_ends() {
+        let note = |letters: usize| serde_json::json!({ "kind": "meeting", "summary": "ب".repeat(letters), "topics": [], "decisions": [], "actions": [], "open_questions": [] });
+        let spans = |n: usize| -> Vec<(f64, f64)> { (0..n).map(|i| (i as f64 * 600.0, i as f64 * 600.0 + 590.0)).collect() };
+        // letters are counted, not bytes: two notes of 5,000 Arabic letters (20,000 bytes) fit one pass
+        assert_eq!(groups(&[note(5_000), note(5_000)], &spans(2)), [(0, 2)]);
+
+        // no two fit one pass together: merged without the model, which is never asked
+        let mut asked = 0;
+        let m = combine(vec![note(8_000); 18], spans(18), |_, _| {
+            asked += 1;
+            Ok(None)
+        })
+        .unwrap();
+        assert_eq!(asked, 0);
+        assert_eq!(m["summary"].as_str().unwrap().chars().filter(|&c| c == 'ب').count(), 18 * 8_000);
+
+        // a model that gives back as much as it was given: every round still joins notes
+        let mut asked = 0;
+        let m = combine(vec![note(5_000); 18], spans(18), |notes, _| {
+            asked += 1;
+            assert!(notes.len() >= 2, "a note alone is not sent again");
+            Ok(Some(notes[0].clone()))
+        })
+        .unwrap();
+        assert!(asked <= 18, "{asked} passes");
+        assert!(is_answer(&m));
+
+        // one note too long for the last pass: kept without the model
+        let m = combine(vec![note(15_000)], spans(1), |_, _| panic!("not asked")).unwrap();
+        assert_eq!(m["summary"].as_str().unwrap().chars().count(), 15_000);
+
+        // the usual case: the model combines them
+        let m = combine(vec![note(100), note(100)], spans(2), |notes, _| Ok(Some(serde_json::json!({ "kind": "meeting", "summary": format!("{} notes", notes.len()) })))).unwrap();
+        assert_eq!(m["summary"], "2 notes");
+    }
+
+    /// The minutes change only their own field of the transcript's file: a newer version's speakers,
+    /// unknown to this one, are still there after they are written and corrected.
+    #[test]
+    fn writing_and_correcting_minutes_keeps_the_rest_of_the_file() {
+        let dir = std::env::temp_dir().join(format!("dawwin-minutes-keep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut t = meeting();
+        t.id = "keep-1".into();
+        crate::history::save(&dir, &t).unwrap();
+        let path = dir.join("keep-1.json");
+        let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        raw["speakers"] = serde_json::json!([{ "id": "S1", "name": "Sara" }]);
+        raw["segments"][0]["speaker"] = "S1".into();
+        std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
+
+        let answer = serde_json::json!({ "kind": "meeting", "summary": "S.", "decisions": [{ "text": "A", "lines": [1] }], "actions": [], "topics": [], "open_questions": [] });
+        let m = Minutes { written_ms: 1, ..check(&answer, &t, &lines(&t, &[]), true) };
+        crate::history::modify_minutes(&dir, "keep-1", |x| *x = Some(m.clone())).unwrap();
+        let mut corrected = m.clone();
+        corrected.summary = "Mine.".into();
+        crate::history::modify_minutes(&dir, "keep-1", |x| x.get_or_insert_with(Minutes::default).apply_edits(corrected)).unwrap();
+
+        let raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(raw["speakers"][0]["name"], "Sara");
+        assert_eq!(raw["segments"][0]["speaker"], "S1");
+        let kept = crate::history::load(&dir, "keep-1").unwrap().minutes.unwrap();
+        assert!(kept.summary == "Mine." && kept.summary_edited && kept.decisions[0].text == "A");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A part holds at most `PART_CHARS` letters, Arabic or not, as the benchmark cut them.
+    #[test]
+    fn parts_count_letters_not_bytes() {
+        let segs: Vec<(f64, String)> = (0..20).map(|i| (i as f64 * 20.0, "ب".repeat(500))).collect();
+        let t = transcript(&segs.iter().map(|(s, x)| (*s, x.as_str())).collect::<Vec<_>>());
+        let ls = lines(&t, &[]);
+        // 10,000 letters in under seven minutes: one pass (it was two by bytes)
+        assert_eq!(plan(&ls), [(0, 20)]);
+        let parts = cut(&ls, PART_S, 4_000);
+        assert!(parts.iter().all(|&(a, b)| ls[a..b].iter().map(|l| chars(&l.text)).sum::<usize>() <= 4_000));
+        assert_eq!(parts.len(), 3);
     }
 
     #[test]

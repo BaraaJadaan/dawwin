@@ -1,5 +1,0 @@
-# The models a push to this branch runs again (one key a line); without this file, all of them.
-# The finalists again, with the context cache in 8 bits as the app keeps it.
-jais3-7b
-ministral3-3b
-jais3-0.9b

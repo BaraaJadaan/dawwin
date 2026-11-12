@@ -210,8 +210,9 @@ impl TranslatorProcess {
     }
 
     /// The same, with room for `context` tokens: the minutes read ten minutes of a transcript at once.
-    /// `cache_8bit` keeps that room's cache in 8 bits, half its size and as good, so that a 7B model
-    /// and 16k of context fit a GPU with 8 GB (it needs flash attention, which every device has here).
+    /// `cache_8bit` keeps that room's cache in 8 bits on a GPU, half its size and as good (measured), so
+    /// that a 7B model and 16k of context fit one with 8 GB; on the processor, where memory is not as
+    /// short, the cache stays in 16 bits, which is faster there.
     pub fn spawn_with(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>, context: u32, cache_8bit: bool) -> Result<Self> {
         let device = if cpu_only { None } else { choose_device(&list_devices(exe), gpu).cloned() };
         let port = free_port()?;
@@ -220,7 +221,7 @@ impl TranslatorProcess {
         let mut cmd = Command::new(exe);
         cmd.args(["--model", model, "--host", "127.0.0.1", "--port", &port.to_string(), "--api-key", &key]);
         cmd.args(["--ctx-size", &context.to_string(), "--parallel", "1", "--threads", &threads.to_string(), "--no-ui"]);
-        if cache_8bit {
+        if cache_8bit && device.is_some() {
             cmd.args(["--flash-attn", "on", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]);
         }
         // one device; how much of the model fits on it, llama.cpp works out by itself

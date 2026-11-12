@@ -114,7 +114,7 @@ pub struct Variant {
     pub label: &'static str,
     pub(crate) repository: &'static str,
     /// The revision the checksum belongs to: it cannot change under the app.
-    revision: &'static str,
+    pub(crate) revision: &'static str,
     pub file: &'static str,
     pub sha256: &'static str,
     pub size: u64,

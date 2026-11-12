@@ -237,10 +237,10 @@ struct Probe {
     audio_kbps: u64,
 }
 
-/// "…, 128 kb/s, …" in a stream line or the duration line.
+/// "…, 128 kb/s, …" in a stream line ("128 kb/s (default)" on a default track) or the duration line.
 fn kbps(items: &str) -> Option<u64> {
     items.split(',').map(str::trim).find_map(|i| {
-        let n = i.strip_suffix(" kb/s")?;
+        let (n, _) = i.split_once(" kb/s")?;
         n.strip_prefix("bitrate:").unwrap_or(n).trim().parse().ok()
     })
 }
@@ -510,6 +510,10 @@ mod tests {
         let mkv = parse_probe("  Duration: 00:10:00.00, start: 0.000000, bitrate: 1128 kb/s\n  Stream #0:0: Video: h264 (High), yuv420p(progressive), 1280x720, 25 fps\n  Stream #0:1: Audio: opus, 48000 Hz, stereo, fltp (default)");
         assert_eq!((mkv.total_kbps, mkv.video_kbps, mkv.audio_kbps), (Some(1128), None, 128));
         assert_eq!(bitrate(&mkv), 1_250, "(1128 - 128) a quarter up, not the cap of 5,000");
+        // a default track ends its line "320 kb/s (default)"
+        let film = parse_probe("  Duration: 00:10:00.00, start: 0.000000, bitrate: 1320 kb/s\n  Stream #0:0: Video: h264 (High), yuv420p(progressive), 1280x720, 25 fps\n  Stream #0:1(eng): Audio: aac (LC), 48000 Hz, stereo, fltp, 320 kb/s (default)");
+        assert_eq!(film.audio_kbps, 320);
+        assert_eq!(bitrate(&film), 1_250, "(1320 - 320) a quarter up");
         assert_eq!(bitrate(&Probe { pixels: 640 * 360, ..Default::default() }), 2_500, "nothing known: by its size");
     }
 

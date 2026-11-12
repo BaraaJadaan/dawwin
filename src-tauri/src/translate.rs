@@ -117,7 +117,7 @@ pub struct TranslatorProcess {
 /// when its stdin closes; llama-server has nothing like that.) The processes in a job made to
 /// "kill on job close" go when its last handle does, and the system closes it with the app.
 #[cfg(windows)]
-fn end_with_the_app(child: &Child) {
+pub(crate) fn end_with_the_app(child: &Child) {
     use std::ffi::c_void;
     use std::os::windows::io::AsRawHandle;
     use std::sync::OnceLock;
@@ -181,7 +181,7 @@ fn end_with_the_app(child: &Child) {
 }
 
 #[cfg(not(windows))]
-fn end_with_the_app(_child: &Child) {}
+pub(crate) fn end_with_the_app(_child: &Child) {}
 
 /// Another program took the port between the moment it was free and the translator's start, and
 /// answers on it: the transcript's lines must not go there. Start again on another port.

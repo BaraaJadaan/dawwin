@@ -793,11 +793,16 @@ pub fn reading_pause_voice(app: AppHandle, id: String) {
     reader(&app).pause(&id);
 }
 
+/// It may wait for the voice to let go of the files: off the main thread, so the window stays alive.
 #[tauri::command]
-pub fn reading_delete_voice(app: AppHandle, id: String) -> R<VoicesView> {
-    let r = reader(&app);
-    r.delete(&id).map_err(|e| format!("{e:#}"))?;
-    Ok(r.voices())
+pub async fn reading_delete_voice(app: AppHandle, id: String) -> R<VoicesView> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let r = reader(&app);
+        r.delete(&id).map_err(|e| format!("{e:#}"))?;
+        Ok(r.voices())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// The files Read aloud opens, for dropping.

@@ -163,6 +163,7 @@
     },
     "summary": {
      "type": "string",
+     "minLength": 20,
      "maxLength": 1500
     }
    },
@@ -319,6 +320,7 @@
     },
     "summary": {
      "type": "string",
+     "minLength": 20,
      "maxLength": 1500
     }
    },

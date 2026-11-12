@@ -56,7 +56,7 @@
         "additionalProperties": false
       }
     },
-    "summary": {"type": "string", "maxLength": 1500}
+    "summary": {"type": "string", "minLength": 20, "maxLength": 1500}
   },
   "required": ["kind", "topics", "decisions", "actions", "open_questions", "summary"],
   "additionalProperties": false

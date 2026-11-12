@@ -52,13 +52,16 @@ jobs:
           # the translation model Dawwin already downloads: expected not to do it well
           - { key: milmmt46-4b, url: "mradermacher/MiLMMT-46-4B-v1.0-GGUF/resolve/main/MiLMMT-46-4B-v1.0.Q4_K_M.gguf" }
     steps:
+      - uses: actions/checkout@v4
       - name: Wanted?
         id: want
         run: |
           wanted="${{ inputs.models }}"
+          # a push runs only the models named in tools/bench-minutes/only.txt, when there is one
+          if [ -z "$wanted" ] && [ "${{ github.event_name }}" = "push" ] && [ -f tools/bench-minutes/only.txt ]; then
+            wanted=$(grep -v '^#' tools/bench-minutes/only.txt | tr -d ' \r' | grep . | paste -sd, -)
+          fi
           if [ -z "$wanted" ] || [[ ",$wanted," == *",${{ matrix.key }},"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
-      - uses: actions/checkout@v4
-        if: steps.want.outputs.run == 'true'
       - name: Room on the disk
         if: steps.want.outputs.run == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL && df -h /
@@ -73,6 +76,8 @@ jobs:
         run: curl -L --fail --retry 5 -o model.gguf "https://huggingface.co/${{ matrix.url }}" && ls -l model.gguf
       - name: Minutes
         if: steps.want.outputs.run == 'true'
+        # ends before the job does, so that what was done is still uploaded
+        timeout-minutes: 335
         env:
           BENCH_KWARGS: ${{ matrix.kwargs }}
         run: mkdir out && python3 tools/bench-minutes/run.py ${{ matrix.key }} model.gguf "$SERVER" out

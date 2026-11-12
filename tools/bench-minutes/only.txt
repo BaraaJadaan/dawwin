@@ -1,0 +1,4 @@
+# The models a push to this branch runs again (one key a line); without this file, all of them.
+# Qwen3.5 4B left the summary empty on Arabic meetings: the schema now asks for one.
+qwen35-4b
+qwen35-9b

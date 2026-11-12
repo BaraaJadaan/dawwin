@@ -171,8 +171,20 @@ pub fn split_line(t: &mut Transcript, i: usize, k: usize, at: usize) {
 
 /// Give every line of `t` its speaker from the model's `turns`, splitting the lines that hold two
 /// people's words where they pause. The speakers are numbered again from 1 in the order they first
-/// speak in the transcript, without names: telling them apart again starts over.
+/// speak in the transcript. Told apart again, a speaker keeps a name given before only when most
+/// of what they say now is what the named one said then (see `names_by_lines`): the model numbers
+/// speakers by who is heard first, so a number says nothing about who it was before.
 pub fn give_speakers(t: &mut Transcript, turns: &[Turn]) {
+    let named: Vec<(f64, f64, String)> = t
+        .segments
+        .iter()
+        .filter(|s| !s.text.trim().is_empty())
+        .filter_map(|s| {
+            let name = t.speakers.iter().find(|x| Some(x.id) == s.speaker).map(|x| x.name.trim().to_string()).filter(|n| !n.is_empty())?;
+            Some((s.start, s.end, name))
+        })
+        .collect();
+    t.speakers.clear();
     let turns: Vec<Turn> = turns.iter().copied().filter(|x| x.end - x.start >= MIN_TURN_S).collect();
     let mut i = 0;
     while i < t.segments.len() {
@@ -190,6 +202,48 @@ pub fn give_speakers(t: &mut Transcript, turns: &[Turn]) {
         i += 1;
     }
     number_in_order(t);
+    names_by_lines(t, &named);
+}
+
+/// Names given before go to the speakers who now say most of the named lines: a name goes to a
+/// speaker when over half of that speaker's time now falls in lines that had the name, the closest
+/// match first, each name once.
+fn names_by_lines(t: &mut Transcript, named: &[(f64, f64, String)]) {
+    if named.is_empty() {
+        return;
+    }
+    let mut shared: Vec<(f64, u32, &str)> = Vec::new();
+    let mut own: Vec<(u32, f64)> = Vec::new();
+    for s in t.segments.iter().filter(|s| !s.text.trim().is_empty()) {
+        let Some(id) = s.speaker else { continue };
+        match own.iter_mut().find(|(x, _)| *x == id) {
+            Some(o) => o.1 += s.end - s.start,
+            None => own.push((id, s.end - s.start)),
+        }
+        for (a, b, name) in named {
+            let o = overlap(s.start, s.end, *a, *b);
+            if o <= 0.0 {
+                continue;
+            }
+            match shared.iter_mut().find(|(_, x, n)| *x == id && *n == name.as_str()) {
+                Some(e) => e.0 += o,
+                None => shared.push((o, id, name.as_str())),
+            }
+        }
+    }
+    shared.sort_by(|a, b| b.0.total_cmp(&a.0));
+    let (mut used_ids, mut used_names): (Vec<u32>, Vec<&str>) = (Vec::new(), Vec::new());
+    for (time, id, name) in shared {
+        let total = own.iter().find(|(x, _)| *x == id).map_or(0.0, |o| o.1);
+        if used_ids.contains(&id) || used_names.contains(&name) || time * 2.0 <= total {
+            continue;
+        }
+        if let Some(sp) = t.speakers.iter_mut().find(|x| x.id == id) {
+            sp.name = name.to_string();
+        }
+        used_ids.push(id);
+        used_names.push(name);
+    }
 }
 
 /// The speakers numbered 1, 2, 3… in the order they first speak, keeping their names.
@@ -418,6 +472,28 @@ mod tests {
         assert_eq!(format!("{} {}", tr.text(0), tr.text(1)), "Good morning everyone, shall we start? Yes, go ahead Sami");
         let en = t.translated("en").unwrap();
         assert_eq!(who(&en), [Some(1), Some(2)], "the translation keeps the same speakers");
+    }
+
+    #[test]
+    fn told_apart_again_a_name_stays_with_the_lines_it_was_given_to() {
+        // before: Sami speaks first and is named, then Huda
+        let lines = || vec![line(0.0, 2.0, "مرحبا", vec![]), line(2.0, 10.0, "طيب نبدأ الاجتماع", vec![]), line(10.0, 20.0, "تمام", vec![])];
+        let mut t = transcript(lines());
+        give_speakers(&mut t, &[turn(0.0, 10.0, 1), turn(10.0, 20.0, 2)]);
+        rename(&mut t, 1, "Sami");
+        rename(&mut t, 2, "Huda");
+        // again: this time a short greeting by someone else is heard first, and is speaker 1
+        give_speakers(&mut t, &[turn(0.0, 2.0, 1), turn(2.0, 10.0, 2), turn(10.0, 20.0, 3)]);
+        assert_eq!(who(&t), [Some(1), Some(2), Some(3)]);
+        assert_eq!(t.speaker_name(2), "Sami", "the one who says Sami's lines now");
+        assert_eq!(t.speaker_name(3), "Huda");
+        assert!(t.speakers[0].name.is_empty(), "the greeting's voice is nobody named: {:?}", t.speakers);
+        // and where the speakers now cut across the named lines, nobody keeps a name
+        let mut t = transcript(lines());
+        give_speakers(&mut t, &[turn(0.0, 10.0, 1), turn(10.0, 20.0, 2)]);
+        rename(&mut t, 1, "Sami");
+        give_speakers(&mut t, &[turn(0.0, 20.0, 1)]);
+        assert!(t.speakers.iter().all(|x| x.name.is_empty()), "Sami said 10 of the 20 s now heard as one: {:?}", t.speakers);
     }
 
     #[test]

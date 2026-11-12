@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dawwin</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="who.css">
 </head>
 <body>
   <header class="topbar">
@@ -80,7 +81,8 @@
           <section class="step" data-step="text">
             <h2><span class="step-no">2</span><span data-i18n="steps.text"></span></h2>
             <label class="toggle"><input type="checkbox" id="step-transcribe"> <span data-i18n="steps.transcribe"></span></label>
-            <select id="spoken" class="input select" data-i18n-aria="home.spoken"></select>
+            <select id="spoken" class="input select" data-i18n-aria="home.spoken" data-i18n-title="tip.spoken"></select>
+            <label class="toggle" data-i18n-title="tip.speakers"><input type="checkbox" id="step-speakers"> <span data-i18n="steps.speakers"></span></label>
           </section>
           <section class="step" data-step="translate">
             <h2><span class="step-no">3</span><span data-i18n="steps.translation"></span></h2>
@@ -223,6 +225,40 @@
             <div id="set-translator-tool"></div>
           </section>
 
+          <section class="card group">
+            <h2 data-i18n="set.words" data-i18n-title="tip.words"></h2>
+            <div class="word-list" id="set-words-list"></div>
+            <div class="setting actions">
+              <button class="btn btn-sm" id="words-add" data-i18n="words.add"></button>
+              <button class="btn btn-sm btn-ghost" id="words-save" data-i18n="words.save"></button>
+              <button class="btn btn-sm btn-ghost" id="words-load" data-i18n="words.load"></button>
+            </div>
+          </section>
+
+          <section class="card group">
+            <h2 data-i18n="set.look" data-i18n-title="tip.look"></h2>
+            <div class="look-grid">
+              <label><span data-i18n="look.size"></span><select id="look-size" class="input select"></select></label>
+              <label data-i18n-title="tip.font"><span data-i18n="look.font"></span><select id="look-font" class="input select"></select></label>
+              <label><span data-i18n="look.color"></span><select id="look-color" class="input select"></select></label>
+              <label><span data-i18n="look.back"></span><select id="look-back" class="input select"></select></label>
+              <label><span data-i18n="look.place"></span><select id="look-place" class="input select"></select></label>
+            </div>
+            <div class="setting">
+              <label class="toggle" data-i18n-title="tip.sharp"><input type="checkbox" id="look-sharp"> <span data-i18n="look.sharp"></span></label>
+            </div>
+            <div class="setting">
+              <label class="toggle"><input type="checkbox" id="set-names-srt"> <span data-i18n="set.namesSrt"></span></label>
+            </div>
+            <div class="setting">
+              <label class="toggle"><input type="checkbox" id="set-names-vtt"> <span data-i18n="set.namesVtt"></span></label>
+            </div>
+            <div class="look-preview">
+              <button class="btn btn-sm" id="look-preview" data-i18n="look.preview"></button>
+              <video id="look-video" muted playsinline preload="auto" hidden></video>
+            </div>
+          </section>
+
           <section class="card group" id="set-old-box" hidden>
             <h2 data-i18n="set.oldEngine"></h2>
             <div class="setting">
@@ -302,6 +338,7 @@
               <button class="icon-btn" id="search-prev" data-i18n-aria="t.prev">‹</button>
               <button class="icon-btn" id="search-next" data-i18n-aria="t.next">›</button>
             </div>
+            <select id="search-who" class="input select select-sm" data-i18n-aria="who.searchWho" data-i18n-title="who.searchWho" hidden></select>
             <label class="toggle small"><input type="checkbox" id="follow"> <span data-i18n="t.follow"></span></label>
             <label class="toggle small"><input type="checkbox" id="stamps" checked> <span data-i18n="t.stamps"></span></label>
             <select id="t-lang" class="input select select-sm" data-i18n-aria="t.translation"></select>
@@ -329,6 +366,7 @@
                 <button id="export-audio-short" data-i18n="exp.audioShort"></button>
               </div>
             </div>
+            <button class="btn btn-sm" id="btn-more" aria-haspopup="true" data-i18n="t.more"></button>
             <button class="icon-btn danger" id="btn-delete" data-i18n-aria="t.delete">
               <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2Zm-3 6h12l-1 12H7L6 9Zm4 2v8h2v-8h-2Zm4 0v8h2v-8h-2Z"/></svg>
             </button>
@@ -371,9 +409,12 @@
   <div id="ctx-menu" class="menu ctx-menu" role="menu" hidden>
     <button role="menuitem" id="ctx-play" data-i18n="ctx.play"></button>
     <button role="menuitem" id="ctx-copy" data-i18n="ctx.copy"></button>
+    <button role="menuitem" id="ctx-always" data-i18n="words.always" hidden></button>
+    <div id="ctx-who"></div>
   </div>
 
   <script src="i18n.js"></script>
+  <script src="who.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

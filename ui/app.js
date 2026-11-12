@@ -7,7 +7,7 @@ const listen = T.event.listen;
 const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
-const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"]);
+const ACTIVE = new Set(["queued", "decoding", "detecting", "loading", "transcribing", "speakers", "translating", "saving_audio", "saving_video"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 // what Dawwin takes, by extension: the backend's list (media_formats), filled at start
 let MEDIA = { all: ["m4a", "mp3", "wav", "ogg", "opus", "flac", "mp4", "mov", "mkv", "webm"], video: ["mp4", "mov", "mkv", "webm"], needs_ffmpeg: [] };
@@ -18,7 +18,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
-const DEFAULT_STEPS = { remove_silence: false, save_audio: false, transcribe: true, translate: false, target: "", video: false, burn: false };
+const DEFAULT_STEPS = { remove_silence: false, save_audio: false, transcribe: true, speakers: false, translate: false, target: "", video: false, burn: false };
 function loadSteps() {
   try { return { ...DEFAULT_STEPS, ...JSON.parse(store.get("steps", "{}")) }; } catch { return { ...DEFAULT_STEPS }; }
 }
@@ -163,6 +163,7 @@ function stepsForJob() {
     remove_silence: s.remove_silence,
     save_audio: s.save_audio || (s.remove_silence && !s.transcribe),
     transcribe: s.transcribe,
+    speakers: s.transcribe && s.speakers,
     translate: s.transcribe && s.translate ? stepTarget() : null,
     video: s.transcribe && s.video,
     burn: s.transcribe && s.video && s.burn,
@@ -174,6 +175,7 @@ function dropText() {
   const s = stepsForJob(), parts = [];
   if (s.save_audio) parts.push(t(s.remove_silence ? "drop.soundShort" : "drop.sound"));
   if (s.transcribe) parts.push(t("drop.transcribe"));
+  if (s.speakers) parts.push(t("drop.speakers"));
   if (s.translate) parts.push(t("drop.translate"));
   if (s.video) parts.push(t(s.burn ? "drop.burn" : "drop.video"));
   if (!parts.length) return t("drop.overlay");
@@ -192,8 +194,8 @@ function stepTarget() {
 function setStep(key, on) {
   const s = S.steps;
   s[key] = on;
-  if ((key === "translate" || key === "video") && on) s.transcribe = true;
-  if (key === "transcribe" && !on) { s.translate = false; s.video = false; }
+  if ((key === "translate" || key === "video" || key === "speakers") && on) s.transcribe = true;
+  if (key === "transcribe" && !on) { s.translate = false; s.video = false; s.speakers = false; }
   // with nothing else to do, taking the silences out means saving the sound
   if (s.remove_silence && !s.transcribe) s.save_audio = true;
   store.set("steps", JSON.stringify(s));
@@ -206,6 +208,7 @@ function paintSteps() {
   $("step-save-audio").checked = s.save_audio || (s.remove_silence && !s.transcribe);
   $("step-save-audio").disabled = s.remove_silence && !s.transcribe;
   $("step-transcribe").checked = s.transcribe;
+  $("step-speakers").checked = s.transcribe && s.speakers;
   $("step-translate").checked = s.transcribe && s.translate;
   $("step-video").checked = s.transcribe && s.video;
   $("step-video-how").value = s.burn ? "burn" : "tracks";
@@ -226,7 +229,7 @@ function paintSteps() {
 }
 
 function wireSteps() {
-  const keys = { "step-silence": "remove_silence", "step-save-audio": "save_audio", "step-transcribe": "transcribe", "step-translate": "translate", "step-video": "video" };
+  const keys = { "step-silence": "remove_silence", "step-save-audio": "save_audio", "step-transcribe": "transcribe", "step-speakers": "speakers", "step-translate": "translate", "step-video": "video" };
   for (const [id, key] of Object.entries(keys)) $(id).onchange = () => setStep(key, $(id).checked);
   $("step-target").onchange = () => { S.steps.target = $("step-target").value; store.set("steps", JSON.stringify(S.steps)); };
   $("step-video-how").onchange = () => { S.steps.burn = $("step-video-how").value === "burn"; store.set("steps", JSON.stringify(S.steps)); };
@@ -240,6 +243,8 @@ function stepsReady(steps) {
     showView("setup");
     return false;
   }
+  if (steps.speakers && !haveModel("speakers", "toast.needSpeakersModel")) return false;
+  if (steps.transcribe && S.spoken === "auto" && !haveModel("language", "toast.needLanguageModel")) return false;
   if (steps.translate && !S.snap.setup.families.translator?.found) {
     toast(t("toast.needTranslator"), { label: t("toast.getTranslator"), run: openTranslationSettings });
     return false;
@@ -276,18 +281,20 @@ function setupComplete(snap) {
 
 /** The models that can transcribe a language, the best first. */
 function modelsFor(st, code = S.spoken) {
+  if (code === "auto") code = "ar"; // setting up for "Detect the language": the models of Arabic, Dawwin's own
   return (S.languages.get(code)?.models || []).map((id) => st.models.find((m) => m.id === id)).filter(Boolean);
 }
 
 /** The model file a recording in this language would use, or null when it has none yet. */
 function spokenModel(st, code = S.spoken) {
+  if (code === "auto") return anySpeechModel(st);
   for (const m of modelsFor(st, code)) if (st.families[m.family]?.found) return st.families[m.family];
   return null;
 }
 
 let languageNames = null;
 function langName(code) {
-  if (code === "ar" || code === "en") return t("lang." + code);
+  if (code === "ar" || code === "en" || code === "auto") return t("lang." + code);
   if (languageNames?.lang !== UI_LANG) languageNames = { lang: UI_LANG, names: new Intl.DisplayNames([I18N[UI_LANG].locale], { type: "language" }) };
   const name = languageNames.names.of(code === "jw" ? "jv" : code);
   // Windows does not know them all by name
@@ -352,6 +359,8 @@ function jobLine(j) {
   switch (j.status) {
     case "queued": return t("job.queued");
     case "decoding": return t("job.decoding");
+    case "detecting": return t("job.detecting");
+    case "speakers": return t("job.speakers");
     case "loading": return t(j.kind === "translate" ? "job.loadingTranslator" : "job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
@@ -376,8 +385,8 @@ function renderQueue() {
     const of = j.transcript || j.id;
     li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
     // burning the subtitles in takes a while, and says how far it is
-    const indet = ["decoding", "loading", "saving_audio", "saving_video"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
-    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
+    const indet = ["decoding", "detecting", "loading", "speakers", "saving_audio", "saving_video"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
+    const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "speakers" ? t("job.findSpeakers") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
     const what = doing ? `<div class="sub">${esc(doing)}</div>` : "";
     li.innerHTML = `
       <div class="title" dir="auto">${esc(j.title)}</div>
@@ -386,7 +395,7 @@ function renderQueue() {
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     // a job that only saves the sound has no transcript: it shows the file
-    li.onclick = () => (j.kind === "burn" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
+    li.onclick = () => (j.kind === "burn" || j.kind === "speakers" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
     li.querySelector(".x").onclick = (ev) => {
       ev.stopPropagation();
       if (ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
@@ -606,6 +615,7 @@ function renderSettings() {
   } else status.textContent = t("set.latest");
 
   $("set-about").textContent = t("set.aboutText", { v: st.app_version });
+  whoSettings();
 }
 
 /** The tools as rows like the models': `family` keeps the two ffmpegs a choice of one. */
@@ -665,10 +675,12 @@ function renderRows(box, st, models) {
       : m.partial > 0 ? t("set.modelPaused", { pct: pctOf(m.partial) })
       : t("set.modelNone");
     row.querySelector(".use").hidden = m.tool || !m.on_disk || m.active || !choice;
+    // a tool installed in an older build than the one pinned: downloading it again updates it
+    if (m.outdated && m.on_disk && !going) row.querySelector(".status").textContent = t("set.toolOutdated");
     const get = row.querySelector(".get");
-    get.hidden = m.on_disk;
+    get.hidden = m.on_disk && !m.outdated;
     get.disabled = d.active && !going;
-    get.textContent = t(going ? "dl.pause" : m.partial > 0 ? "dl.resume" : "dl.download");
+    get.textContent = t(going ? "dl.pause" : m.partial > 0 ? "dl.resume" : m.outdated && m.on_disk ? "set.toolUpdate" : "dl.download");
     const del = row.querySelector(".del");
     del.hidden = going || !(m.on_disk || m.partial > 0);
     del.dataset.forget = m.outside ? "1" : "";
@@ -814,6 +826,8 @@ function renderTranscript() {
   wordCache.clear();
   cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
   if (!cur.segments.length) box.append(emptyLive());
+  paintWhoFilter();
+  $("btn-more").hidden = live;
   box.scrollTop = same ? keep : 0;
   runSearch(false);
   setupAudio(live);
@@ -884,6 +898,7 @@ function renderMeta() {
   if (c.elapsed_s && !isLive(c.id)) {
     bits.push(t("meta.took", { dur: dur(c.elapsed_s) }) + (c.device ? t("meta.on", { device: deviceLabel(c.device) }) : ""));
   }
+  if (c.detected) bits.push(t("t.heardAs", { lang: langName(c.detected) }));
   const flagged = c.segments.filter((s) => s.flag === "repeat").length;
   if (flagged) bits.push(t("meta.toCheck", { n: flagged }));
   $("t-meta").textContent = bits.join(" · ");
@@ -925,6 +940,7 @@ function segRow(s, i, live) {
     text.addEventListener("blur", () => saveSegment(i, text));
   }
   row.append(time, text);
+  whoDecorateRow(row, s, i);
   const tr = S.shown ? translationOf(S.current, S.shown) : null;
   const outdated = !!tr?.lines?.[i]?.text && tr.lines[i].from !== s.text;
   if (S.shown) row.append(translationLine(i, live));
@@ -1027,12 +1043,12 @@ function renderLiveProgress() {
   const cur = S.current;
   const own = jobById(cur.id);
   // the transcript being written, else a translation of it
-  const j = own && ACTIVE.has(own.status) ? own : translateJob(cur.id, S.shown) || translateJob(cur.id);
+  const j = own && ACTIVE.has(own.status) ? own : translateJob(cur.id, S.shown) || translateJob(cur.id) || whoJob(cur.id);
   const box = $("t-progress");
   if (!j) { box.hidden = true; return; }
   box.hidden = false;
   $("t-cancel").dataset.job = j.id;
-  const indet = j.status === "decoding" || j.status === "loading" || j.status === "queued";
+  const indet = ["decoding", "loading", "queued", "detecting", "speakers"].includes(j.status);
   box.querySelector(".progress").classList.toggle("indeterminate", indet);
   $("t-bar").style.width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
   let line = jobLine(j);
@@ -1052,7 +1068,7 @@ function runSearch(scroll) {
   const segs = S.current?.segments || [];
   const nq = q ? normMap(q).norm : "";
   segs.forEach((s, i) => {
-    if (!nq) return;
+    if (!nq || !whoInSearch(s)) return;
     const { norm, map } = normMap(s.text);
     let from = 0, k;
     while ((k = norm.indexOf(nq, from)) !== -1) {
@@ -1335,9 +1351,11 @@ function wireListen() {
   // right-click on selected text: "Play from here" next to "Copy"
   $("segments").addEventListener("contextmenu", (ev) => {
     const t = selectionTime();
-    if (t == null) return; // nothing selected: the usual menu
+    const who = whoContext(ev, t != null);
+    if (t == null && !who) return; // nothing selected and no speakers: the usual menu
     ev.preventDefault();
     ctxAt = t;
+    $("ctx-play").hidden = $("ctx-copy").hidden = t == null;
     const m = $("ctx-menu");
     m.hidden = false;
     const w = m.offsetWidth, h = m.offsetHeight;
@@ -1590,6 +1608,7 @@ async function renameCurrent() {
 function onState(snap) {
   const prev = S.snap;
   S.snap = snap;
+  whoOnState(prev, snap);
   if (!(prev && spokenModel(prev.setup)) && spokenModel(snap.setup)) S.setupStep = null;
   renderChips();
   renderQueue();
@@ -1657,6 +1676,7 @@ function onSegment({ id, segment }) {
 // ------------------------------------------------------------------ wiring
 
 function wire() {
+  whoWire();
   wireListen();
   wireVolume();
   wirePlayer();
@@ -1862,7 +1882,9 @@ function paintSpoken() {
         .filter((c) => c !== "ar" && c !== "en")
         .map((c) => [c, langName(c)])
         .sort((a, b) => a[1].localeCompare(b[1], I18N[UI_LANG].locale));
-      menu.innerHTML = `<option value="ar">${esc(t("home.ar"))}</option><option value="en">${esc(t("home.en"))}</option><option disabled>──────────</option>`
+      // "Detect the language" first, once Dawwin can (see who.js)
+      const auto = menu.id === "spoken" ? `<option value="auto">${esc(t("lang.auto"))}</option><option disabled>──────────</option>` : "";
+      menu.innerHTML = `${auto}<option value="ar">${esc(t("home.ar"))}</option><option value="en">${esc(t("home.en"))}</option><option disabled>──────────</option>`
         + others.map(([c, name]) => `<option value="${c}">${esc(name)}</option>`).join("");
     }
     menu.value = S.spoken;
@@ -1890,9 +1912,11 @@ async function init() {
   // the first time: the language of this Windows, when that is one more than Arabic and English
   const windows = (navigator.language || "").split("-")[0].toLowerCase();
   if (store.get("lang", null) === null && windows !== "en" && S.languages.has(windows)) S.spoken = windows;
-  if (!S.languages.has(S.spoken)) S.spoken = "ar";
+  if (!S.languages.has(S.spoken) && S.spoken !== "auto") S.spoken = "ar";
   wire();
   const snap = await invoke("get_state");
+  // the first time, once the language model is there: Dawwin finds the language itself
+  if (store.get("lang", null) === null && snap.setup.families.language?.found) S.spoken = "auto";
   const saved = snap.setup.ui_lang;
   onState(snap);
   if (saved && saved !== UI_LANG) await setUiLang(saved, false);

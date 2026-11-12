@@ -658,7 +658,8 @@ const raw = (html) => ({ raw: html });
 /** Text that reads left to right (a path, a command) inside a sentence of either direction. */
 const ltr = (text) => raw(`<bdi dir="ltr">${String(text).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))}</bdi>`);
 
-/** Fill the static page: data-i18n (text), data-i18n-ph (placeholder), data-i18n-aria (label). */
+/** Fill the static page: data-i18n (text), data-i18n-ph (placeholder), data-i18n-aria (label),
+ *  data-i18n-title (the native tooltip). */
 function applyI18n() {
   const pack = I18N[UI_LANG] || I18N.en;
   document.documentElement.lang = UI_LANG;
@@ -666,5 +667,6 @@ function applyI18n() {
   for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
   for (const el of document.querySelectorAll("[data-i18n-ph]")) el.placeholder = t(el.dataset.i18nPh);
   for (const el of document.querySelectorAll("[data-i18n-aria]")) el.setAttribute("aria-label", t(el.dataset.i18nAria));
+  for (const el of document.querySelectorAll("[data-i18n-title]")) el.title = t(el.dataset.i18nTitle);
   document.title = t("app.name");
 }

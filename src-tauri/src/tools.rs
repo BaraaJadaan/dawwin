@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(std::fs::read(into.join("LICENSE.txt")).unwrap(), b"lgpl");
         assert!(!into.join("old.dll").exists(), "what the older version had is gone");
         assert!(!dir.join("ffmpeg-audio.new").exists());
-        // the archive says 1970, as tools/pack.py writes: the files are dated now instead
+        // the archive says 1970, as the packs of 1.3.0 do: the files are dated now instead
         let dated = std::fs::metadata(into.join("ffmpeg.exe")).unwrap().modified().unwrap();
         assert!(dated > std::time::SystemTime::now() - std::time::Duration::from_secs(3600), "{dated:?}");
         let _ = std::fs::remove_dir_all(&dir);

@@ -11,7 +11,7 @@ const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "transl
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 // what Dawwin takes, by extension: the backend's list (media_formats), filled at start
 let MEDIA = { all: ["m4a", "mp3", "wav", "ogg", "opus", "flac", "mp4", "mov", "mkv", "webm"], video: ["mp4", "mov", "mkv", "webm"], needs_ffmpeg: [] };
-const extOf = (p) => (p.split(/[\/]/).pop().split(".").pop() || "").toLowerCase();
+const extOf = (p) => (p.split(/[\\/]/).pop().split(".").pop() || "").toLowerCase();
 
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -251,10 +251,11 @@ function stepsReady(steps) {
 }
 
 /** A tool that what was asked for needs is not here: say so, with its download a press away. False. */
-function offerTool(id, message, vars = {}) {
+function offerTool(id, message, vars = {}, lead = "") {
   const tool = S.snap.setup.tools.find((x) => x.id === id);
   const name = t(`tool.${id}.long`);
-  toast(t(message, { ...vars, size: sizeText(tool?.size || 0) }), {
+  // one toast at a time: what else there is to say comes first, in the same one
+  toast(lead + t(message, { ...vars, size: sizeText(tool?.size || 0) }), {
     label: t("dl.download"),
     run: async () => {
       // one download at a time: another one running means this one did not start
@@ -1416,10 +1417,7 @@ async function addFiles(paths) {
   let ok = paths.filter(isMedia);
   // what only ffmpeg reads, when there is none: ffmpeg is offered instead
   const unreadable = S.snap.setup.ffmpeg ? [] : ok.filter((p) => MEDIA.needs_ffmpeg.includes(extOf(p)));
-  if (unreadable.length) {
-    ok = ok.filter((p) => !unreadable.includes(p));
-    offerTool("ffmpeg-audio", "toast.needFfmpegRead", { ext: [...new Set(unreadable.map(extOf))].join(", ") });
-  }
+  ok = ok.filter((p) => !unreadable.includes(p));
   let skipped = 0;
   for (const p of paths.filter((p) => !isMedia(p))) {
     // a dropped folder is recordings to transcribe, unless it is the model or the model is what is being asked for
@@ -1443,7 +1441,9 @@ async function addFiles(paths) {
       } else skipped++;
     }
   }
-  if (skipped) toast(t("toast.skipped", { n: skipped }));
+  const lead = skipped ? t("toast.skipped", { n: skipped }) + " " : "";
+  if (unreadable.length) offerTool("ffmpeg-audio", "toast.needFfmpegRead", { ext: [...new Set(unreadable.map(extOf))].join(", ") }, lead);
+  else if (skipped) toast(lead.trim());
   if (!ok.length) return;
   const steps = stepsForJob();
   if (!stepsReady(steps)) return;
@@ -1467,7 +1467,7 @@ async function addFolder(path) {
   const parts = [];
   if (added.length) parts.push(t("toast.folderAdded", { n: added.length }));
   if (already) parts.push(t("toast.folderAlready", { n: already }));
-  if (needs_ffmpeg) { offerTool("ffmpeg-audio", "toast.folderNeedsFfmpeg"); if (!parts.length) return; }
+  if (needs_ffmpeg) return offerTool("ffmpeg-audio", "toast.folderNeedsFfmpeg", {}, parts.length ? parts.join(" ") + " " : "");
   toast(parts.join(" ") || t("toast.folderEmpty"));
 }
 

@@ -379,10 +379,7 @@ fn media_formats() -> MediaFormats {
     MediaFormats { all: folder::MEDIA_EXT, video: video::VIDEO_EXT, needs_ffmpeg: folder::NEEDS_FFMPEG }
 }
 
-/// The test hooks that write without asking where exist only in debug builds.
-fn test_hook() -> R<()> {
-    if cfg!(debug_assertions) { Ok(()) } else { Err("not in this build".into()) }
-}
+
 
 /// The text to copy: the transcript, its translation, or both (`view` "translation" | "both", into `language`).
 #[tauri::command]
@@ -435,9 +432,9 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
 }
 
 /// Export without asking where (the file name decides the format).
+#[cfg(debug_assertions)]
 #[tauri::command]
 fn export_to_path(core: C, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
-    test_hook()?;
     let t = core.transcript(&id).map_err(e)?;
     let dest = PathBuf::from(&path);
     let ext = dest.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
@@ -493,9 +490,9 @@ async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<O
 }
 
 /// The same, to `path` without asking where.
+#[cfg(debug_assertions)]
 #[tauri::command]
 async fn export_audio_to_path(app: AppHandle, id: String, path: String, without_silences: bool) -> R<String> {
-    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let ffmpeg = setup::ffmpeg(&core.paths);
@@ -517,9 +514,9 @@ fn video_job(core: &Core, t: &Transcript, view: Option<&str>, language: Option<&
     Ok((source, ffmpeg, tracks))
 }
 /// The same, written to `path` without asking where.
+#[cfg(debug_assertions)]
 #[tauri::command]
 async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
-    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     let t = core.transcript(&id).map_err(e)?;
     let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
@@ -588,9 +585,9 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
 }
 
 /// The same, to `path` without asking where: the job's id.
+#[cfg(debug_assertions)]
 #[tauri::command]
 fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
-    test_hook()?;
     let core = app.state::<Arc<Core>>().inner().clone();
     core.burn(&id, &View::parse(view.as_deref(), language.as_deref()), PathBuf::from(path)).map_err(e)
 }
@@ -695,6 +692,7 @@ pub fn run() {
             set_ui_language,
             check_updates,
             set_check_updates,
+            #[cfg(debug_assertions)]
             export_to_path,
             pick_folder,
             enqueue_folder,
@@ -719,10 +717,13 @@ pub fn run() {
             transcript_text,
             export_transcript,
             export_video,
+            #[cfg(debug_assertions)]
             export_video_to_path,
             export_burned,
+            #[cfg(debug_assertions)]
             export_burned_to_path,
             export_audio,
+            #[cfg(debug_assertions)]
             export_audio_to_path,
             audio_path,
             audio_preview,

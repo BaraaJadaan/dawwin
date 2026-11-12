@@ -63,6 +63,27 @@ if (tx) {
   await a.ev(`document.getElementById('export-menu').hidden = true; 1`);
 } else check("the video is transcribed", false);
 
+// ---- descriptions on hover, the system's own, and to a screen reader too
+const tips = () => a.ev(`({
+  step: document.getElementById('step-silence').closest('label').title,
+  stepAria: document.getElementById('step-silence').getAttribute('aria-description'),
+  status: document.getElementById('chip-status').title,
+  docx: document.querySelector('#export-menu [data-fmt="docx"]').title,
+  arabic: document.querySelector('#spoken option[value="ar"]').title,
+  side: [document.getElementById('btn-side').title, document.getElementById('btn-side').getAttribute('aria-label')],
+  play: [document.getElementById('btn-play').title, document.getElementById('btn-play').getAttribute('aria-label')],
+  job: document.querySelector('#jobs [data-job="sound"]').title,
+  copy: document.getElementById('btn-copy').title,
+})`);
+await a.ev(`setUiLang('en')`);
+let tp = await tips();
+check("a step, the status, an export format and \"Arabic\" say on hover what they are", /0\.7 seconds/.test(tp.step) && tp.stepAria === tp.step && /speech model/.test(tp.status) && /Word document/.test(tp.docx) && /dialects/.test(tp.arabic) && /English words/.test(tp.arabic), tp);
+check("buttons that are only a picture show their name", tp.side[0] === tp.side[1] && tp.side[0] && tp.play[0] === tp.play[1] && tp.play[0], { side: tp.side, play: tp.play });
+check("a button whose name says it all gets nothing", tp.copy === "", tp.copy);
+await a.ev(`setUiLang('ar')`);
+tp = await tips();
+check("in Arabic too", /ثانية/.test(tp.step) && /اللهجات/.test(tp.arabic) && /ملفًا صوتيًا/.test(tp.job) && tp.side[0] === tp.side[1] && /[؀-ۿ]/.test(tp.side[0]), tp);
+
 // ---- pictures, both languages
 for (const lang of ["en", "ar"]) {
   await a.ev(`setUiLang('${lang}')`);

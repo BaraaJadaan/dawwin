@@ -666,7 +666,13 @@ pub fn split_them(t: &mut Transcript, turns: &[speakers::Turn]) {
     let me_speaker = me.and_then(|m| t.speakers.iter().find(|x| x.id == m).cloned());
     let (them, rest): (Vec<Segment>, Vec<Segment>) = t.segments.drain(..).partition(|s| s.track.as_deref() == Some("them"));
     let mut others = Transcript {
-        speakers: t.speakers.iter().filter(|x| Some(x.id) != me).map(|x| Speaker { id: x.id.saturating_sub(offset), name: x.name.clone() }).collect(),
+        speakers: t
+            .speakers
+            .iter()
+            .filter(|x| Some(x.id) != me)
+            // "Them" was only Dawwin's word for all of them: a name the user gave is kept
+            .map(|x| Speaker { id: x.id.saturating_sub(offset), name: if x.name == crate::tr!("Them") { String::new() } else { x.name.clone() } })
+            .collect(),
         segments: them.into_iter().map(|mut s| { s.speaker = s.speaker.map(|x| x.saturating_sub(offset)); s }).collect(),
         ..Default::default()
     };
@@ -701,16 +707,17 @@ pub fn channel(core: &Core, source: &Path, track: Track) -> Result<Vec<f32>> {
         return Ok(if track == Track::Me { me } else { them });
     }
     let ff = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Reading this recording needs ffmpeg. Download it in Settings.")))?;
+    // both channels as they are (no filter: Dawwin's small ffmpeg has few), then the one wanted
     let mut cmd = std::process::Command::new(&ff);
-    let pan = format!("pan=mono|c0=c{}", if track == Track::Me { 0 } else { 1 });
-    cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"]).arg(source).args(["-af", &pan, "-ar", "16000", "-f", "f32le", "pipe:1"]);
+    cmd.args(["-hide_banner", "-nostdin", "-loglevel", "error", "-i"]).arg(source).args(["-ac", "2", "-ar", "16000", "-f", "f32le", "pipe:1"]);
     cmd.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::piped());
     setup::no_window(&mut cmd);
     let out = cmd.output()?;
     if !out.status.success() {
         return Err(anyhow!("ffmpeg: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    Ok(out.stdout.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    let k = if track == Track::Me { 0 } else { 4 };
+    Ok(out.stdout.chunks_exact(8).map(|f| f32::from_le_bytes([f[k], f[k + 1], f[k + 2], f[k + 3]])).collect())
 }
 
 /// The timing pass on a recorded meeting: each line heard again on its own track.
@@ -1352,6 +1359,54 @@ mod tests {
         assert_eq!(next_piece(&mut pending).unwrap().track, Track::Them);
         assert_eq!(next_piece(&mut pending).unwrap().track, Track::Me);
         assert_eq!(next_piece(&mut pending).unwrap().start, 5);
+    }
+}
+
+#[cfg(test)]
+mod meeting_tests {
+    use super::*;
+
+    fn line(track: &str, speaker: u32, start: f64, end: f64) -> Segment {
+        Segment { start, end, text: format!("{track} at {start}"), track: Some(track.into()), speaker: Some(speaker), ..Default::default() }
+    }
+
+    #[test]
+    fn the_others_are_told_apart_and_me_stays_me() {
+        let mut t = Transcript {
+            speakers: vec![Speaker { id: 1, name: "Baraa".into() }, Speaker { id: 2, name: crate::tr!("Them") }],
+            segments: vec![line("them", 2, 0.0, 5.0), line("them", 2, 6.0, 12.0), line("me", 1, 13.0, 18.0), line("them", 2, 20.0, 25.0)],
+            ..Default::default()
+        };
+        let turns = [
+            speakers::Turn { start: 0.0, end: 5.5, speaker: 1 },
+            speakers::Turn { start: 5.8, end: 12.5, speaker: 2 },
+            speakers::Turn { start: 19.5, end: 25.5, speaker: 1 },
+        ];
+        split_them(&mut t, &turns);
+        assert_eq!(t.segments.iter().map(|s| s.speaker.unwrap()).collect::<Vec<_>>(), [2, 3, 1, 2]);
+        assert_eq!(t.segments[2].track.as_deref(), Some("me"));
+        assert_eq!(t.speaker_name(1), "Baraa");
+        assert_eq!(t.speaker_name(2), "Speaker 2", "Them was only a word for all of them");
+        assert_eq!(t.speaker_name(3), "Speaker 3");
+    }
+
+    #[test]
+    fn one_voice_on_the_pc_stays_them() {
+        let mut t = Transcript {
+            speakers: meeting_speakers(Sources::Both),
+            segments: vec![line("them", 2, 0.0, 5.0), line("me", 1, 6.0, 8.0)],
+            ..Default::default()
+        };
+        split_them(&mut t, &[speakers::Turn { start: 0.0, end: 5.0, speaker: 1 }]);
+        assert_eq!(t.speaker_name(2), crate::tr!("Them"));
+        assert_eq!(t.segments[0].speaker, Some(2));
+    }
+
+    #[test]
+    fn the_pc_alone_is_speaker_one() {
+        assert_eq!(meeting_speakers(Sources::Pc).iter().map(|s| (s.id, s.name.clone())).collect::<Vec<_>>(), [(1, crate::tr!("Them"))]);
+        assert_eq!(speaker_id(Sources::Both, Track::Them), 2);
+        assert_eq!(speaker_id(Sources::Mic, Track::Me), 1);
     }
 }
 

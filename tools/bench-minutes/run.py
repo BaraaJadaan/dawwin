@@ -21,6 +21,8 @@ HERE = minutes.HERE
 CTX = int(os.environ.get("BENCH_CTX", "16384"))
 # how this model is told not to think first (Dawwin sends the same)
 KWARGS = json.loads(os.environ.get("BENCH_KWARGS") or '{"enable_thinking": false}')
+# the context cache in 8 bits, as Dawwin keeps it, so that a 7B model and 16k of context fit in 8 GB
+CACHE = ["--flash-attn", "on", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"] if os.environ.get("BENCH_CACHE", "q8") == "q8" else []
 
 CROSS = [("ar-levant-product", "en"), ("ar-gulf-events", "en"), ("en-sprint", "ar")]
 PARTS = [("ar-levant-product", 180), ("en-sprint", 180)]
@@ -91,7 +93,7 @@ def main(key, model, server_bin, out_dir):
 
     env = dict(os.environ, LD_LIBRARY_PATH=os.path.dirname(server_bin))
     args = [server_bin, "-m", model, "-c", str(CTX), "-np", "1", "-t", str(os.cpu_count()), "--jinja",
-            "--port", str(PORT), "--host", "127.0.0.1", "--no-webui"]
+            "--port", str(PORT), "--host", "127.0.0.1", "--no-webui", *CACHE]
     log = open(os.path.join(out_dir, f"{key}.server.log"), "w")
     server = subprocess.Popen(args, env=env, stdout=log, stderr=subprocess.STDOUT)
     results = []
@@ -148,6 +150,7 @@ def save(out_dir, key, model, started, results):
             "cpus": os.cpu_count(),
             "wall_seconds": round(time.time() - started, 1),
             "kwargs": KWARGS,
+            "cache": "q8_0" if CACHE else "f16",
             "results": results,
         }, f, ensure_ascii=False, indent=1)
 

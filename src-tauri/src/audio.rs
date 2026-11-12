@@ -49,6 +49,35 @@ fn collect_stderr(child: &mut std::process::Child) -> std::thread::JoinHandle<St
     })
 }
 
+/// Run `work`, and kill `children` the moment `cancel` is set, even while `work` is blocked on one
+/// of their pipes: a stop must not wait for ffmpeg's next bytes, which on a slow machine can take
+/// seconds (its start alone). A killed child closes its pipes, so `work` then ends too.
+fn killing_on_stop<T>(children: &[&std::sync::Mutex<std::process::Child>], cancel: &AtomicBool, work: impl FnOnce() -> T) -> T {
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Relaxed) {
+                    for c in children {
+                        let _ = c.lock().unwrap_or_else(|e| e.into_inner()).kill();
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        // set however `work` ends, so the watcher ends with it
+        let _done = Done(&finished);
+        work()
+    })
+}
+
 /// Run ffmpeg to the end, or until `cancel`: then it is killed at once. Its status and what it said.
 fn run_until(mut cmd: Command, cancel: &AtomicBool) -> std::io::Result<(std::process::ExitStatus, String, bool)> {
     cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
@@ -98,7 +127,8 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
     let err_thread = collect_stderr(&mut child);
     let mut bytes = Vec::with_capacity(1 << 24);
     let mut buf = vec![0u8; 1 << 16];
-    let stopped = loop {
+    let child = std::sync::Mutex::new(child);
+    let stopped = killing_on_stop(&[&child], cancel, || loop {
         if cancel.load(Ordering::Relaxed) {
             break Some(anyhow!("cancelled"));
         }
@@ -107,7 +137,10 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
             Ok(n) => bytes.extend_from_slice(&buf[..n]),
             Err(e) => break Some(e.into()),
         }
-    };
+    });
+    let mut child = child.into_inner().unwrap_or_else(|e| e.into_inner());
+    // killed while it was read: a stop, whatever the pipe said
+    let stopped = if cancel.load(Ordering::Relaxed) { Some(anyhow!("cancelled")) } else { stopped };
     // never wait on a child whose pipe is still open
     drop(out);
     if let Some(e) = stopped {
@@ -547,15 +580,20 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     write.args(["-c:a", "aac", "-b:a", "96k"]).arg(dest);
     write.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     no_window(&mut write);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let mut reader = read.spawn().map_err(|e| e.to_string())?;
     let read_err = collect_stderr(&mut reader);
-    let mut writer = match write.spawn() {
+    // starting a program can take seconds on a slow machine: a stop meanwhile starts no second one
+    let writer = if cancel.load(Ordering::Relaxed) { Err("cancelled".to_string()) } else { write.spawn().map_err(|e| e.to_string()) };
+    let mut writer = match writer {
         Ok(w) => w,
         Err(e) => {
             let _ = reader.kill();
             drop(reader.stdout.take());
             let _ = reader.wait();
-            return Err(e.to_string());
+            return Err(e);
         }
     };
     let write_err = collect_stderr(&mut writer);
@@ -565,36 +603,46 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     let mut carry: Vec<u8> = Vec::new();
     let mut at = 0usize; // samples read so far, at 48 kHz
     let mut span = 0usize;
-    let mut failed = output.write_all(&wav_stream_header(RATE)).err().map(|_| "the encoder stopped".to_string());
-    while failed.is_none() {
-        if cancel.load(Ordering::Relaxed) {
-            failed = Some("cancelled".to_string());
-            break;
-        }
-        let n = match input.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                failed = Some(e.to_string());
+    let (reader_slot, writer_slot) = (std::sync::Mutex::new(reader), std::sync::Mutex::new(writer));
+    let mut failed = killing_on_stop(&[&reader_slot, &writer_slot], cancel, || {
+        let mut failed = output.write_all(&wav_stream_header(RATE)).err().map(|_| "the encoder stopped".to_string());
+        while failed.is_none() {
+            if cancel.load(Ordering::Relaxed) {
+                failed = Some("cancelled".to_string());
                 break;
             }
-        };
-        carry.extend_from_slice(&buf[..n]);
-        let whole = carry.len() / 4 * 4;
-        let mut keep: Vec<u8> = Vec::with_capacity(whole);
-        for sample in carry[..whole].chunks_exact(4) {
-            while span < spans.len() && at >= spans[span].1 * scale {
-                span += 1;
+            let n = match input.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    failed = Some(e.to_string());
+                    break;
+                }
+            };
+            carry.extend_from_slice(&buf[..n]);
+            let whole = carry.len() / 4 * 4;
+            let mut keep: Vec<u8> = Vec::with_capacity(whole);
+            for sample in carry[..whole].chunks_exact(4) {
+                while span < spans.len() && at >= spans[span].1 * scale {
+                    span += 1;
+                }
+                if span < spans.len() && at >= spans[span].0 * scale {
+                    keep.extend_from_slice(sample);
+                }
+                at += 1;
             }
-            if span < spans.len() && at >= spans[span].0 * scale {
-                keep.extend_from_slice(sample);
+            carry.drain(..whole);
+            if output.write_all(&keep).is_err() {
+                failed = Some("the encoder stopped".to_string());
             }
-            at += 1;
         }
-        carry.drain(..whole);
-        if output.write_all(&keep).is_err() {
-            failed = Some("the encoder stopped".to_string());
-        }
+        failed
+    });
+    let mut reader = reader_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut writer = writer_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // killed while a pipe blocked: a stop, whatever the pipe said
+    if cancel.load(Ordering::Relaxed) {
+        failed = Some("cancelled".to_string());
     }
     // never wait on a child whose pipe is still open: on any early end the reader is killed and
     // its pipe let go first, or it waits for ever to write what nobody reads
@@ -830,6 +878,11 @@ mod tests {
             let source = dir.join("long.wav");
             write_wav(&source, &audio).unwrap();
             let spans = speech_spans(&audio, 0.7, 0.3);
+            // how long saving it takes on this machine, not stopped: a stop must take far less
+            let started = std::time::Instant::now();
+            let full = save_sound(&source, &dir.join("full.m4a"), Some(&spans), &audio, Some(&ff), &AtomicBool::new(false)).unwrap();
+            let unstopped = started.elapsed();
+            std::fs::remove_file(full).unwrap();
             for whole in [false, true] {
                 let stop = std::sync::Arc::new(AtomicBool::new(false));
                 let (src, a, s, f, st, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), stop.clone(), dir.clone());
@@ -841,12 +894,15 @@ mod tests {
                 stop.store(true, Ordering::SeqCst);
                 let stopped_at = std::time::Instant::now();
                 let result = crate::setup::within(Duration::from_secs(20), &format!("stopping {name}"), move || worker.join().unwrap());
-                // within a second, as stopping should feel
-                assert!(stopped_at.elapsed() < Duration::from_secs(1), "{name}: took {:?} to stop", stopped_at.elapsed());
-                if result.is_err() {
-                    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
-                    assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");
-                }
+                // the stop ended the saving: ten minutes of sound were not saved to the end first
+                assert!(result.is_err(), "{name}: the whole sound was saved, the stop came too late to tell");
+                let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
+                assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");
+                // at once: the ffmpeg processes are killed the moment the stop comes, even while a
+                // pipe blocks. Within a second on a usual PC; a slow shared machine (a CI runner) is
+                // judged by its own pace, at most half the time the whole save took there
+                let limit = (unstopped / 2).max(Duration::from_secs(1));
+                assert!(stopped_at.elapsed() < limit, "{name}: took {:?} to stop; the whole save takes {unstopped:?}", stopped_at.elapsed());
             }
             // a folder that is not there: the encoder cannot start writing
             let (src, a, s, f, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), dir.join("not there"));

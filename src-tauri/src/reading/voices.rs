@@ -65,6 +65,8 @@ pub struct VoiceModel {
     pub samples: [bool; 2],
     /// Request options for every sentence
     pub options: &'static [(&'static str, &'static str)],
+    /// Options of the loaded model (audio.cpp's session options)
+    pub session: &'static [(&'static str, &'static str)],
     pub voices: &'static [Voice],
 }
 
@@ -113,6 +115,8 @@ pub const VOXCPM2: VoiceModel = VoiceModel {
     samples: [true, true],
     // the recording and its words both shape the voice (upstream's "ultimate clone")
     options: &[("ultimate_clone", "true")],
+    // the four voices' recordings stay encoded: Arabic and English take turns within a page
+    session: &[("voxcpm2.prompt_cache_slots", "4")],
     voices: &[
         v("ar-f", Lang::Ar, true, 1, Kind::Reference("voxcpm2-ar-f.wav", REF_AR)),
         v("ar-m", Lang::Ar, false, 1, Kind::Reference("voxcpm2-ar-m.wav", REF_AR)),
@@ -140,6 +144,7 @@ pub const SUPERTONIC: VoiceModel = VoiceModel {
     codes: ["ar", "en"],
     samples: [true, true],
     options: &[],
+    session: &[],
     voices: &[
         v("F1", Lang::Ar, true, 1, Kind::BuiltIn("F1")), v("F2", Lang::Ar, true, 2, Kind::BuiltIn("F2")), v("F3", Lang::Ar, true, 3, Kind::BuiltIn("F3")),
         v("F4", Lang::Ar, true, 4, Kind::BuiltIn("F4")), v("F5", Lang::Ar, true, 5, Kind::BuiltIn("F5")),
@@ -182,6 +187,7 @@ pub const PHONON: VoiceModel = VoiceModel {
     codes: ["", ""],
     samples: [false, true],
     options: &[],
+    session: &[],
     // English only; the default voice is a woman's (about 220 Hz)
     voices: &[
         v("default", Lang::En, true, 1, Kind::File(None)),
@@ -205,6 +211,7 @@ pub const STAND_IN: VoiceModel = VoiceModel {
     codes: ["ar", "en"],
     samples: [false, false],
     options: &[],
+    session: &[],
     voices: &[
         v("ar-m", Lang::Ar, false, 1, Kind::BuiltIn("ar-m")),
         v("ar-f", Lang::Ar, true, 1, Kind::BuiltIn("ar-f")),

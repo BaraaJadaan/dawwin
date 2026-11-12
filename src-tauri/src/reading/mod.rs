@@ -412,7 +412,7 @@ impl Reader {
                 return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", m.name)));
             }
             let model_dir = voices::dir(&self.paths, &m);
-            let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: Vec::new() };
+            let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: m.session.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
             let p = self.ready_process(procs, m.id, &load)?;
             device = if p.on_gpu() { format!("GPU · {}", p.device) } else { "CPU".into() };
             let out = dir.join(format!("{index}-{k}.wav"));
@@ -815,7 +815,7 @@ mod tests {
             tried += 1;
             let mut p = voice::VoiceProcess::spawn(&exe, None, &out.join(format!("{}.log", m.id))).unwrap();
             let started = std::time::Instant::now();
-            p.load(&voice::Load { family: m.family.into(), model: model_dir.clone(), gpu: false, options: Vec::new() }).unwrap();
+            p.load(&voice::Load { family: m.family.into(), model: model_dir.clone(), gpu: false, options: m.session.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() }).unwrap();
             println!("{}: loaded in {:.1} s on {}", m.name, started.elapsed().as_secs_f32(), p.device);
             let text = if m.reads(Lang::Ar) {
                 "# عادة القراءة\n\nفي 12 مارس 2026 قال المدير: we will ship it next week, no matter what. رفعنا النسخة على GitHub أمس، وارتفعت الأسعار 15%.\n\nThe meeting is at 10:30 a.m. in room 7."

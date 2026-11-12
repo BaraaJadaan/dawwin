@@ -3,7 +3,8 @@ them (repository, revision, path, size, SHA-256), into the folders the app keeps
 
     fetch.py <root>          → <root>/voices/<model id>/<name>
 
-A file whose size or SHA-256 differs from the pin stops it: the app would refuse it too.
+A file whose size or SHA-256 differs from the pin stops it: the app would refuse it too. The Voice
+bench's program job runs it, then reads with each model through the app's own code.
 """
 import hashlib
 import os

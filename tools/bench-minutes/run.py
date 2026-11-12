@@ -19,6 +19,8 @@ import minutes
 PORT = 8091
 HERE = minutes.HERE
 CTX = int(os.environ.get("BENCH_CTX", "16384"))
+# how this model is told not to think first (Dawwin sends the same)
+KWARGS = json.loads(os.environ.get("BENCH_KWARGS") or '{"enable_thinking": false}')
 
 CROSS = [("ar-levant-product", "en"), ("ar-gulf-events", "en"), ("en-sprint", "ar")]
 PARTS = [("ar-levant-product", 180), ("en-sprint", 180)]
@@ -53,7 +55,7 @@ def ask(messages, schema):
         "temperature": 0,
         "top_k": 1,
         "cache_prompt": False,
-        "chat_template_kwargs": {"enable_thinking": False},
+        "chat_template_kwargs": KWARGS,
     }
     started = time.time()
     r = post("/v1/chat/completions", body)
@@ -66,6 +68,7 @@ def ask(messages, schema):
         answer = None
     return {
         "answer": answer,
+        "thought": bool(choice["message"].get("reasoning_content")),
         "raw": text if answer is None else None,
         "finish": choice.get("finish_reason"),
         "seconds": round(time.time() - started, 2),
@@ -129,15 +132,22 @@ def main(key, model, server_bin, out_dir):
             print(json.dumps({k: r.get(k) for k in ("task", "seconds", "prompt_tokens", "tokens", "prompt_per_s", "tokens_per_s", "finish", "error")}), flush=True)
             if r.get("answer"):
                 print("  summary:", (r["answer"].get("summary") or "")[:300], flush=True)
+            # kept after every task, so a run that times out still has its results
+            save(out_dir, key, model, started, results)
     finally:
         server.terminate()
         server.wait(60)
+    save(out_dir, key, model, started, results)
+
+
+def save(out_dir, key, model, started, results):
     with open(os.path.join(out_dir, f"{key}.json"), "w", encoding="utf-8") as f:
         json.dump({
             "key": key,
             "bytes": os.path.getsize(model),
             "cpus": os.cpu_count(),
             "wall_seconds": round(time.time() - started, 1),
+            "kwargs": KWARGS,
             "results": results,
         }, f, ensure_ascii=False, indent=1)
 

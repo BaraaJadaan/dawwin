@@ -172,7 +172,8 @@ fn main() {
             answer(&mut s, "404 Not Found", "{}");
             continue;
         }
-        if auth != format!("Bearer {key}") {
+        // started without a key (as the minutes benchmark starts llama-server), it asks for none
+        if !key.is_empty() && auth != format!("Bearer {key}") {
             answer(&mut s, "401 Unauthorized", r#"{"error":{"message":"Invalid API Key"}}"#);
             continue;
         }

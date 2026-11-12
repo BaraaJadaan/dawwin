@@ -276,11 +276,8 @@ pub fn needs_pass(s: &Segment) -> bool {
 }
 
 /// The timing pass over the lines of a transcript: `audio` holds the whole recording, on the
-/// same clock as the lines. `progress` is told how far it got (0 to 1). With `phrases`, the model
-/// times its own phrases (Whisper): a line is heard once, and its phrases are what was heard.
-/// Whisper reads every piece as 30 seconds, so hearing each stretch of a line again would cost it
-/// five times as long as the transcription. Should an engine give no phrases, the stretches it is.
-pub fn pass(w: &mut dyn Engine, audio: &Audio, segments: &mut [Segment], language: &str, phrases: bool, cancel: &AtomicBool, mut progress: impl FnMut(f64)) -> Result<()> {
+/// same clock as the lines. `progress` is told how far it got (0 to 1).
+pub fn pass(w: &mut dyn Engine, audio: &Audio, segments: &mut [Segment], language: &str, cancel: &AtomicBool, mut progress: impl FnMut(f64)) -> Result<()> {
     let total: f64 = segments.iter().map(|s| s.end - s.start).sum::<f64>().max(1e-9);
     let mut done = 0.0;
     for s in segments.iter_mut() {
@@ -292,24 +289,8 @@ pub fn pass(w: &mut dyn Engine, audio: &Audio, segments: &mut [Segment], languag
             s.heard.clear();
             continue;
         }
-        let len = audio.samples.len();
-        if phrases {
-            let (a, b) = ((s.start * SR as f64) as usize, ((s.end * SR as f64) as usize).min(len));
-            let got = w.transcribe_phrases(audio, &[(a.min(b), b)], language)?;
-            let heard: Vec<(f32, f32, String)> = got
-                .into_iter()
-                .flat_map(|r| r.phrases)
-                .map(|(from, to, text)| ((s.start + from as f64) as f32, (s.start + to as f64).min(s.end) as f32, text))
-                .filter(|h| !h.2.trim().is_empty() && h.1 > h.0)
-                .collect();
-            if !heard.is_empty() {
-                s.heard = heard;
-                apply(s);
-                progress(done / total);
-                continue;
-            }
-        }
         let parts = stretches(s);
+        let len = audio.samples.len();
         let ranges: Vec<(usize, usize)> = parts
             .iter()
             .enumerate()
@@ -470,42 +451,6 @@ mod tests {
     #[ignore]
     fn bench() {
         super::bench::run();
-    }
-
-    /// An engine that gives the times of its phrases, as Whisper does, and counts its calls.
-    struct Phrases(usize);
-    impl Engine for Phrases {
-        fn start_loading(&mut self) -> Result<()> {
-            Ok(())
-        }
-        fn ensure_loaded(&mut self) -> Result<crate::engine::EngineInfo> {
-            Ok(Default::default())
-        }
-        fn transcribe(&mut self, _: &Audio, _: &[(usize, usize)], _: &str) -> Result<Vec<crate::engine::Recognized>> {
-            unreachable!("a model that times its phrases is heard once a line")
-        }
-        fn transcribe_phrases(&mut self, _: &Audio, ranges: &[(usize, usize)], _: &str) -> Result<Vec<crate::engine::Recognized>> {
-            self.0 += 1;
-            Ok(ranges
-                .iter()
-                .map(|_| crate::engine::Recognized {
-                    phrases: vec![(0.5, 3.0, "one two three".into()), (4.0, 6.0, "four five six".into())],
-                    ..Default::default()
-                })
-                .collect())
-        }
-        fn forget(&mut self, _: &str) {}
-    }
-
-    #[test]
-    fn whisper_is_heard_once_a_line_and_its_phrases_place_the_words() {
-        let mut lines = vec![Segment { start: 10.0, end: 16.5, text: "one two three four five six".into(), voice: vec![10.5, 16.0], pauses: vec![[0.5, 13.0, 14.0]], ..Default::default() }];
-        let audio = Audio { id: "x".into(), samples: vec![0.0; 17 * SR] };
-        let mut w = Phrases(0);
-        pass(&mut w, &audio, &mut lines, "en", true, &AtomicBool::new(false), |_| {}).unwrap();
-        assert_eq!(w.0, 1, "one call for the line");
-        assert_eq!(lines[0].heard[1].0, 14.0, "the phrases on the recording's clock");
-        assert_eq!(lines[0].words[3].1, 14.0, "\"four\" starts with its phrase: {:?}", lines[0].words);
     }
 
     #[test]

@@ -820,7 +820,8 @@ mod tests {
                 stop.store(true, Ordering::SeqCst);
                 let stopped_at = std::time::Instant::now();
                 let result = crate::setup::within(Duration::from_secs(20), &format!("stopping {name}"), move || worker.join().unwrap());
-                assert!(stopped_at.elapsed() < Duration::from_millis(1500), "{name}: took {:?} to stop", stopped_at.elapsed());
+                // within a second, as stopping should feel
+                assert!(stopped_at.elapsed() < Duration::from_secs(1), "{name}: took {:?} to stop", stopped_at.elapsed());
                 if result.is_err() {
                     let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
                     assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");

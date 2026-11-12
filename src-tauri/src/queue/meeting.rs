@@ -426,9 +426,9 @@ fn local_stamp() -> String {
 
 // ---------------------------------------------------------------- the lines
 
-/// Lines as they come from both tracks, let out in time order once every track has been heard
-/// past their end (so that whatever overlaps them is known), with the "me" lines that only say
-/// what "them" said at the same time left out.
+/// Lines as they come from both tracks. A "them" line is shown at once; a "me" line once "them"
+/// has been heard past its end, so that what overlaps it is known, and not at all when it only
+/// says what "them" said at the same time.
 struct Lines {
     /// Up to where each track is transcribed, in seconds (a track not recorded: all of it)
     done: [f64; 2],
@@ -462,8 +462,9 @@ impl Lines {
 
     /// The lines that can be shown now (all of them with `all`), in time order.
     fn release(&mut self, all: bool) -> Vec<Segment> {
-        let upto = self.done[0].min(self.done[1]);
-        let (mut ready, rest): (Vec<Segment>, Vec<Segment>) = self.held.drain(..).partition(|s| all || s.end <= upto + 1e-6);
+        let them_done = self.done[idx(Track::Them)];
+        let (mut ready, rest): (Vec<Segment>, Vec<Segment>) =
+            self.held.drain(..).partition(|s| all || s.track.as_deref() != Some("me") || s.end <= them_done + 1e-6);
         self.held = rest;
         ready.sort_by(|a, b| a.start.total_cmp(&b.start));
         ready.retain(|s| {
@@ -524,6 +525,11 @@ fn hear(core: &Arc<Core>, engine: &mut Option<EngineProcess>, model: &str, id: &
                 p[2] += off as f32;
             }
             s.track = Some(piece.track.key().into());
+            // a piece can begin in a long silence (the others listening): the line starts where the speech does
+            if let (Some(first), Some(last)) = (s.voice.first(), s.voice.last()) {
+                s.start = s.start.max(*first as f64 - 0.2).min(s.end);
+                s.end = s.end.min(*last as f64 + 0.2).max(s.start);
+            }
             s
         })
         .collect())
@@ -945,13 +951,14 @@ mod tests {
     }
 
     #[test]
-    fn lines_come_out_in_time_order_once_both_tracks_are_past_them() {
+    fn them_is_shown_at_once_and_me_once_them_is_heard_past_it() {
         let mut l = Lines::new(Sources::Both);
-        l.add(Track::Them, 25.0, vec![line("them", 0.0, 20.0, "مرحبا بكم في الاجتماع")]);
-        assert!(l.release(false).is_empty(), "me is not heard yet");
-        l.add(Track::Me, 22.0, vec![line("me", 3.0, 6.0, "شكرا لكم")]);
-        let out = l.release(false);
-        assert_eq!(out.iter().map(|s| s.start).collect::<Vec<_>>(), [0.0, 3.0]);
+        l.add(Track::Me, 22.0, vec![line("me", 3.0, 21.0, "شكرا لكم")]);
+        assert!(l.release(false).is_empty(), "them is not heard that far yet");
+        l.add(Track::Them, 20.0, vec![line("them", 0.0, 20.0, "مرحبا بكم في الاجتماع")]);
+        assert_eq!(l.release(false).iter().map(|s| s.start).collect::<Vec<_>>(), [0.0]);
+        l.add(Track::Them, 45.0, vec![]);
+        assert_eq!(l.release(false).iter().map(|s| s.start).collect::<Vec<_>>(), [3.0]);
     }
 
     #[test]

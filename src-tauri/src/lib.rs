@@ -9,6 +9,7 @@ pub mod i18n;
 mod instance;
 mod models;
 mod queue;
+mod reading;
 mod setup;
 mod tools;
 mod transcript;
@@ -672,7 +673,9 @@ pub fn run() {
                 });
             }
             let core = Core::start(app.handle().clone())?;
+            let reader = reading::Reader::start(app.handle().clone(), core.paths.clone());
             app.manage(core);
+            app.manage(reader);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -729,6 +732,16 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            reading::reading_open,
+            reading::reading_sentence,
+            reading::reading_place,
+            reading::reading_stop,
+            reading::reading_voices,
+            reading::reading_choose_voice,
+            reading::reading_download_voice,
+            reading::reading_pause_voice,
+            reading::reading_delete_voice,
+            reading::reading_formats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

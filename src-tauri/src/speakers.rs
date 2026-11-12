@@ -93,6 +93,14 @@ fn space_near(text: &str, share: f64) -> Option<usize> {
         .min_by(|&i, &j| ((i as f64 / len) - share).abs().total_cmp(&((j as f64 / len) - share).abs()))
 }
 
+/// The space before the first word said after `pause_start`, by the word times of a timed line.
+fn word_after(s: &Segment, pause_start: f64) -> Option<usize> {
+    let chars: Vec<char> = s.text.chars().collect();
+    let first = s.words.iter().find(|w| w.1 as f64 >= pause_start - 0.05)?.0 as usize;
+    // the words before it and the word itself, around a space
+    (1..first.min(chars.len())).rev().find(|&i| chars[i].is_whitespace()).filter(|&i| chars[..i].iter().any(|c| !c.is_whitespace()))
+}
+
 /// Which of the line's pauses to split it at: one within half a second of a change between the
 /// two speakers who each hold at least 1.5 s of it, the closest one; and the space in its text
 /// that goes with that pause.
@@ -112,7 +120,9 @@ fn split_point(s: &Segment, turns: &[Turn]) -> Option<(usize, usize)> {
         }
     }
     let (_, k) = best?;
-    let at = space_near(&s.text, s.pauses[k][0] as f64)?;
+    // a timed line knows which word comes after the pause; else the space nearest the share of
+    // the speech said before it
+    let at = word_after(s, s.pauses[k][1] as f64).or_else(|| space_near(&s.text, s.pauses[k][0] as f64))?;
     Some((k, at))
 }
 
@@ -459,6 +469,22 @@ mod tests {
         assert_eq!(a.heard.len(), 2, "the stretches heard before the pause: {:?}", a.heard);
         assert_eq!(b.heard.iter().map(|h| h.2.as_str()).collect::<Vec<_>>(), ["four five", "six"]);
         assert_eq!(b.flag.as_deref(), Some("repeat"));
+    }
+
+    #[test]
+    fn a_timed_line_is_split_at_the_word_said_after_the_pause() {
+        // the share of the speech before the pause would cut after "That" (one speaker talks faster)
+        let text = "a click away. That is fine with me.";
+        let mut s = line(8.5, 24.0, text, vec![[0.45, 15.96, 17.6]]);
+        s.words = vec![(0, 8.6), (2, 9.0), (8, 12.0), (14, 17.7), (19, 18.0), (22, 18.3), (27, 18.5), (32, 18.8)];
+        let mut t = transcript(vec![s]);
+        give_speakers(&mut t, &[turn(8.5, 16.0, 1), turn(17.6, 24.0, 2)]);
+        assert_eq!(texts(&t), ["a click away.", "That is fine with me."]);
+        assert_eq!(t.segments[1].words[0], (0, 17.7), "the second half's words, from its own start");
+        // untimed, the share decides
+        let mut t = transcript(vec![line(8.5, 24.0, text, vec![[0.45, 15.96, 17.6]])]);
+        give_speakers(&mut t, &[turn(8.5, 16.0, 1), turn(17.6, 24.0, 2)]);
+        assert_eq!(t.segments.len(), 2);
     }
 
     #[test]

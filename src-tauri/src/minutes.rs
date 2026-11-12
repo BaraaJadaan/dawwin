@@ -38,7 +38,14 @@ pub struct Spec {
     pub languages: &'static [&'static str],
 }
 
-pub const MODELS: &[Spec] = &[];
+/// Provisional until the benchmark's results are in: the room is a part of ten minutes and its
+/// answer; what each needs is its file and about that much context and working memory more.
+pub const MODELS: &[Spec] = &[
+    Spec { id: "min-gemma4-12b", context: 16_384, needs: 7_121_861_440 + 1_500_000_000, languages: &["ar", "en"] },
+    Spec { id: "min-qwen35-9b", context: 16_384, needs: 5_680_522_464 + 1_200_000_000, languages: &["ar", "en"] },
+    Spec { id: "min-qwen35-4b", context: 16_384, needs: 2_740_937_888 + 900_000_000, languages: &["ar", "en"] },
+    Spec { id: "min-qwen35-2b", context: 16_384, needs: 1_280_835_840 + 700_000_000, languages: &["ar", "en"] },
+];
 
 pub fn model(id: &str) -> Spec {
     MODELS.iter().copied().find(|s| s.id == id).unwrap_or(Spec { id: "", context: 16_384, needs: 0, languages: &["ar", "en"] })

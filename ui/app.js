@@ -432,7 +432,7 @@ function firstOpenStep(st) {
 /** The download as setting up sees it: one of a tool or a translation model is not its business. */
 function speechDownload(st) {
   const d = st.download;
-  const speech = st.models.some((m) => m.id === d.model && m.family !== "translator");
+  const speech = st.models.some((m) => m.id === d.model && !["translator", "minutes"].includes(m.family));
   return speech ? d : { ...d, active: false, verifying: false, retry_wait: null, error: null };
 }
 
@@ -614,7 +614,7 @@ function toolRows(st, ids) {
 }
 
 function renderModelRows(st) {
-  renderRows($("set-models"), st, st.models.filter((m) => m.family !== "translator"));
+  renderRows($("set-models"), st, st.models.filter((m) => !["translator", "minutes"].includes(m.family)));
   renderRows($("set-translators"), st, st.models.filter((m) => m.family === "translator"));
   renderRows($("set-translator-tool"), st, toolRows(st, ["translator"]));
   renderRows($("set-tools"), st, toolRows(st, ["ffmpeg-audio", "ffmpeg-video"]));

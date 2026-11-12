@@ -720,6 +720,7 @@ pub fn run() {
             minutes_commands::write_minutes,
             minutes_commands::edit_minutes,
             minutes_commands::minutes_info,
+            minutes_commands::minutes_outdated,
             minutes_commands::export_minutes,
             #[cfg(debug_assertions)]
             minutes_commands::export_minutes_to_path,

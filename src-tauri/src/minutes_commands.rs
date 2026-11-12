@@ -22,6 +22,13 @@ pub fn edit_minutes(core: C, id: String, minutes: Minutes) -> R<Minutes> {
     core.edit_minutes(&id, minutes).map_err(e)
 }
 
+/// Whether the transcript was corrected after its minutes were written.
+#[tauri::command]
+pub fn minutes_outdated(core: C, id: String) -> R<bool> {
+    let t = core.transcript(&id).map_err(e)?;
+    Ok(t.minutes.as_ref().filter(|m| m.written()).is_some_and(|m| m.from != minutes::fingerprint(&t)))
+}
+
 #[derive(serde::Serialize)]
 pub struct MinutesInfo {
     /// What each minutes model needs, and the languages it writes well

@@ -281,7 +281,7 @@ function whoDecorateRow(row, s, i) {
 /** Rename a speaker, merge them into another, or search their lines. */
 function speakerMenu(id, el) {
   const cur = S.current;
-  if (isLive(cur.id)) return;
+  if (isLive(cur.id) || whoJob(cur.id)) return;
   const items = [{ label: t("who.rename"), run: () => renameSpeaker(id, el) }];
   for (const o of speakersOf(cur).filter((x) => x.id !== id)) {
     items.push({ label: t("who.merge", { name: o.name }), run: () => editSpeakers("merge_speakers", { from: id, into: o.id }) });
@@ -295,13 +295,15 @@ function renameSpeaker(id, el) {
   popMenu(el, [{ input: t("who.name"), value: s?.name || "", run: (name) => editSpeakers("rename_speaker", { speaker: id, name }) }]);
 }
 
-/** A change to the speakers: the transcript comes back as it is now, and is drawn again. */
+/** A change to the speakers: the transcript comes back as it is now, and is drawn again; refused
+ *  (the lines moved meanwhile), it is drawn again as it is now. */
 async function editSpeakers(cmd, args) {
   try {
     S.current = await invoke(cmd, { id: S.current.id, ...args });
     renderTranscript();
   } catch (err) {
     toast(String(err));
+    reloadCurrent();
   }
 }
 
@@ -323,7 +325,7 @@ function paintWhoFilter() {
 function whoContext(ev, selected) {
   const cur = S.current, box = $("ctx-who");
   box.innerHTML = "";
-  const live = !cur || isLive(cur.id);
+  const live = !cur || isLive(cur.id) || !!whoJob(cur.id);
   $("ctx-always").hidden = !selected || live || !document.getSelection().toString().trim();
   const row = ev.target.closest(".seg");
   if (!live && row && cur.speakers?.length) {
@@ -333,13 +335,13 @@ function whoContext(ev, selected) {
       b.setAttribute("role", "menuitem");
       b.dir = "auto";
       b.textContent = t("who.saidBy", { name: o.name });
-      b.onclick = () => { hideCtx(); editSpeakers("give_line", { index: i, speaker: o.id }); };
+      b.onclick = () => { hideCtx(); editSpeakers("give_line", { index: i, speaker: o.id, start: cur.segments[i].start }); };
       box.append(b);
     }
     const b = document.createElement("button");
     b.setAttribute("role", "menuitem");
     b.textContent = t("who.someoneNew");
-    b.onclick = () => { hideCtx(); editSpeakers("give_line", { index: i, speaker: null }); };
+    b.onclick = () => { hideCtx(); editSpeakers("give_line", { index: i, speaker: null, start: cur.segments[i].start }); };
     box.append(b);
   }
   return !$("ctx-always").hidden || box.children.length > 0;
@@ -382,6 +384,7 @@ async function findSpeakers() {
   try {
     await invoke("find_speakers", { id: S.current.id });
     onState(await invoke("get_state"));
+    renderTranscript(); // read-only until the speakers are found
     toast(t("who.finding"));
   } catch (err) { toast(String(err)); }
 }

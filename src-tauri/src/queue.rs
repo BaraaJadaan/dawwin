@@ -856,6 +856,26 @@ impl Core {
     pub fn is_live(&self, id: &str) -> bool {
         self.live.lock().unwrap().contains_key(id)
     }
+
+    /// Whether the speakers of a transcript are being found: its lines may be split when that ends,
+    /// so an edit that names a line by its place waits.
+    pub fn finding_speakers(&self, id: &str) -> bool {
+        self.snapshot().queue.iter().any(|j| j.kind == "speakers" && j.transcript.as_deref() == Some(id) && ACTIVE_JOB.contains(&j.status.as_str()))
+    }
+
+    /// An edit of line `index` that was made on the line starting at `start`: refused when the
+    /// lines moved since (split when the speakers were found), so it never lands on another line.
+    pub fn check_line(&self, id: &str, index: usize, start: Option<f64>) -> Result<()> {
+        if self.finding_speakers(id) {
+            return Err(anyhow!(crate::tr!("Dawwin is finding the speakers of this transcript. Edit it when that is done.")));
+        }
+        let Some(start) = start else { return Ok(()) };
+        let t = self.transcript(id)?;
+        if !speakers::same_line(&t, index, start) {
+            return Err(anyhow!(crate::tr!("This transcript changed meanwhile. It is shown again as it is now.")));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- engine thread

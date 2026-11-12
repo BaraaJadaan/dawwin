@@ -24,6 +24,7 @@ fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript>
     if core.is_live(id) {
         return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
+    core.check_line(id, 0, None).map_err(e)?;
     history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
@@ -46,9 +47,10 @@ pub fn merge_speakers(core: C, id: String, from: u32, into: u32) -> R<Transcript
     edit(&core, &id, |t| crate::speakers::merge(t, from, into))
 }
 
-/// Give line `index` to `speaker`, or to someone new when there is none.
+/// Give line `index` (the one starting at `start`) to `speaker`, or to someone new when there is none.
 #[tauri::command]
-pub fn give_line(core: C, id: String, index: usize, speaker: Option<u32>) -> R<Transcript> {
+pub fn give_line(core: C, id: String, index: usize, speaker: Option<u32>, start: Option<f64>) -> R<Transcript> {
+    core.check_line(&id, index, start).map_err(e)?;
     edit(&core, &id, |t| {
         crate::speakers::give_line(t, index, speaker);
     })

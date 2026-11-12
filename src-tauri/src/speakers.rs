@@ -310,6 +310,11 @@ pub fn give_line(t: &mut Transcript, index: usize, speaker: Option<u32>) -> Opti
     Some(id)
 }
 
+/// Whether line `index` is still the one that started at `start`: lines move when one is split.
+pub fn same_line(t: &Transcript, index: usize, start: f64) -> bool {
+    t.segments.get(index).is_some_and(|s| (s.start - start).abs() <= 0.001)
+}
+
 impl Transcript {
     pub fn has_speakers(&self) -> bool {
         self.segments.iter().any(|s| s.speaker.is_some())
@@ -494,6 +499,17 @@ mod tests {
         rename(&mut t, 1, "Sami");
         give_speakers(&mut t, &[turn(0.0, 20.0, 1)]);
         assert!(t.speakers.iter().all(|x| x.name.is_empty()), "Sami said 10 of the 20 s now heard as one: {:?}", t.speakers);
+    }
+
+    #[test]
+    fn an_edit_made_before_a_split_does_not_land_on_another_line() {
+        let mut t = transcript(vec![line(0.0, 8.0, "صباح الخير يا جماعة نبدأ؟ نعم تفضل يا سامي", vec![[0.55, 3.9, 4.3]]), line(8.0, 12.0, "تمام", vec![])]);
+        // the page shows two lines; the second starts at 8 s
+        assert!(same_line(&t, 1, 8.0));
+        give_speakers(&mut t, &[turn(0.0, 4.0, 1), turn(4.2, 8.0, 2), turn(8.0, 12.0, 2)]);
+        assert_eq!(t.segments.len(), 3, "the first line was split");
+        assert!(!same_line(&t, 1, 8.0), "line 1 is now the second half of the first: the edit is refused");
+        assert!(same_line(&t, 2, 8.0) && !same_line(&t, 5, 8.0));
     }
 
     #[test]

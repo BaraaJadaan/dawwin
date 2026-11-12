@@ -57,6 +57,8 @@ static AR: &[(&str, &str)] = &[
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
     // speakers, the language heard, words and names (1.4)
     ("Speaker {}", "المتحدث {}"),
+    ("Dawwin is finding the speakers of this transcript. Edit it when that is done.", "يبحث دَوِّن عن متحدثي هذا النص. عدّله حين ينتهي."),
+    ("This transcript changed meanwhile. It is shown again as it is now.", "تغيّر هذا النص في الأثناء. يُعرض من جديد كما هو الآن."),
     ("This transcript is still being written. Find its speakers when it is done.", "هذا النص ما زال قيد الكتابة. ابحث عن متحدثيه حين ينتهي."),
     ("Telling speakers apart needs its model. Download it in Settings.", "يحتاج التمييز بين المتحدثين إلى نموذجه. نزّله من الإعدادات."),
     ("Transcribed, but the speakers could not be told apart: {}", "فُرّغ التسجيل، لكن تعذّر التمييز بين المتحدثين: {}"),

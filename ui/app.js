@@ -824,7 +824,8 @@ function renderTranscript() {
   box.innerHTML = "";
   if (!same) { box.dataset.for = cur.id; clearWordHighlight(); }
   wordCache.clear();
-  cur.segments.forEach((s, i) => box.append(segRow(s, i, live)));
+  // lines are not edited while the speakers are found: they may be split when that ends
+  cur.segments.forEach((s, i) => box.append(segRow(s, i, live || !!whoJob(cur.id))));
   if (!cur.segments.length) box.append(emptyLive());
   paintWhoFilter();
   $("btn-more").hidden = live;
@@ -990,7 +991,7 @@ async function saveTranslation(i, el) {
   const before = tr?.lines?.[i]?.text || "";
   if (!tr || text === before) { el.textContent = before; return; }
   try {
-    await invoke("update_translation", { id: cur.id, language: lang, index: i, text });
+    await invoke("update_translation", { id: cur.id, language: lang, index: i, text, start: cur.segments[i].start });
     while (tr.lines.length < cur.segments.length) tr.lines.push({ text: "", from: "", edited: false });
     tr.lines[i] = { text, from: cur.segments[i].text, edited: true };
     el.closest(".seg").replaceWith(segRow(cur.segments[i], i, false));
@@ -998,6 +999,7 @@ async function saveTranslation(i, el) {
   } catch (err) {
     toast(String(err));
     el.textContent = before;
+    reloadCurrent(); // refused because the lines moved: shown as they are now
   }
 }
 
@@ -1024,7 +1026,7 @@ async function saveSegment(i, el) {
   const text = el.innerText.replace(/\s+/g, " ").trim();
   if (text === seg.text) { paintSegment(i); return; }
   try {
-    await invoke("update_segment", { id: cur.id, index: i, text });
+    await invoke("update_segment", { id: cur.id, index: i, text, start: seg.start });
     seg.text = text;
     seg.edited = true;
     seg.words = []; // timed again by the app
@@ -1036,6 +1038,7 @@ async function saveSegment(i, el) {
   } catch (err) {
     toast(String(err));
     el.textContent = seg.text;
+    reloadCurrent(); // refused because the lines moved: shown as they are now
   }
 }
 

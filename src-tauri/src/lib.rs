@@ -291,11 +291,13 @@ fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript>
     if core.is_live(id) {
         return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
+    core.check_line(id, 0, None).map_err(e)?;
     history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
 #[tauri::command]
-fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
+fn update_segment(core: C, id: String, index: usize, text: String, start: Option<f64>) -> R<()> {
+    core.check_line(&id, index, start).map_err(e)?;
     edit(&core, &id, |t| {
         if let Some(s) = t.segments.get_mut(index) {
             if s.text != text {
@@ -331,7 +333,8 @@ fn translate(core: C, id: String, language: String) -> R<String> {
 }
 
 #[tauri::command]
-fn update_translation(core: C, id: String, language: String, index: usize, text: String) -> R<()> {
+fn update_translation(core: C, id: String, language: String, index: usize, text: String, start: Option<f64>) -> R<()> {
+    core.check_line(&id, index, start).map_err(e)?;
     edit(&core, &id, |t| {
         let count = t.segments.len();
         let from = t.segments.get(index).map(|s| s.text.clone());

@@ -35,8 +35,8 @@
 }
 .minutes-text:focus { background: var(--panel); box-shadow: 0 0 0 2px var(--accent); }
 .minutes-text.summary { font-size: 17px; }
-.minutes-text:empty::before { content: attr(data-ph); color: var(--muted); }
-.minutes-action { display: grid; grid-template-columns: minmax(80px, max-content) 1fr minmax(80px, max-content); gap: 4px 14px; align-items: start; }
+.minutes-text:empty:focus::before { content: attr(data-ph); color: var(--muted); }
+.minutes-action { display: grid; grid-template-columns: 120px 1fr 150px; gap: 4px 14px; align-items: start; }
 .minutes-action .who { font-weight: 600; }
 .minutes-action .due { color: var(--muted); }
 .minutes-item.edited .minutes-text { text-decoration: underline dotted var(--muted); text-underline-offset: 5px; }

@@ -26,7 +26,8 @@ pub fn edit_minutes(core: C, id: String, minutes: Minutes) -> R<Minutes> {
 #[tauri::command]
 pub fn minutes_outdated(core: C, id: String) -> R<bool> {
     let t = core.transcript(&id).map_err(e)?;
-    Ok(t.minutes.as_ref().filter(|m| m.written()).is_some_and(|m| m.from != minutes::fingerprint(&t)))
+    // minutes that do not say what they were written from cannot tell
+    Ok(t.minutes.as_ref().filter(|m| m.written() && !m.from.is_empty()).is_some_and(|m| m.from != minutes::fingerprint(&t)))
 }
 
 #[derive(serde::Serialize)]

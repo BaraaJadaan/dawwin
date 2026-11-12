@@ -1,152 +1,244 @@
-// 1.8.0 in the real app: the shortcut's settings, closing to the notification area, a second start,
-// Start with Windows (in a test registry key, never the real Run key), the small player, and
-// PDF, EPUB and pictures of text. In a throwaway data folder, with the stand-in reader.
+// Read anything on the screen (1.8.0), with the stand-in voice (`cargo build --example fake_voice`):
+// the shortcut's settings (a taken shortcut said, with free ones offered), say it like this, the
+// Settings section in English and Arabic with its tooltips, Start with Windows (in a test registry
+// key, never the real Run key), the small player reading a selection (pause, back, forward, the
+// shortcut again to stop, Read aloud in the window stopping meanwhile, the selection forgotten with
+// its sound), closing to the notification area and starting again, PDFium downloaded from a local
+// stand-in for the release, PDFs, an e-book's chapters and its place, a scan and a picture of text,
+// saving as sound as a job in the list, and closing with the shortcut off quitting Dawwin.
 //
-//   python tools/trials/pdf/make_pdfs.py <dir>/trial-b      (and make_word.ps1 for word.pdf)
-//   node tools/e2e/screen.mjs <dir> src-tauri/target/debug/dawwin.exe
-//
-// <dir>/pdfium/bin holds pdfium.dll (pdfium-binaries chromium/8152). Debugging port 9901.
-import { spawn, execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const [SP, EXE] = process.argv.slice(2);
-const PORT = 9901;
-const KEY = "Software\\Dawwin-test-harness-1-8\\Run";
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const home = join(SP, "screen-home");
-rmSync(home, { recursive: true, force: true });
-mkdirSync(home, { recursive: true });
-writeFileSync(join(home, "settings.json"), JSON.stringify({ ui_lang: "en" }));
-const env = { ...process.env, DAWWIN_HOME: home, DAWWIN_TEST_READER: "1", DAWWIN_TEST_AUTOSTART_KEY: KEY, DAWWIN_TEST_PDFIUM: join(SP, "pdfium", "bin"), WEBVIEW2_USER_DATA_FOLDER: join(SP, "webview-screen"), WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${PORT} --mute-audio` };
-const start = (args = []) => spawn(EXE, args, { stdio: "ignore", env });
-const alive = (p) => p.exitCode === null && p.signalCode === null;
-const results = [];
-const check = (name, ok, detail = "") => {
-  results.push(`${ok ? "PASS" : "FAIL"}  ${name}${detail ? "  (" + detail + ")" : ""}`);
-  console.log(results.at(-1));
-};
+// The taking of the selection from another program is not here (it would take the keyboard): see
+// tools/trials/selection. Files: DAWWIN_E2E_PDFS, a folder made by tools/trials/pdf/make_pdfs.py
+// (and make_word.ps1). PDFium: the release's dawwin-pdfium-*.tar.xz in DAWWIN_E2E_TOOLS.
+import { execFileSync, spawn } from "node:child_process";
+import { createServer } from "node:http";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { APP, check, finish, makeHome, open, OUT, PORT, sleep, TOOLS } from "./lib.mjs";
 
-async function connect(filter) {
-  for (let i = 0; i < 80; i++) {
-    await sleep(500);
-    try {
-      const page = (await (await fetch(`http://127.0.0.1:${PORT}/json`)).json()).find((t) => t.type === "page" && filter(t));
-      if (page) {
-        const ws = new WebSocket(page.webSocketDebuggerUrl);
-        await new Promise((r) => (ws.onopen = r));
-        let n = 0;
-        const pending = new Map();
-        ws.onmessage = (m) => {
-          const d = JSON.parse(m.data);
-          if (pending.has(d.id)) {
-            pending.get(d.id)(d);
-            pending.delete(d.id);
-          }
-        };
-        const ev = (expression) =>
-          new Promise((r) => {
-            const id = ++n;
-            pending.set(id, (d) => r(d.result?.result?.value ?? d.result?.exceptionDetails?.exception?.description));
-            ws.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } }));
-          });
-        return { ws, ev, invoke: (c, a) => ev(`window.__TAURI__.core.invoke(${JSON.stringify(c)}, ${JSON.stringify(a || {})}).catch(e => ({ error: e }))`) };
-      }
-    } catch {}
-  }
-  throw new Error("no page");
+const FAKE = join(dirname(APP), "examples", "fake_voice.exe");
+if (!existsSync(FAKE)) {
+  console.log("skipped: build the stand-in voice first (cargo build --example fake_voice)");
+  process.exit(0);
 }
+const PDFS = process.env.DAWWIN_E2E_PDFS || "";
+const KEY = "Software\\Dawwin-e2e-screen\\Run";
+const port = PORT + 50;
+const home = makeHome("screen-home");
 const regValue = () => {
-  try {
-    return execFileSync("reg", ["query", "HKCU\\" + KEY, "/v", "Dawwin"], { encoding: "utf8" });
-  } catch {
-    return "";
-  }
+  try { return execFileSync("reg", ["query", "HKCU\\" + KEY, "/v", "Dawwin"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); } catch { return ""; }
+};
+const cleanReg = () => { try { execFileSync("reg", ["delete", "HKCU\\Software\\Dawwin-e2e-screen", "/f"], { stdio: "ignore" }); } catch { /* not there */ } };
+
+// the release's PDFium pack, served as the release would
+const pack = TOOLS && existsSync(TOOLS) ? readdirSync(TOOLS).find((f) => /^dawwin-pdfium-.*\.tar\.xz$/.test(f)) : null;
+let server = null;
+let toolsUrl = "";
+if (pack) {
+  server = createServer((req, res) => {
+    const f = join(TOOLS, decodeURIComponent(req.url.split("/").pop()));
+    if (!existsSync(f)) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { "Content-Length": statSync(f).size });
+    res.end(readFileSync(f));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  toolsUrl = `http://127.0.0.1:${server.address().port}`;
+}
+
+const env = {
+  DAWWIN_TEST_VOICE: FAKE, FAKE_VOICE_DELAY_MS: "60", DAWWIN_TEST_AUTOSTART_KEY: KEY, DAWWIN_TOOLS_URL: toolsUrl,
+  WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --mute-audio --autoplay-policy=no-user-gesture-required`,
 };
 
+/** What a click on the main window's X sends (WM_CLOSE), to this test's own Dawwin: its largest
+ *  visible window, not the small player. */
+function closeMainWindow(pid) {
+  const ps = `Add-Type -Name W -Namespace U -MemberDefinition @'
+public delegate bool P(System.IntPtr h, System.IntPtr l);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool EnumWindows(P p, System.IntPtr l);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint pid);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool IsWindowVisible(System.IntPtr h);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool GetWindowRect(System.IntPtr h, out RECT r);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr h, uint m, System.IntPtr w, System.IntPtr l);
+public struct RECT { public int L, T, R, B; }
+'@
+$best = [IntPtr]::Zero; $area = 0
+[U.W]::EnumWindows({ param($h, $l) $p = 0; [void][U.W]::GetWindowThreadProcessId($h, [ref]$p); if ($p -eq ${pid} -and [U.W]::IsWindowVisible($h)) { $r = New-Object U.W+RECT; [void][U.W]::GetWindowRect($h, [ref]$r); $a = ($r.R - $r.L) * ($r.B - $r.T); if ($a -gt $script:area) { $script:area = $a; $script:best = $h } }; $true }, [IntPtr]::Zero) | Out-Null
+[void][U.W]::PostMessage($best, 0x10, [IntPtr]::Zero, [IntPtr]::Zero)`;
+  execFileSync("powershell", ["-NoProfile", "-Command", ps]);
+}
 
-// what a click on the window's X sends: WM_CLOSE, to this test's own Dawwin only
-const closeWindow = (pid) =>
-  execFileSync("powershell", ["-NoProfile", "-Command", `Add-Type -Name W -Namespace U -MemberDefinition '[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint m, IntPtr w, IntPtr l);'; $h = (Get-Process -Id ${pid}).MainWindowHandle; [U.W]::PostMessage($h, 0x10, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null; "$h"`], { encoding: "utf8" }).trim();
+cleanReg();
+let a = await open(home, port, env);
+const alive = (p) => p.exitCode === null && p.signalCode === null;
+const visible = () => a.ev("window.__TAURI__.window.getCurrentWindow().isVisible()");
 
-const app = start();
-const main = await connect((t) => t.url.startsWith("http://tauri.localhost") && !t.url.includes("player"));
-await sleep(3000);
-check("the window opens at start", (await main.ev("window.__TAURI__.window.getCurrentWindow().isVisible()")) === true);
-let s = await main.invoke("screen_state");
-check("off until turned on, Ctrl+Alt+R by default", s.settings.on === false && s.settings.shortcut === "Ctrl+Alt+R" && s.shortcut.state === "off", JSON.stringify(s.shortcut));
-s = await main.invoke("screen_set_on", { on: true });
-check("turned on: the shortcut is registered, or its being taken is said with free ones", s.shortcut.state === "on" || (s.shortcut.state === "taken" && !!s.error && s.free.length > 0), `${s.shortcut.state}; ${s.error ?? ""}; free: ${s.free.join(", ")}`);
+/** The small player's page, through the same debugging port. */
+async function player() {
+  for (let i = 0; i < 40; i++) {
+    const t = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((x) => x.type === "page" && x.url.includes("player.html"));
+    if (t) {
+      const ws = new WebSocket(t.webSocketDebuggerUrl);
+      await new Promise((r) => (ws.onopen = r));
+      let n = 0;
+      const pending = new Map();
+      ws.onmessage = (m) => { const d = JSON.parse(m.data); if (pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
+      const ev = (expression) => new Promise((r) => { const id = ++n; pending.set(id, (d) => r(d.result?.result?.value)); ws.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } })); });
+      return { ws, ev };
+    }
+    await sleep(250);
+  }
+  throw new Error("no player");
+}
+
+// ---- the shortcut's settings
+let s = await a.invoke("screen_state");
+check("off until turned on, Ctrl+Shift+Space by default", !s.settings.on && s.settings.shortcut === "Ctrl+Shift+Space" && s.shortcut.state === "off", s.shortcut);
+s = await a.invoke("screen_set_on", { on: true });
+check("turned on: registered, or its being taken said with free ones", s.shortcut.state === "on" || (s.shortcut.state === "taken" && !!s.error && s.free.length > 0), s.error || s.shortcut);
 if (s.shortcut.state === "taken") {
-  const pick = s.free[0];
-  s = await main.invoke("screen_set_shortcut", { keys: pick });
-  check("a free one offered can be chosen", s.shortcut.state === "on" && s.settings.shortcut === pick, JSON.stringify(s.shortcut));
+  s = await a.invoke("screen_set_shortcut", { keys: s.free[0] });
+  check("a free one offered is taken at once", s.shortcut.state === "on", s.shortcut);
 }
-s = await main.invoke("screen_set_shortcut", { keys: "Shift+R" });
-check("a key alone is refused, and the shortcut before stays", !!s.error && s.shortcut.state === "on", s.error);
-s = await main.invoke("screen_set_say", { list: [{ lang: "ar", written: "AI", said: "الذكاء الاصطناعي" }, { lang: "en", written: "", said: "x" }] });
-check("say it like this is kept, empty rows dropped", s.settings.say.length === 1 && s.settings.say[0].said === "الذكاء الاصطناعي");
-// Settings in the interface, both languages
-await main.ev(`document.getElementById("btn-settings").click()`);
-await sleep(800);
-const en = await main.ev(`document.getElementById("set-screen").innerText`);
-check("Settings shows the section in English", en.includes("Read anything on the screen") && en.includes("Say it like this"), en.split("\n").slice(0, 3).join(" / "));
-const tip = await main.ev(`document.getElementById("scr-on-label").title`);
-check("its controls have tooltips", tip.includes("kept nowhere"), tip);
-await main.invoke("set_ui_language", { lang: "ar" });
-await main.ev(`location.reload()`);
-main.ws.close();
-await sleep(3000);
-const main2 = await connect((t) => t.url.startsWith("http://tauri.localhost") && !t.url.includes("player"));
-await sleep(1500);
-await main2.ev(`document.getElementById("btn-settings").click()`);
-await sleep(800);
-const ar = await main2.ev(`document.getElementById("set-screen").innerText`);
-const dir = await main2.ev(`document.documentElement.dir`);
-check("and in Arabic, right to left", ar.includes("قراءة أي نص على الشاشة") && dir === "rtl", ar.split("\n").slice(0, 2).join(" / "));
-await main2.invoke("set_ui_language", { lang: "en" });
-// Start with Windows, in the test key
-s = await main2.invoke("screen_set_start_with_windows", { on: true });
-const exe = EXE.replaceAll("/", "\\");
-check("Start with Windows writes this Dawwin, hidden", regValue().includes(`"${exe}" --hidden`), regValue().trim().split("\n").pop());
-// the small player, without taking the keyboard
-await main2.invoke("test_player_note", { note: "nothing_selected" });
-const player = await connect((t) => t.url.includes("player.html"));
-await sleep(800);
-check("the small player shows the note", (await player.ev(`document.getElementById("msg").textContent`)).includes("Nothing is selected"));
-check("its buttons have tooltips", (await player.ev(`document.getElementById("close").title`)) === "Stop and close");
+s = await a.invoke("screen_set_shortcut", { keys: "Shift+R" });
+check("a key alone is refused, the shortcut before stays", !!s.error && s.shortcut.state === "on", s.error);
+s = await a.invoke("screen_set_say", { list: [{ lang: "ar", written: "AI", said: "الذكاء الاصطناعي" }, { lang: "en", written: "", said: "x" }] });
+check("say it like this kept, empty rows dropped", s.settings.say.length === 1);
+
+// ---- Settings, both languages
+await a.ev(`showView("settings")`);
+await sleep(600);
+const en = await a.ev(`document.getElementById("set-screen").innerText`);
+check("Settings shows the section", en.includes("Read anything on the screen") && en.includes("Say it like this"), en.split("\n")[0]);
+check("its controls have tooltips", (await a.ev(`document.getElementById("scr-on-label").title`)).includes("kept nowhere"));
+await a.ev(`setUiLang('ar')`);
+await sleep(600);
+check("and in Arabic, right to left", (await a.ev(`document.getElementById("set-screen").innerText`)).includes("قراءة أي نص على الشاشة") && (await a.ev("document.documentElement.dir")) === "rtl");
+check("tooltips follow the language", (await a.ev(`document.getElementById("scr-copy-label").title`)).includes("Ctrl+C"));
+await a.ev(`setUiLang('en')`);
+
+// ---- Start with Windows, in the test key
+await a.invoke("screen_set_start_with_windows", { on: true });
+check("Start with Windows writes this Dawwin, hidden", regValue().includes(`"${APP}" --hidden`), regValue().trim().split("\n").pop());
+
+// ---- the small player: a note alone
+await a.invoke("test_player_note", { note: "nothing_selected" });
+let p = await player();
+await sleep(600);
+check("the player says when nothing is selected", (await p.ev(`document.getElementById("msg").textContent`)).includes("Nothing is selected"));
+check("its buttons have tooltips", (await p.ev(`document.getElementById("close").title`)) === "Stop and close");
 await sleep(4500);
-check("a note alone goes away by itself", (await player.ev("window.__TAURI__.window.getCurrentWindow().isVisible()")) === false);
-player.ws.close();
-// close: to the notification area while the shortcut is on
-closeWindow(app.pid);
+check("a note alone goes away by itself", (await p.ev("window.__TAURI__.window.getCurrentWindow().isVisible()")) === false);
+
+// ---- a selection read in the player, while Read aloud in the window stops
+await a.ev(`openReading({ text: "Read aloud in the window. It has three sentences. This is the last one." })`);
+await sleep(800);
+await a.ev(`readFrom(0)`);
 await sleep(1500);
-check("closing hides the window and Dawwin stays", alive(app) && (await main2.ev("window.__TAURI__.window.getCurrentWindow().isVisible()")) === false);
-const second = start();
+check("Read aloud plays in the window", await a.ev("window.__readAloud.playing"));
+const note = await a.invoke("test_screen_read", { text: "يعمل AI هنا على الحاسوب. Then an English sentence follows. وجملة ثالثة أخيرة." });
+check("a press with text reads it", note === "reading", note);
+await sleep(1500);
+const pv = () => p.ev(`(() => { const P = window.__player; return { n: P.doc ? P.doc.sentences.length : 0, i: P.i, playing: P.playing, paused: P.audio.paused, id: P.doc?.id, first: P.doc?.sentences[0]?.text, msg: document.getElementById("msg").textContent, visible: null }; })()`);
+let st = await pv();
+check("the player reads it, sentence by sentence", st.n === 3 && st.playing, st);
+check("say it like this was applied", st.first === "يعمل الذكاء الاصطناعي هنا على الحاسوب.", st.first);
+check("Read aloud in the window stopped", !(await a.ev("window.__readAloud.playing")));
+const docId = st.id;
+await p.ev(`document.getElementById("pause").click()`);
+await sleep(400);
+st = await pv();
+check("pause", !st.playing && st.paused, st);
+await p.ev(`document.getElementById("resume").click()`);
+await sleep(600);
+check("and on again", (await pv()).playing);
+await p.ev(`document.getElementById("forward").click()`);
+await sleep(600);
+st = await pv();
+check("forward a sentence", st.i >= 1, st);
+await p.ev(`window.__player.audio.currentTime = 0; document.getElementById("back").click()`);
+await sleep(600);
+st = await pv();
+check("back a sentence", st.i === 0 || st.i < 2, st);
+const again = await a.invoke("test_screen_read", { text: "whatever is selected now" });
+await sleep(800);
+st = await pv();
+check("the shortcut again stops", again === "stopped" && st.n === 0 && !st.playing, { again, st });
+const cache = join(home, "cache", "reading", docId);
+check("the selection is forgotten with the sound made of it", !existsSync(cache));
+const prefs = existsSync(join(home, "reading.json")) ? readFileSync(join(home, "reading.json"), "utf8") : "";
+check("and no place of it is kept", !prefs.includes("selection:"));
+// to its end, by itself
+await a.invoke("test_screen_read", { text: "One short sentence." });
+for (let i = 0; i < 40 && (await pv()).n; i++) await sleep(250);
+check("a reading that ends lets the player go", (await pv()).n === 0);
+p.ws.close();
+
+// ---- closing to the notification area, and starting again
+closeMainWindow(a.proc.pid);
+await sleep(1500);
+check("closing hides the window, and Dawwin stays", alive(a.proc) && (await visible()) === false);
+const second = spawn(APP, [], { stdio: "ignore", env: { ...process.env, DAWWIN_HOME: home, WEBVIEW2_USER_DATA_FOLDER: join(OUT, "webview-screen-2") } });
 await sleep(4000);
-check("starting it again opens the window, and the second one quits", (await main2.ev("window.__TAURI__.window.getCurrentWindow().isVisible()")) === true && !alive(second));
-// files
-for (const [file, want] of [
-  ["book.epub", "الفصل الأول"],
-  ["chrome.pdf", "تجربة قراءة PDF"],
-  ["word.pdf", "مرحبًا، هذه فقرة مختلقة"],
-  ["scan.pdf", "تجربة قراءة PDF"],
-  ["scan.png", "تجربة قراءة PDF"],
-]) {
-  const o = await main2.invoke("screen_open_file", { path: join(SP, "trial-b", file) });
-  const text = o.parts ? o.parts.map((p) => p.title + "\n" + p.text).join("\n") : JSON.stringify(o);
-  check(`opens ${file}`, text.includes(want), (o.parts ? `${o.kind}, ${o.parts.length} parts, recognised ${o.recognised}: ` : "") + text.replace(/\s+/g, " ").slice(0, 70));
+check("starting it again opens the window, and the second one quits", (await visible()) === true && !alive(second));
+
+// ---- files in Read aloud
+const rs = () => a.ev(`(() => { const R = window.__readAloud; return { n: R.doc ? R.doc.sentences.length : 0, i: R.i, title: R.doc?.title, text: R.doc ? R.doc.sentences.slice(0, 3).map(s => s.text).join(" ") : "", chapters: document.getElementById("read-chapters")?.hidden ? 0 : document.getElementById("read-chapters")?.options.length }; })()`);
+const openFile = (path) => a.ev(`window.__TAURI__.core.invoke("reading_open", { path: ${JSON.stringify(path)}, text: null, transcript: null, language: null }).then(() => "ok", (e) => String(e))`);
+if (!PDFS) {
+  console.log("skipped: the files (set DAWWIN_E2E_PDFS to a folder made by tools/trials/pdf/make_pdfs.py)");
+} else {
+  check("Read aloud offers the new kinds", (await a.invoke("reading_formats")).includes("epub"));
+  await a.ev(`openReading({ path: ${JSON.stringify(join(PDFS, "book.epub"))} })`);
+  await sleep(1200);
+  let r = await rs();
+  check("an e-book opens with its chapters to choose", r.n > 2 && r.chapters === 2 && r.text.startsWith("الفصل الأول"), r);
+  await a.ev(`goToChapter(Number(document.getElementById("read-chapters").options[1].value))`);
+  const at = (await rs()).i;
+  await a.ev(`closeReading()`);
+  await a.ev(`openReading({ path: ${JSON.stringify(join(PDFS, "book.epub"))} })`);
+  await sleep(1000);
+  check("and comes back to where it was", (await rs()).i === at && at > 0, { at, now: (await rs()).i });
+  const before = await openFile(join(PDFS, "chrome.pdf"));
+  check("a PDF asks for PDFium first", before === "needs-pdfium", before);
+  if (!pack) {
+    console.log("skipped: PDFium (put the release's dawwin-pdfium-*.tar.xz in DAWWIN_E2E_TOOLS)");
+  } else {
+    const got = await a.ev(`window.__TAURI__.core.invoke("screen_install_pdfium").then(() => "ok", (e) => String(e))`);
+    check("PDFium comes from the release, checked", got === "ok", got);
+    for (const [f, want] of [["chrome.pdf", "تجربة قراءة PDF مرحبًا، هذه فقرة مختلقة"], ["word.pdf", "مرحبًا، هذه فقرة مختلقة"], ["scan.pdf", "تجربة قراءة PDF"], ["scan.png", "تجربة قراءة PDF"]]) {
+      if (!existsSync(join(PDFS, f))) { console.log(`skipped: ${f}`); continue; }
+      await a.ev(`openReading({ path: ${JSON.stringify(join(PDFS, f))} })`);
+      await sleep(f.startsWith("scan") ? 2500 : 1200);
+      r = await rs();
+      check(`opens ${f}`, r.text.includes(want), r.text.slice(0, 80));
+    }
+  }
+  // ---- save as sound: a job in the list
+  await a.ev(`openReading({ path: ${JSON.stringify(join(PDFS, "book.epub"))} })`);
+  await sleep(1000);
+  const docNow = await a.ev("window.__readAloud.doc.id");
+  const dest = join(OUT, "screen-book.m4b");
+  const job = await a.ev(`window.__TAURI__.core.invoke("reading_save_sound_to_path", { doc: ${JSON.stringify(docNow)}, path: ${JSON.stringify(dest)} }).catch((e) => "error: " + e)`);
+  check("saving as sound starts a job in the list", typeof job === "string" && !job.startsWith("error"), job);
+  let j;
+  for (let i = 0; i < 240; i++) {
+    j = (await a.state()).queue.find((x) => x.id === job);
+    if (!j || !["saving_audio"].includes(j.status)) break;
+    await sleep(250);
+  }
+  const m4b = existsSync(dest) ? readFileSync(dest) : Buffer.alloc(0);
+  check("it ends with the book saved, with its chapters", j?.status === "done" && m4b.includes(Buffer.from("chpl")) && m4b.includes(Buffer.from("Chapter two")), { status: j?.status, error: j?.error, bytes: m4b.length });
+  check("the job shows in the list, and opens the file's folder", (await a.ev(`document.querySelector('#queue li[data-key="${job}"] .doing')?.textContent || ""`)).includes("sound"));
 }
-const r = await main2.invoke("screen_read_text", { text: "يعمل AI هنا.", path: null });
-check("a text goes to the reader", r === null || r === undefined, JSON.stringify(r));
-// off, and closing quits as before
-s = await main2.invoke("screen_set_on", { on: false });
-check("off: the shortcut is let go and Start with Windows removed", s.shortcut.state === "off" && !regValue().includes("--hidden"));
-closeWindow(app.pid);
-for (let i = 0; i < 20 && alive(app); i++) await sleep(500);
-check("with the shortcut off, closing the window quits Dawwin", !alive(app));
-if (alive(app)) app.kill();
-try {
-  execFileSync("reg", ["delete", "HKCU\\Software\\Dawwin-test-harness-1-8", "/f"]);
-} catch {}
-console.log(`\n${results.filter((x) => x.startsWith("PASS")).length} of ${results.length} passed`);
-process.exit(0);
+
+// ---- off: closing quits as before
+s = await a.invoke("screen_set_on", { on: false });
+check("off: the shortcut let go, Start with Windows removed", s.shortcut.state === "off" && !regValue().includes("--hidden"));
+closeMainWindow(a.proc.pid);
+for (let i = 0; i < 20 && alive(a.proc); i++) await sleep(500);
+check("with the shortcut off, closing the window quits Dawwin", !alive(a.proc));
+if (alive(a.proc)) a.close();
+cleanReg();
+server?.close();
+finish();

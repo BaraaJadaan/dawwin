@@ -53,9 +53,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   pass** (`timing.rs`) transcribes each stretch of a line between two pauses again, only to learn which
   words fall in it (`Segment::heard`); those rough texts are matched word by word, with Arabic letters
   folded, to the line's own text, which is never changed. Inside a stretch the words go by their share
-  of it. Whisper reads every piece as 30 seconds, so hearing each stretch again would cost it five
-  times the transcription: it is heard once a line instead, and its own phrase times (the engine's
-  `"phrases"`) are what was heard. Measured on talks made with the voices of Windows (`tools/timing`,
+  of it. Whisper reads every piece as 30 seconds, so for it the pass costs five and a half times the
+  transcription; its own phrase times were measured instead and placed only 70 % of the words. Measured on talks made with the voices of Windows (`tools/timing`,
   and each model in the **Engine** workflow): 98 to 99 % of the words within half a second, against
   43 to 47 % before. It costs about 1.5 times the transcription again, and runs only
   for a video with subtitles, a folder run that writes SRT or VTT, a subtitle export (which waits for it),

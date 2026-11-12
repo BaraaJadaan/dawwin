@@ -47,7 +47,10 @@ in ten within half a second, and at most one subtitle in twenty gone before its 
 | Canary | 43 % → **99 %** | 17 of 43 → **2 of 41** | 0.8 times |
 | Whisper, each stretch heard again | 46 % → 99 % | 18 of 43 → 3 of 42 | 5.5 times: Whisper reads every piece as 30 s |
 
-So Whisper is heard once a line instead, with its own phrase times (see `timing::pass`).
+Whisper's own phrase times were tried instead, one hearing a line (0.85 times the transcription):
+only 70 % of the words within half a second, and 13 subtitles of 44 gone before their last word. So
+Whisper is heard stretch by stretch too, and its timing pass costs five and a half times its
+transcription. It runs only when subtitles or Follow words are wanted.
 
 In transcribe.cpp 0.4.1 no model Dawwin uses gives word times: Cohere and Canary give none, Whisper
 only times whole phrases. So there is no model truth to measure against; the voices of Windows are.

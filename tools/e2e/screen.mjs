@@ -117,6 +117,16 @@ check("and in Arabic, right to left", (await a.ev(`document.getElementById("set-
 check("tooltips follow the language", (await a.ev(`document.getElementById("scr-copy-label").title`)).includes("Ctrl+C"));
 await a.ev(`setUiLang('en')`);
 
+// ---- How to use: a part of its own, with its picture, in both languages
+for (const lang of ["en", "ar"]) {
+  await a.ev(`setUiLang(${JSON.stringify(lang)}); document.getElementById("guide-items").dataset.lang = ""; showView("guide")`);
+  await sleep(700);
+  const parts = await a.ev(`[...document.querySelectorAll('#guide-items h2')].map(h => h.textContent)`);
+  const pic = await a.ev(`[...document.querySelectorAll('#guide-items img')].some(i => i.src.endsWith("/${lang}/screen.webp") && i.naturalWidth > 0)`);
+  check(`How to use has thirteen parts, Read anything on the screen after Read aloud (${lang})`, parts.length === 13 && parts.findIndex((p) => p.includes(lang === "ar" ? "اقرأ أي نص على الشاشة" : "Read anything on the screen")) === parts.findIndex((p) => p.includes(lang === "ar" ? "اسمع أي نص مقروءًا" : "Have any text read aloud")) + 1 && pic, parts);
+}
+await a.ev(`setUiLang('en')`);
+
 // ---- Start with Windows, in the test key
 await a.invoke("screen_set_start_with_windows", { on: true });
 check("Start with Windows writes this Dawwin, hidden", regValue().includes(`"${APP}" --hidden`), regValue().trim().split("\n").pop());

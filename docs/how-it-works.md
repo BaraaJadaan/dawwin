@@ -36,6 +36,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/instance.rs` | One Dawwin per data folder: started again, it brings the open window forward and quits. |
 | `src-tauri/src/reading/` | Read aloud: files into text (`formats.rs`), sentences and runs of one language by script (`text.rs`), numbers in words (`numbers.rs`), the voices (`voices.rs`), the voice program (`voice.rs`), and the reader that makes each sentence and the next ones ahead (`mod.rs`). |
 | `voice/` | `dawwin-voice.exe`: the voice, around [audio.cpp](https://github.com/0xShug0/audio.cpp)'s official library, loaded at run time; JSON lines on stdin/stdout, no port. Downloaded with the first voice, with VoxCPM 2's ready-made voices (`voice/refs`). |
+| `src-tauri/src/selection/` | The text selected in another program (1.8.0): UI Automation's text pattern on the focused element or an ancestor, else Ctrl+C with every clipboard format kept and put back; terminals and windows run as administrator left alone. The decision is tested from recorded answers; `tools/trials/selection` tries it behind a real shortcut. |
+| `src-tauri/src/screen/` | Read anything on the screen (1.8.0): the shortcut on a thread of its own (`shortcut.rs`), the notification area, closing to it and Start with Windows (`app.rs`, `autostart.rs`), the small player (`ui/player.html`), Say it like this (`say.rs`); and the files it adds to Read aloud: PDF through PDFium with the characters put in reading order by where they sit (`pdf.rs`, `layout.rs`), EPUB (`epub.rs`, `markup.rs`), pictures through Windows' own OCR (`ocr.rs`), and saving a reading as M4A or M4B with chapters (`sound.rs`). |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 | `src-tauri/src/speakers.rs` | Who said what: the speaker model's turns given to the lines, a line split where the speaker changes, rename, merge, a line given to someone else. |
 | `src-tauri/src/language.rs` | Detect the language: the first half minute of speech heard in pieces, and the decision among the languages with a model. |
@@ -161,7 +163,19 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   ffmpeg, the larger first, else one on the PATH; burning in takes the video one, or an installed ffmpeg
   that has libass. The **Tools** workflow builds and packs them (`tools/pack.py`), tries them on Windows
   with the app's own unpacking on files of the kinds people bring, runs the app's own sound and video
-  tests on them, and, run by hand with a tag, puts them on that release.
+  tests on them, and, run by hand with a tag, puts them on that release. **PDFium** (1.8.0), for reading
+  PDFs aloud, is pdfium-binaries' official Windows build, checked against its SHA-256 by the workflow and
+  packed with the licenses of what is inside it; the workflow's unpack test reads a made-up Arabic PDF
+  with the packed DLL. It comes with the first PDF opened in Read aloud.
+- **Arabic out of PDFs.** PDFium gives each character with its box; `screen::layout` puts each row's
+  characters in order by where they sit, then from visual into reading order (a right-to-left line
+  reversed, its Latin words and numbers turned back, brackets mirrored), with PDFium's own word spaces.
+  Chrome's "print to PDF" keeps some words' glyphs in drawing order, which PDFium alone gives back
+  reversed; Word's PDFs keep diacritics on lines of their own. Measured on made-up files in
+  `tools/trials/pdf` (README there): 1 % of letters wrong on Chrome's, 12 % on Word's (most of it in
+  Word's own character map), 4 % on an old visual-order file; pdf_oxide 0.3.78 was 65–71 % on all.
+  A page without text is drawn 2000 pixels wide and read by Windows' OCR, whose Arabic lines come back
+  with their words from left to right: `ocr::logical` turns them round.
 - **Who said what.** The engine runs NVIDIA's Streaming Sortformer (4 speakers at most) on the
   processor, next to the speech model wherever that runs, at its offline operating point; one request
   for the whole recording, which a `stop` request ends. When silences were taken out it hears what the

@@ -49,8 +49,11 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 - **Voice notes.** WhatsApp voice notes to text.
 - **Accessibility.** Captions for people who are deaf or hard of hearing, and any text read aloud for
   people who find reading hard.
-- **Listening instead of reading.** An article, a report or a long document read aloud while you do
-  something else; a meeting's translation heard in the language you follow best.
+- **Listening instead of reading.** An article, a report, a PDF or an e-book read aloud while you do
+  something else, or saved as a sound file for the road; a meeting's translation heard in the language
+  you follow best.
+- **Anything you are reading, read to you.** Select text in a browser, an email, a chat or a PDF and press
+  a shortcut: Dawwin reads it in a natural voice, without copying and pasting it anywhere.
 - **Learning a language.** Read along with **Follow words**, with the translation under each line.
 - **Confidential recordings.** Legal, medical, HR and other private calls are transcribed on your
   own machine, never on someone else's server.
@@ -203,7 +206,40 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   English and is the smallest. Hear each one in **Settings** before you download it. The voices run on
   your PC like everything else: the text never leaves it.
 
+- New in 1.8: **PDFs** (the first one brings PDFium, 3 MB), read in the right order also in Arabic;
+  **e-books** (EPUB), with their chapters to go to and the place remembered; and **pictures of text** and
+  scanned PDFs, read by Windows' own text recognition (Windows says which language to add when it
+  cannot read one).
+- **Save as sound** (new in 1.8): the reading as a sound file to listen to away from the computer, M4A,
+  or M4B with a chapter for each chapter of a book. It is made in the list of jobs, with its progress,
+  and can be stopped there.
+
 ![Read aloud: an article with the sentence being read marked, the Arabic and English voices chosen at the top, and the player at the bottom.](docs/screenshots/read.png)
+
+**Read anything on the screen** (new in 1.8)
+
+- Select text in any program, a web page, a Word document, a PDF, an email or a chat, and press
+  **Ctrl+Shift+Space**: Dawwin reads it in the voices of Read aloud, in a small player at the corner of the
+  screen that leaves the keyboard where it was, with pause and back and forward a sentence. Press the
+  shortcut again to stop. Turn it on in **Settings → Read anything on the screen**, where the keys can be
+  changed; if another program already uses them, Dawwin says so and offers free ones.
+- While the shortcut is on, closing Dawwin's window keeps it in the notification area, ready; **Start with
+  Windows** (off until you turn it on) starts it there when you sign in. Starting Dawwin again opens its
+  window.
+- Dawwin asks the program for its selection through Windows' accessibility interface. Where a program
+  does not give it that way, Dawwin presses Ctrl+C for you and puts back what you had copied, text,
+  pictures and all; never in a terminal, where Ctrl+C would stop the running program, and it can be
+  turned off. With nothing selected, it says so instead of reading old text. In a window that runs as
+  administrator, Windows lets no ordinary program read, and Dawwin says that too.
+- **Say it like this**: names and terms the voice says wrongly, with how to say them, for Arabic and for
+  English sentences.
+- Tried on: a test window of its own (a standard text box, and one that only answers Ctrl+C). Not yet
+  tried in Chrome, Edge, Firefox, Word, Outlook, a PDF viewer, VS Code, Windows Terminal, WhatsApp or
+  Telegram: it is built for them, and how each answers is still to be seen.
+
+![Read anything on the screen in Settings: the shortcut turned on, Ctrl+Shift+Space, copying the selection on, Start with Windows off, and a word in Say it like this.](docs/screenshots/screen.png)
+
+![The small player reading a selection: the sentence being read, back, pause, forward and close.](docs/screenshots/player.png)
 
 **Sound** (new in 1.3)
 
@@ -325,9 +361,12 @@ translation model translated a short line in about 2 seconds on a small cloud CP
 same kind of CPU, the minutes of a meeting of eight minutes took about 4½ minutes with Jais-3 7B and
 under a minute with Jais-3 0.9B.
 
+7. To have text you select in other programs read, turn on the shortcut in **Settings → Read anything
+   on the screen**, select some text and press **Ctrl+Shift+Space**. It reads in the voices of step 6.
+
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation or minutes model
-without a GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg and
-the voice program download only for those who use them.
+without a GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg,
+the voice program and PDFium download only for those who use them.
 
 ## How the translation models were chosen
 
@@ -440,7 +479,11 @@ Dawwin goes online only when you ask it to: to download a model (from
 turn that on in Settings). Recordings, transcripts, translations and minutes stay on your computer. A meeting you
 record is captured from your own microphone and speakers only: nothing joins the call, and the
 recording is never sent anywhere. Recording a call may still need the consent of everyone on it, which
-Dawwin reminds you of before the first recording. The
+Dawwin reminds you of before the first recording. Text you select in other programs to have it read is
+read on your computer and kept nowhere: not in History, not in a log, not even its place, and the sound
+made of it is deleted when the reading stops. Where Dawwin has to press Ctrl+C to get it, the program
+copies it, so it can show in Windows' clipboard history (Win+V) if you use that; Dawwin then puts back
+what you had copied. The
 translator, which also writes the minutes, listens only to Dawwin on the same computer, with a key it
 is given at start.
 
@@ -493,6 +536,10 @@ the model folder, if you chose another place for it).
   [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license, and for the voices
   [audio.cpp](https://github.com/0xShug0/audio.cpp)'s official library, under Apache-2.0, around which
   Dawwin's own voice program ([voice](voice)) is built.
+- **PDFium**: Google's PDF library, under the BSD 3-Clause license, in the Windows build of
+  [pdfium-binaries](https://github.com/bblanchon/pdfium-binaries) (MIT). It holds FreeType (FreeType
+  License), ICU, zlib, libpng, libjpeg-turbo, OpenJPEG, Little CMS, HarfBuzz, Abseil, Highway, AGG 2.3,
+  simdutf and fast_float; the download carries all their licenses.
 - **ffmpeg**: Dawwin's own builds of [FFmpeg](https://ffmpeg.org), under the LGPL 2.1, made by
   [tools/ffmpeg/build.sh](tools/ffmpeg/build.sh) from FFmpeg's source. The one for video also holds
   [libass](https://github.com/libass/libass), [FreeType](https://freetype.org),

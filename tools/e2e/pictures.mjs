@@ -3,7 +3,8 @@
 // (docs/screenshots/minutes.png) and Read aloud (docs/screenshots/read.png), from the real app, in
 // English and Arabic. Made-up data only. Writes into the repository: look at what it made before
 // committing.
-//   node tools/e2e/pictures.mjs [part …]     (parts: steps sound home speakers minutes settings read; all by default)
+//   node tools/e2e/pictures.mjs [part …]     (parts: steps sound home speakers minutes settings read screen; all by default)
+// "screen" also makes docs/screenshots/screen.png and player.png (Read anything on the screen).
 // "settings" (the subtitle look with its preview) needs DAWWIN_E2E_TOOLS, and a full ffmpeg for its video.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -187,6 +188,38 @@ In a survey of 1,200 employees, 64% said they would like at least two days a wee
     await picture(join(dir, "read.webp"), await box(["#read-doc"], 0));
     if (lang === "en") await picture(join(REPO, "docs", "screenshots", "read.png"), { x: 0, y: 0, width: 1200, height: 820 }, "png");
     await a.ev(`closeReading(); showView('home')`);
+  }
+  if (wanted("screen")) {
+    // Read anything on the screen in Settings, the shortcut on as a user sees it (drawn so, without
+    // taking the shortcut on this PC), with a word in Say it like this
+    await a.ev(`showView('settings')`);
+    await sleep(500);
+    const say = lang === "ar" ? { lang: "ar", written: "AI", said: "إيه آي" } : { lang: "en", written: "Dawwin", said: "Dow-win" };
+    await a.ev(`(async()=>{const s=await window.__TAURI__.core.invoke('screen_state');s.settings.on=true;s.settings.say=[${JSON.stringify(say)}];s.shortcut={state:'on',keys:s.settings.shortcut};window.__screen.render(s);document.getElementById('set-screen').scrollIntoView({block:'start'});})()`);
+    await sleep(500);
+    const area = await box(["#set-screen"]);
+    await picture(join(dir, "screen.webp"), area);
+    if (lang === "en") {
+      await picture(join(REPO, "docs", "screenshots", "screen.png"), area, "png");
+      // the small player reading a selection, with the stand-in voice: its own window
+      await a.invoke("test_screen_read", { text: "The small player reads what you selected, in the voice you chose. Press the shortcut again to stop." });
+      for (let i = 0; i < 40; i++) {
+        const t = (await (await fetch(`http://127.0.0.1:${PORT + 12}/json`)).json()).find((x) => x.type === "page" && x.url.includes("player.html"));
+        if (t) {
+          const ws = new WebSocket(t.webSocketDebuggerUrl);
+          await new Promise((r) => (ws.onopen = r));
+          await sleep(1200);
+          const shot = await new Promise((r) => { ws.onmessage = (m) => { const d = JSON.parse(m.data); if (d.id === 1) r(d); }; ws.send(JSON.stringify({ id: 1, method: "Page.captureScreenshot", params: { format: "png" } })); });
+          writeFileSync(join(REPO, "docs", "screenshots", "player.png"), Buffer.from(shot.result.data, "base64"));
+          console.log("made", join(REPO, "docs", "screenshots", "player.png"));
+          ws.close();
+          break;
+        }
+        await sleep(250);
+      }
+      await a.invoke("test_screen_read", { text: "stop" });
+    }
+    await a.ev(`showView('home')`);
   }
   if (wanted("home") && lang === "en") {
     await steps({ transcribe: true });

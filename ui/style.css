@@ -488,6 +488,11 @@ mark.current { background: var(--mark-current); color: #1c1203; }
 .read-head .t-title-row { justify-content: space-between; }
 .read-head-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .read-head-tools select { max-width: 260px; }
+/* read anything on the screen, in Settings (1.8.0) */
+#scr-keys { flex: none; width: 220px; }
+.scr-say-row { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; }
+.scr-say-row .select { flex: none; width: 130px; }
+.scr-say-row input.input { flex: 1; min-width: 0; }
 .read-voices { gap: 14px; flex-wrap: wrap; }
 .read-voice { display: inline-flex; align-items: center; gap: 6px; }
 .read-text-box { flex: 1; overflow-y: auto; padding: 18px 28px 48px; font-size: 17px; line-height: 1.9; max-width: 860px; width: 100%; margin: 0 auto; }

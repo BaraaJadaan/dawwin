@@ -30,6 +30,8 @@ Object.assign(I18N.en.s, {
   "scr.chaptersTip": "Go to a chapter",
   "scr.pdfiumAsk": "Reading PDFs needs PDFium, a download of about 4 MB, once. Download it now?",
   "scr.pdfiumGetting": "Downloading PDFium…",
+  "guide.screenTitle": "Read anything on the screen",
+  "guide.screenText": "In Settings, under Read anything on the screen, turn on the shortcut. Then select text in any program, a web page, a Word document, a PDF, an email or a chat, and press Ctrl+Shift+Space: Dawwin reads it in the voices of Read aloud, in a small player at the corner of the screen that leaves the keyboard where it was, with pause, back and forward a sentence. Press the shortcut again to stop. If another program already uses those keys, Dawwin says so and offers free ones. While the shortcut is on, closing Dawwin's window keeps it in the notification area, and it can start with Windows. Where a program does not show Dawwin what is selected, Dawwin presses Ctrl+C for you and puts back what you had copied, never in a terminal (this can be turned off). What you select is read on this computer and kept nowhere. Words the voice gets wrong go in Say it like this.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -60,7 +62,11 @@ Object.assign(I18N.ar.s, {
   "scr.chaptersTip": "انتقل إلى فصل",
   "scr.pdfiumAsk": "تحتاج قراءة ملفات PDF إلى PDFium، تنزيل بحجم 4 ميغابايت تقريبًا مرة واحدة. أتنزّله الآن؟",
   "scr.pdfiumGetting": "يُنزَّل PDFium…",
+  "guide.screenTitle": "اقرأ أي نص على الشاشة",
+  "guide.screenText": "من الإعدادات، تحت «قراءة أي نص على الشاشة»، شغّل الاختصار. ثم حدِّد نصًا في أي برنامج، صفحة ويب أو مستند Word أو ملف PDF أو بريد أو محادثة، واضغط Ctrl+Shift+Space: يقرؤه دَوِّن بأصوات «القراءة بصوت عالٍ» في مشغّل صغير في زاوية الشاشة يترك لوحة المفاتيح حيث كانت، فيه إيقاف مؤقت ورجوع جملة وتقدّم جملة. اضغط الاختصار مرة أخرى للإيقاف. وإن كان برنامج آخر يستخدم تلك المفاتيح قال لك دَوِّن ذلك واقترح مفاتيح خالية. وما دام الاختصار مشغّلًا فإغلاق نافذة دَوِّن يُبقيه في منطقة الإشعارات، ويمكن أن يبدأ مع ويندوز. وحيث لا يُطلع البرنامج دَوِّن على ما حُدِّد فيه، يضغط دَوِّن Ctrl+C عنك ثم يعيد ما كنت نسخته، ولا يفعل ذلك في الطرفية أبدًا (ويمكن إطفاء ذلك). ما تحدِّده يُقرأ على هذا الحاسوب ولا يُحفظ في أي مكان. والكلمات التي ينطقها الصوت خطأً تضعها في «انطقها هكذا».",
 });
+
+
 
 (function () {
   const call = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
@@ -237,7 +243,13 @@ Object.assign(I18N.ar.s, {
     }
   }
 
-  window.addEventListener("DOMContentLoaded", refresh);
+  window.addEventListener("DOMContentLoaded", () => {
+    // How to use: a part of its own, after Read aloud (app.js, which lists the parts, comes after this file)
+    if (typeof GUIDE !== "undefined" && !GUIDE.includes("screen")) GUIDE.splice(GUIDE.indexOf("read") + 1, 0, "screen");
+    refresh();
+  });
+  // what the pictures of How to use show (tools/e2e/pictures.mjs)
+  window.__screen = { render };
   // the interface language changed: the tooltips and the lists follow
   new MutationObserver(() => state && render(state)).observe(document.documentElement, { attributes: true, attributeFilter: ["lang"] });
 })();

@@ -163,10 +163,20 @@ function renderReadDoc() {
   body.lang = d.lang;
   // a long book has thousands of sentences: plain elements in one go, one click handler for all
   const frag = document.createDocumentFragment();
-  let block = -1, el = null;
+  let block = -1, el = null, who = null;
+  const names = new Map((d.speakers || []).map(([id, name]) => [id, name]));
   d.sentences.forEach((s, i) => {
     if (s.block !== block) {
       block = s.block;
+      // in a transcript with speakers, each one's name where they start to speak (each reads in a voice of their own)
+      if (s.speaker != null && s.speaker !== who) {
+        const label = document.createElement("div");
+        label.className = "read-who";
+        label.dir = "auto";
+        label.textContent = names.get(s.speaker) || "";
+        frag.append(label);
+      }
+      who = s.speaker;
       el = document.createElement(s.kind === "heading" ? "h2" : s.kind === "item" ? "li" : "p");
       el.className = "read-block read-" + s.kind;
       // the paragraph's own direction: its sentences are isolated, so "auto" would see none of them
@@ -215,7 +225,7 @@ function markSentence(scroll = true) {
 async function openReading(source) {
   stopReading();
   try {
-    const doc = await invoke("reading_open", { path: null, text: null, transcript: null, language: null, ...source });
+    const doc = await invoke("reading_open", { path: null, text: null, transcript: null, language: null, minutes: null, ...source });
     READ.doc = doc;
     READ.i = Math.min(doc.place || 0, doc.sentences.length - 1);
     READ.error = "";
@@ -348,6 +358,16 @@ READ.audio.addEventListener("ended", () => {
     paintReadPlayer();
   }
 });
+
+/** A Listen button for something read from elsewhere: `source` is what reading_open takes. */
+function readListenButton(source, tip) {
+  const b = document.createElement("button");
+  b.className = "btn btn-sm";
+  b.textContent = t("read.listen");
+  if (typeof describe === "function") describe(b, tip); else b.title = tip;
+  b.onclick = () => openReading(source);
+  return b;
+}
 
 async function pickReadFile() {
   const path = await invoke("reading_pick_file");

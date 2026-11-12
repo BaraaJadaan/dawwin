@@ -131,16 +131,16 @@ pub fn read(paths: &Paths, path: &Path) -> std::result::Result<crate::reading::f
                     if lines.peek().is_some_and(|l| *l == title) {
                         lines.next();
                     }
-                    blocks.push(Block { kind: B::Heading, text: title.to_string() });
+                    blocks.push(Block { kind: B::Heading, text: title.to_string(), speaker: None });
                 }
-                blocks.extend(lines.map(|l| Block { kind: B::Paragraph, text: l.to_string() }));
+                blocks.extend(lines.map(|l| Block { kind: B::Paragraph, text: l.to_string(), speaker: None }));
             }
         }
         Kind::Pdf | Kind::Picture => {
             for part in &o.parts {
                 let text = run_on(&part.text);
                 if !text.is_empty() {
-                    blocks.push(Block { kind: B::Paragraph, text });
+                    blocks.push(Block { kind: B::Paragraph, text, speaker: None });
                 }
             }
         }

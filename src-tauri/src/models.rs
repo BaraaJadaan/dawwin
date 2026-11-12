@@ -32,10 +32,12 @@ pub enum Family {
     Translator,
     Speakers,
     Language,
+    /// The models that write minutes, run by the translator's server too
+    Minutes,
 }
 
 impl Family {
-    pub const ALL: [Family; 6] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Speakers, Family::Language];
+    pub const ALL: [Family; 7] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Speakers, Family::Language, Family::Minutes];
 
     /// What the settings and the interface call it.
     pub fn key(self) -> &'static str {
@@ -46,6 +48,7 @@ impl Family {
             Family::Translator => "translator",
             Family::Speakers => "speakers",
             Family::Language => "language",
+            Family::Minutes => "minutes",
         }
     }
 
@@ -69,6 +72,7 @@ impl Family {
             Family::Translator => "MiLMMT-46",
             Family::Speakers => "NVIDIA Streaming Sortformer 4spk v2.1",
             Family::Language => "VoxLingua107 ECAPA-TDNN",
+            Family::Minutes => "Minutes model",
         }
     }
 }
@@ -117,9 +121,9 @@ pub struct Variant {
     pub family: Family,
     /// The name on the transcripts it makes
     pub label: &'static str,
-    repository: &'static str,
+    pub(crate) repository: &'static str,
     /// The revision the checksum belongs to: it cannot change under the app.
-    revision: &'static str,
+    pub(crate) revision: &'static str,
     pub file: &'static str,
     pub sha256: &'static str,
     pub size: u64,
@@ -130,7 +134,7 @@ pub struct Variant {
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 9] = [
+pub const VARIANTS: [Variant; 12] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -235,6 +239,42 @@ pub const VARIANTS: [Variant; 9] = [
         file: "lang-id-voxlingua107-ecapa-Q8_0.gguf",
         sha256: "063e6cb0af3d53085fc7d68356dfde5ecee2ffa7bc79855f7e4ff930081bfe3a",
         size: 26_693_632,
+        prompt: None,
+    },
+    // Minutes: the places the maintainer's rule fills, from tools/bench-minutes (results-1.6.0.md):
+    // the best (Jais-3 7B, which with its context in 8 bits also fits an 8 GB GPU, so it fills the
+    // second place too), the best for its size, and the smallest that is still decent. All Apache 2.0.
+    Variant {
+        id: "min-jais3-7b",
+        family: Family::Minutes,
+        label: "Jais-3 7B · Q4",
+        repository: "IFM/Jais-3-7B-GGUF",
+        revision: "e171351744258b67bb6eb445e76d9d122bf542c0",
+        file: "Jais-3-7B-Q4_K_M.gguf",
+        sha256: "a8caa7fecf38d064f216f66d3d59641c1fbefdca9756af0703f4a872ab852eeb",
+        size: 5_592_226_016,
+        prompt: None,
+    },
+    Variant {
+        id: "min-ministral3-3b",
+        family: Family::Minutes,
+        label: "Ministral 3 3B · Q4",
+        repository: "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+        revision: "eb599d408350ea2bb60452cb86be7c7b2fc28227",
+        file: "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+        sha256: "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
+        size: 2_147_023_008,
+        prompt: None,
+    },
+    Variant {
+        id: "min-jais3-0.9b",
+        family: Family::Minutes,
+        label: "Jais-3 0.9B · Q4",
+        repository: "IFM/Jais-3-0.9B-GGUF",
+        revision: "870b38e7b9c515cb733aa70bbef0d16b1c80771a",
+        file: "Jais-3-0.9B-Q4_K_M.gguf",
+        sha256: "e56a4b769c397a1fd2620cf1eec94513debb1664092d0dfad4af01083c2ac3b0",
+        size: 666_192_384,
         prompt: None,
     },
 ];
@@ -403,8 +443,8 @@ pub fn check_file(path: &Path) -> Result<Family> {
     if !head.starts_with(b"GGUF") {
         bail!(crate::tr!("That is not a model file."));
     }
-    // a translation model is one of ours: its prompt depends on which model it is
-    if let Some(v) = variant_of(path).filter(|v| v.family == Family::Translator) {
+    // a translation or minutes model is one of ours: how it is asked depends on which model it is
+    if let Some(v) = variant_of(path).filter(|v| matches!(v.family, Family::Translator | Family::Minutes)) {
         return Ok(v.family);
     }
     architecture(&head)

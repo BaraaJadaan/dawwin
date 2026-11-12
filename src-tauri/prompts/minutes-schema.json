@@ -1,0 +1,63 @@
+{
+  "type": "object",
+  "properties": {
+    "kind": {"type": "string", "enum": ["meeting", "lecture", "interview", "other"]},
+    "topics": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {"type": "string", "maxLength": 300},
+          "line": {"type": "integer", "minimum": "LOWEST", "maximum": "HIGHEST"}
+        },
+        "required": ["title", "line"],
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string", "maxLength": 300},
+          "lines": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "integer", "minimum": "LOWEST", "maximum": "HIGHEST"}}
+        },
+        "required": ["text", "lines"],
+        "additionalProperties": false
+      }
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "who": {"type": "string", "maxLength": 300},
+          "what": {"type": "string", "maxLength": 300},
+          "due": {"type": "string", "maxLength": 300},
+          "lines": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "integer", "minimum": "LOWEST", "maximum": "HIGHEST"}}
+        },
+        "required": ["who", "what", "due", "lines"],
+        "additionalProperties": false
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "properties": {
+          "text": {"type": "string", "maxLength": 300},
+          "lines": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "integer", "minimum": "LOWEST", "maximum": "HIGHEST"}}
+        },
+        "required": ["text", "lines"],
+        "additionalProperties": false
+      }
+    },
+    "summary": {"type": "string", "minLength": 20, "maxLength": 1500}
+  },
+  "required": ["kind", "topics", "decisions", "actions", "open_questions", "summary"],
+  "additionalProperties": false
+}

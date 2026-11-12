@@ -20,7 +20,9 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/models.rs` | The models, their pinned revisions and checksums, which model each language goes to, and the download. |
 | `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
-| `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time. |
+| `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time, or for JSON held to a schema, streamed. |
+| `src-tauri/src/minutes.rs` | Minutes: what is kept in the transcript's file, the lines as the model reads them (with the speakers' names, and who is who in a recorded meeting), the parts of a long recording, the answer checked against the transcript, the exports. The prompts and the schema are in `src-tauri/prompts`. |
+| `src-tauri/src/queue/minutes_job.rs` | Writing the minutes as a job in the queue: parts, notes saved as they come, the last pass over the notes; it gives way to a recording. |
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are, with each language's line length. |
 | `src-tauri/src/timing.rs` | When each word is said: the timing pass (each stretch between two pauses heard again) and the match of what was heard to the line's text. `timing/bench.rs` measures it. |
 | `src-tauri/src/script.rs` | How each writing system puts its words down: words in scripts without spaces, marks that stay with their letter, widths on a line. |
@@ -94,6 +96,25 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   however the app ends. It runs on the GPU the speech engine found best (a dedicated one before one in
   the processor), never spread over several. Why MiLMMT-46: we measured ten open translation models
   on WMT24++, see `tools/bench-translate` and the **Translation bench** workflow.
+- **Minutes.** The translator's server runs a minutes model too (Jais-3 or Ministral 3, see **Minutes
+  bench**), with room for 16,384 tokens whose cache is kept in 8 bits on a GPU (flash attention on), so
+  that the 7B model fits one with 8 GB (in 16 bits on the processor, where that is faster); it takes
+  its turn with the speech engine and the translator. It is asked through `/v1/chat/completions`,
+  greedily and without thinking (each model's chat format is told so its own way: `no_thinking` in
+  `minutes::MODELS`), for JSON held to the schema in
+  `src-tauri/prompts/minutes-schema.json` (line numbers limited to the transcript's), never for free text.
+  A recording up to about 12 minutes goes in one pass. A longer one is cut into parts of at most ten
+  minutes, where the speaker changes or pauses longest in a part's last quarter; each part becomes notes,
+  saved in the transcript's file as they come so that a stopped run continues, and the notes become the
+  minutes in one more pass (a few parts at a time when there are many; notes too long to go two
+  together are merged without the model, so it always ends; limits count letters, not bytes). The
+  answer is checked: line numbers that are not lines go, an owner who is neither a speaker nor said in
+  the transcript goes, and only a meeting keeps decisions and actions. Speakers' names are read from the transcript's file
+  loosely, so transcripts with and without speakers both work, and the minutes change only their own
+  field of the file (`history::modify_minutes`), keeping fields this version does not know. While a run
+  is under way, its minutes cannot be corrected: the run replaces them. The benchmark
+  (`tools/bench-minutes`) reads the same prompts, and a test checks that the app asks exactly what was
+  measured, of the file at the revision measured.
 - **Subtitles.** `captions.rs` follows the rules Netflix and the BBC give their subtitlers: two lines
   of 42 characters at most, between 5/6 of a second and 7 seconds on screen, 17 characters a second
   (20 for English), two frames between subtitles, gaps under half a second closed, and breaks where a
@@ -239,8 +260,9 @@ releases are built on the maintainer's PC, with the engine from GitHub Actions.
 2. Put `thmanyahsans-Regular.otf`, `-Medium.otf` and `-Bold.otf` in `ui/fonts/`.
 3. Push, and let the **Engine** workflow finish: it builds the engine, then downloads every real model
    with a pause in the middle and loads them, measures how well each speech model's words are placed in
-   time (`tools/timing`, which must meet its pass mark), and translates with each translation model
-   through the translator Dawwin downloads.
+   time (`tools/timing`, which must meet its pass mark), translates with each translation model
+   through the translator Dawwin downloads, and writes the minutes of two made-up meetings with each
+   minutes model through it.
 4. If a tool changes (llama.cpp, ffmpeg): create the release as a draft
    (`gh release create vX.Y.Z --draft --target <commit>`), run the **Tools** workflow by hand with the
    tag, and put the sizes and SHA-256 it prints, with the new file names and `RELEASE`, into `tools.rs`.

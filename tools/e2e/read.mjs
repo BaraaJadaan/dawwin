@@ -31,6 +31,22 @@ writeFileSync(join(home, "history", "rd-1.json"), JSON.stringify({
   ] }],
 }));
 
+// a meeting with two speakers told apart (1.4), and its minutes (1.6)
+const said = (start, speaker, text) => ({ start, end: start + 2.5, speaker, text, edited: false });
+writeFileSync(join(home, "history", "rd-2.json"), JSON.stringify({
+  id: "rd-2", title: "اجتماع المتحدثين", source_path: "C:/made-up/meeting2.m4a", created_ms: Date.now() - 1000, duration_s: 20, language: "ar",
+  elapsed_s: 2, device: "CPU", model: "made up", partial: false,
+  segments: [said(0, 1, "صباح الخير، نبدأ بالتقارير."), said(3, 2, "تمام، التقرير جاهز."), said(6, 1, "ممتاز، نرسله اليوم.")],
+  speakers: [{ id: 1, name: "سامي" }, { id: 2, name: "" }],
+  minutes: {
+    language: "ar", model: "made up", written_ms: Date.now(), from: "x", kind: "meeting",
+    summary: "اتفق الفريق على إرسال التقرير اليوم.",
+    decisions: [{ text: "إرسال التقرير اليوم.", lines: [2], time: 6, edited: false }],
+    actions: [{ who: "سامي", what: "يرسل التقرير", due: "اليوم", lines: [2], time: 6, edited: false }],
+    topics: [], open_questions: [],
+  },
+}));
+
 // files of every kind it reads
 writeFileSync(join(files, "notes.md"), "# Plan\n\nRead [the guide](https://example.com) first.\n\n```js\nconsole.log('skip me')\n```\n\n- one item\n");
 writeFileSync(join(files, "page.html"), "<html><head><title>A page</title><script>skip()</script></head><body><h1>Welcome</h1><p>Hello <a href='https://x.org'>there</a>.</p><img src='a.png'></body></html>");
@@ -179,6 +195,34 @@ await until((x) => x.n > 0 && x.title === "اجتماع الفريق");
 await sleep(300);
 const tr = await ev(`window.__readAloud.doc.sentences.map(s=>s.text)`);
 check("Listen with a translation shown reads the translation", tr[0] === "Okay, let's start the meeting, we have three points today.", tr);
+await ev(`stopReading()`);
+
+// each speaker in a voice of their own, with their name where they start
+await ev(`openTranscript('rd-2')`);
+await sleep(800);
+await ev(`document.getElementById('btn-listen').click()`);
+s = await until((x) => x.n > 0 && x.title === "اجتماع المتحدثين");
+const who = await ev(`[...document.querySelectorAll('#read-body .read-who')].map(e => e.textContent)`);
+check("a transcript's speakers are named where each starts to speak", JSON.stringify(who) === JSON.stringify(["سامي", "Speaker 2", "سامي"]), who);
+const before = requests().length;
+await ev(`readFrom(0)`);
+s = await until((x) => x.i === 2 && !x.waiting && !x.paused, 20000);
+await sleep(400);
+const spoken = requests().slice(before);
+const voiceOf = (bit) => spoken.find((r) => r.text.includes(bit))?.voice_id;
+check("each speaker reads in a voice of their own, the same one each time", voiceOf("صباح الخير") === voiceOf("ممتاز") && voiceOf("التقرير جاهز") && voiceOf("التقرير جاهز") !== voiceOf("صباح الخير"), spoken.map((r) => [r.voice_id, r.text]));
+await ev(`stopReading()`);
+
+// the minutes read aloud from their tab
+await ev(`openTranscript('rd-2')`);
+await sleep(800);
+await ev(`showMinutesTab('minutes')`);
+await sleep(500);
+const listenMinutes = await ev(`(() => { const b = [...document.querySelectorAll('#minutes .minutes-bar button')].find(b => b.textContent === t('read.listen')); if (!b) return 'none'; b.click(); return 'clicked'; })()`);
+s = await until((x) => x.n > 0 && x.title === "اجتماع المتحدثين" && x.n !== 3);
+const minutesText = await ev(`window.__readAloud.doc.sentences.map(s => s.text)`);
+check("Listen on the minutes reads them, heading by heading", listenMinutes !== "none" && minutesText.includes("اتفق الفريق على إرسال التقرير اليوم.") && minutesText.some((x) => x.includes("يرسل التقرير")), minutesText);
+await ev(`showMinutesTab('lines')`);
 await ev(`stopReading()`);
 
 // a voice that dies once is started again without a gap

@@ -1,0 +1,40 @@
+{
+  "id": "en-interview",
+  "language": "en",
+  "variety": "English",
+  "kind": "interview",
+  "speakers": "named",
+  "people": [
+    ["ثيو", "theo"],
+    ["إنغريد", "ingrid", "brannock"]
+  ],
+  "decisions": [],
+  "actions": [],
+  "open_questions": [
+    {"text": "Whether honey from different neighbourhoods can be told apart by its pollen; the lab results are not in yet (expected in spring).", "lines": [38, 39]}
+  ],
+  "topics": [
+    {"title": "How Ingrid started keeping bees", "line": 6},
+    {"title": "City forage and city honey", "line": 12},
+    {"title": "Finding roofs, swarms and permits", "line": 22},
+    {"title": "Varroa and losing colonies", "line": 30},
+    {"title": "University honey research", "line": 35},
+    {"title": "Advice for beginners", "line": 43}
+  ],
+  "facts": [
+    ["roof", "سطح", "أسطح", "اسطح"],
+    ["14", "fourteen", "أربع عشرة", "اربع عشرة", "١٤"],
+    ["300", "three hundred", "ثلاثمئة", "ثلاثمائة", "٣٠٠"],
+    ["varroa", "فاروا", "mite", "طفيلي"],
+    ["lab", "university", "مختبر", "جامعة"],
+    ["2019", "٢٠١٩"]
+  ],
+  "traps": [
+    "It is an interview: there are no decisions and no action items.",
+    "Not an action: Theo's 'you have to come back on the show when it's out' and Ingrid's 'deal' (lines 41-42) are a friendly invitation.",
+    "Not a plan: a library 'is interested, but it's early days, nothing's signed' (line 47).",
+    "Not a deadline: the lab results 'should come in the spring' (line 40).",
+    "Numbers not to mix up: fourteen hives on six rooftops now (line 11) versus five of eleven hives lost two winters ago (line 33); about 300 kilos last year, half that the year before (line 19).",
+    "Advice to listeners (lines 44-45) is not an action item."
+  ]
+}

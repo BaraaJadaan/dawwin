@@ -296,6 +296,28 @@ pub fn default_voice(paths: &Paths, lang: Lang) -> Option<String> {
     })
 }
 
+/// The voice of the speaker who speaks `rank`-th in a transcript (0: the first): the first has the
+/// voice chosen for the language, the others another voice of the same model each, the other sex and
+/// the same in turn; with more speakers than voices, they come round again.
+pub fn for_speaker(m: &VoiceModel, base: &Voice, rank: usize) -> Voice {
+    let of = |woman: bool| -> Vec<Voice> {
+        let mut v: Vec<Voice> = m.voices.iter().filter(|v| v.lang == base.lang && v.id != base.id && v.woman == woman).copied().collect();
+        v.sort_by_key(|v| v.number);
+        v
+    };
+    let (other, same) = (of(!base.woman), of(base.woman));
+    let mut others = Vec::new();
+    for k in 0..other.len().max(same.len()) {
+        others.extend(other.get(k));
+        others.extend(same.get(k));
+    }
+    if rank == 0 || others.is_empty() {
+        *base
+    } else {
+        others[(rank - 1) % others.len()]
+    }
+}
+
 /// What a sentence's request says about its voice, with the model's own options.
 pub fn request(m: &VoiceModel, v: &Voice, model_dir: &std::path::Path, program_dir: &std::path::Path) -> serde_json::Value {
     let mut options: serde_json::Map<String, serde_json::Value> = m.options.iter().map(|(k, x)| (k.to_string(), serde_json::Value::from(*x))).collect();
@@ -338,6 +360,20 @@ mod tests {
         assert!(!PHONON.reads(Lang::Ar));
         assert!(find_voice("nothing/F1/ar").is_none());
         assert!(url(&SUPERTONIC.files[0]).ends_with("/audio-cpp/audio.cpp-gguf/resolve/73ce4162f6cce370dd533c6782b772135c1b2a8e/Supertonic-3-GGUF/supertonic-3-f16.gguf"));
+    }
+
+    #[test]
+    fn each_speaker_gets_a_voice_of_their_own() {
+        let woman = SUPERTONIC.voices.iter().find(|v| v.id == "F1" && v.lang == Lang::Ar).unwrap();
+        let ids: Vec<&str> = (0..4).map(|r| for_speaker(&SUPERTONIC, woman, r).id).collect();
+        assert_eq!(ids, vec!["F1", "M1", "F2", "M2"], "a man's voice after a woman's, then each in turn");
+        assert!((0..4).all(|r| for_speaker(&SUPERTONIC, woman, r).lang == Lang::Ar));
+        // VoxCPM 2 has two voices a language: the third speaker has the second's
+        let ar_f = VOXCPM2.voices.iter().find(|v| v.id == "ar-f").unwrap();
+        let ids: Vec<&str> = (0..3).map(|r| for_speaker(&VOXCPM2, ar_f, r).id).collect();
+        assert_eq!(ids, vec!["ar-f", "ar-m", "ar-m"]);
+        let easton = PHONON.voices.iter().find(|v| v.id == "easton").unwrap();
+        assert!(for_speaker(&PHONON, easton, 1).woman);
     }
 
     #[test]

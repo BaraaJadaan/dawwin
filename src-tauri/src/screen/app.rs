@@ -51,7 +51,7 @@ impl Reader for VoiceReader {
         let r = self.reading_of();
         r.stop();
         let blocks = if formats::looks_like_markdown(&text) { formats::from_markdown(&text) } else { formats::from_text(&text) };
-        let doc = r.open(format!("selection:{}", crate::queue::now_ms()), crate::tr!("The selection"), blocks)?;
+        let doc = r.open(format!("selection:{}", crate::queue::now_ms()), crate::tr!("The selection"), blocks, Vec::new())?;
         *self.doc.lock().unwrap() = Some(doc.id.clone());
         // Read aloud in the window stops: one voice at a time
         let _ = self.app.emit_to("main", "reading-yield", ());

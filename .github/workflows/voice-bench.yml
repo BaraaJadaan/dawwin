@@ -5,15 +5,15 @@ name: Voice bench
 # runner's processor, a sentence at a time as Dawwin reads. "listen" is a page to compare them by ear,
 # by letter; "key" says which letter is which model, with its size, license, speed and memory.
 # A model that needs a recording to speak like reads from voices VoxCPM 2 made from a description.
+# Run it from the Actions tab. Without "bench", only the program job runs: the voice program with
+# audio.cpp's library, and the app's own reading code with each voice it offers.
 on:
   workflow_dispatch:
-  # until this file is on main, a push to the 1.7.0 branch is how it starts; that trigger goes before the merge
-  push:
-    branches: [claude/dawwin-1-7-0-e06241]
-    paths:
-      - "tools/bench-voice/**"
-      - ".github/workflows/voice-bench.yml"
-      - "voice/**"
+    inputs:
+      bench:
+        description: "Also have every candidate voice read the passages, for the listening page (hours)"
+        type: boolean
+        default: false
 
 env:
   AUDIOCPP: v0.9.4
@@ -75,9 +75,9 @@ jobs:
           name: program
           path: out-program/
 
-  # the voices take hours: on a push they run only when its message asks for them with [bench]
+  # the candidates take hours: only when asked for
   refs:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bench]') }}
+    if: ${{ inputs.bench }}
     runs-on: windows-2022
     timeout-minutes: 120
     steps:

@@ -2,7 +2,7 @@
 
 *Dawwin* means "write it down" in Arabic.
 
-**Turn recordings, videos and meetings into text, translate it, and subtitle them, on your own Windows PC.**
+**Turn recordings, videos and meetings into text, translate it, subtitle them, and write their minutes, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
 languages. Translation into 46 languages. Record a Zoom, Meet or Teams call and read it as it is
 said. And the other way round: any text, file or transcript read aloud in a natural voice, in Arabic and
@@ -30,7 +30,9 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   each line marked Me or Them, the others told apart by voice. Or drop a recording of it. Either way you
   get the meeting as text you can search, correct and send as a Word document, with who said what.
   Requirement meetings in Arabic full of English terms ("الـ dashboard", "الـ API") come out as they
-  were said, and the names of your company and products the way you write them.
+  were said, and the names of your company and products the way you write them. Then one press
+  writes the minutes: a short summary, the decisions, and who does what by when, by name, written on
+  your own computer instead of a cloud chatbot.
 - **Colleagues who speak another language.** Translate the transcript and share it on its own, or as a
   bilingual document with each line and its translation under it.
 - **Videos, courses and YouTube.** Subtitles timed the way professional ones are. Translate them to
@@ -64,7 +66,7 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   **Video to sound file**, **Sound without silences** or **Video with subtitles** (new in 1.3.2).
 - Save the sound and the videos next to the recording, or in a folder of your own (new in 1.3.2).
 
-![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text (with Tell speakers apart and Write the minutes), Translation and Video.](docs/screenshots/home.png)
 
 **Who said what** (new in 1.4)
 
@@ -210,6 +212,29 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   of the original recording, so playback, Follow words and subtitles stay in step.
 - Save the sound as a file of its own (M4A): from a video, or without its silences.
 
+**Minutes** (new in 1.6)
+
+- **Write the minutes** on a transcript's Minutes tab: a summary of a few sentences, the decisions, the
+  action items (who, what, by when), the topics in order with their start times, and the questions left
+  open. A lecture or an interview gets a summary and its topics, without empty decisions and actions.
+- Tasks go to people by the names the transcript gives them: those you gave with **Tell speakers
+  apart**, or Speaker 2. In a meeting you recorded, Dawwin tells the model that Me is you and Them the
+  other side of the call.
+- Every decision and action shows its time: press it to see the lines it came from in the transcript.
+- In the language of the meeting, with its English terms as they were said, or in another language:
+  the minutes of an Arabic meeting in English, without translating the transcript first.
+- Correct any line by hand; your text is kept. **Write again** after correcting the transcript, with a
+  warning that it replaces what you edited.
+- A meeting of three hours is written in parts, with the progress shown; stop it and it carries on where
+  it stopped, and the minutes cover the whole meeting.
+- Export the minutes alone, or followed by the transcript, to Word, Markdown or text. A step on the start
+  page writes them after the transcript, and a folder run saves them next to each recording. While you
+  record a meeting they wait, so the recording keeps the engine and the GPU, and carry on after it.
+- Written on your computer by a model you download once in Settings, chosen by measuring (see below).
+  The panel offers the models with their sizes and says which fits your computer.
+
+![A meeting's minutes in Dawwin: the summary, four decisions with their times, and action items with who, what and by when.](docs/screenshots/minutes.png)
+
 **Edit, search and export**
 
 - Correct lines in place, and search with Arabic in mind: أ/إ/ا, ة/ه and ى/ي match.
@@ -274,8 +299,16 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
    | **Translation, best quality** (MiLMMT-46 12B) | 7.3 GB | The best of the ten open translation models we tested. Fast with a GPU of 8 GB, slow without one. |
    | **Translation, smaller** (MiLMMT-46 4B) | 2.5 GB | As good as the best one from and into Arabic, a little less in other languages. Faster without a GPU. |
    | **Translation, smallest** (MiLMMT-46 1B) | 0.8 GB | For slow connections and older computers: fast on any of them, a little less accurate. |
+5. To write the minutes of a meeting, open the **Minutes** tab of its transcript. The first time, download
+   a minutes model there or in **Settings → Minutes**. The translator runs it too:
 
-5. To have something read aloud, open **Read aloud** and download a voice in **Settings → Read aloud**,
+   | Model | Download | |
+   | --- | --- | --- |
+   | **Minutes, best** (Jais-3 7B) | 5.6 GB | The best of the 20 open models we tested, in Arabic and in English. Fits a GPU with 8 GB, slow without one. |
+   | **Minutes, smaller** (Ministral 3 3B) | 2.1 GB | Good minutes at under half the size. Fits a GPU with 4 GB. |
+   | **Minutes, smallest** (Jais-3 0.9B) | 0.7 GB | For older computers: fast on any of them, but it misses more of the decisions and tasks. |
+
+6. To have something read aloud, open **Read aloud** and download a voice in **Settings → Read aloud**,
    after hearing it. The voice program (11 MB) comes with the first one, and the graphics card's part of
    it (13 MB) with VoxCPM 2:
 
@@ -288,11 +321,13 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
 laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary
 ran about 7 times faster than real time, and Whisper about as fast as real time. The smaller
-translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU.
+translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU. On the
+same kind of CPU, the minutes of a meeting of eight minutes took about 4½ minutes with Jais-3 7B and
+under a minute with Jais-3 0.9B.
 
-**Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation model without a
-GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg and the voice
-program download only for those who use them.
+**Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation or minutes model
+without a GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg and
+the voice program download only for those who use them.
 
 ## How the translation models were chosen
 
@@ -313,6 +348,38 @@ to how people talk in a meeting.
 
 The seven directions are Arabic, Danish and Turkish to and from English, and English to French. All the
 numbers, and the test itself, are in [tools/bench-translate](tools/bench-translate).
+
+## How the minutes models were chosen
+
+We had 20 open models that run on a PC write the minutes of eight recordings made up for the test, the
+way Dawwin asks for them: meetings in Levantine, Gulf and Egyptian Arabic, one in Arabic and English
+mixed, a lecture in Modern Standard Arabic, and three in English, each also in the other language and
+two in parts as a long meeting goes. Their minutes were scored against minutes written by hand: the
+decisions and tasks found (at the lines they were said), who and by when, the key facts in the summary,
+the topics, and whether the minutes are in the language asked for. Score out of 100:
+
+| Model | Size | Score | Arabic | English | In the other language | Decisions found | Tasks found |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Jais-3 7B** | 5.6 GB | **88.7** | **89.8** | 86.9 | **91.6** | 83 % | 87 % |
+| Mistral Ministral 3 8B | 5.2 GB | 85.8 | 87.5 | 82.9 | 70.3 | 88 % | 93 % |
+| Google Gemma 4 12B | 7.1 GB | 83.9 | 82.5 | 86.2 | 88.8 | 88 % | 93 % |
+| IBM Granite 4.2 8B | 5.4 GB | 82.6 | 82.2 | 83.3 | 66.7 | 83 % | 87 % |
+| Alibaba Qwen3.5 4B | 2.7 GB | 80.0 | 81.2 | 77.9 | 79.1 | 88 % | 97 % |
+| Alibaba Qwen3.5 9B | 5.7 GB | 79.2 | 76.9 | 83.2 | 82.5 | 92 % | 90 % |
+| **Mistral Ministral 3 3B** | 2.1 GB | 78.7 | 81.2 | 74.5 | 72.6 | 71 % | 100 % |
+| Mistral Ministral 3 14B | 8.2 GB | 76.0 | 76.0 | 76.0 | 64.1 | 92 % | 97 % |
+| Jais-3 3.7B | 3.2 GB | 74.1 | 69.9 | 80.9 | 72.0 | 84 % | 90 % |
+| Google Gemma 4 E2B | 3.1 GB | 72.2 | 71.1 | 74.0 | 70.4 | 76 % | 83 % |
+| **Jais-3 0.9B** | 0.7 GB | 65.0 | 61.5 | 70.8 | 56.9 | 56 % | 63 % |
+| Alibaba Qwen3.5 2B | 1.3 GB | 48.3 | 36.6 | 67.9 | 62.4 | 85 % | 80 % |
+| Alibaba Qwen3.5 0.8B | 0.5 GB | 26.7 | 25.0 | 29.5 | 26.8 | 53 % | 44 % |
+
+Most of the lower scores in Arabic are minutes written in English when Arabic was asked for. Qwen3.5 4B
+finds as much as the best, but its summaries of the Arabic meetings say nothing ("no one attended").
+Dawwin offers the best (Jais-3 7B, which also fits a GPU with 8 GB, its context kept in 8 bits), the best
+for its size (Ministral 3 3B) and the smallest that is still usable (Jais-3 0.9B). With the context in
+8 bits, as on a GPU, they scored 87.6, 77.9 and 70.7. The models, the scoring and all the numbers are in
+[tools/bench-minutes](tools/bench-minutes/results-1.6.0.md).
 
 ## How the voices were chosen
 
@@ -370,11 +437,12 @@ If Dawwin is useful to you, a star on GitHub helps other people find it.
 Dawwin goes online only when you ask it to: to download a model (from
 [Hugging Face](https://huggingface.co)) or a tool (the translator and ffmpeg, from this repository's
 [releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for updates (from GitHub; also at startup if you
-turn that on in Settings). Recordings, transcripts and translations stay on your computer. A meeting you
+turn that on in Settings). Recordings, transcripts, translations and minutes stay on your computer. A meeting you
 record is captured from your own microphone and speakers only: nothing joins the call, and the
 recording is never sent anywhere. Recording a call may still need the consent of everyone on it, which
 Dawwin reminds you of before the first recording. The
-translator listens only to Dawwin on the same computer, with a key it is given at start.
+translator, which also writes the minutes, listens only to Dawwin on the same computer, with a key it
+is given at start.
 
 ## Uninstall
 
@@ -407,6 +475,11 @@ the model folder, if you chose another place for it).
   [the speaker model](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf) and
   [the language model](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf) made by
   transcribe.cpp, from their pages, which carry both licenses.
+- **The minutes models**: [Jais-3](https://huggingface.co/inception42/Jais-3-7B) and Mistral AI's
+  [Ministral 3](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512) are published under
+  Apache-2.0. Dawwin downloads the GGUF files of Jais-3 [7B](https://huggingface.co/IFM/Jais-3-7B-GGUF)
+  and [0.9B](https://huggingface.co/IFM/Jais-3-0.9B-GGUF) published by IFM, and of
+  [Ministral 3 3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) published by Mistral AI.
 - **The voices**: OpenBMB publishes [VoxCPM 2](https://huggingface.co/openbmb/VoxCPM2) under Apache-2.0;
   its ready-made voices in Dawwin were made by VoxCPM 2 itself from a written description, not from a
   real person. Supertone publishes [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) under the

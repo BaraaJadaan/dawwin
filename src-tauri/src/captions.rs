@@ -618,6 +618,7 @@ mod tests {
             outputs_listed: false,
             segments,
             translations: vec![],
+            minutes: None,
             speakers: Vec::new(),
             detected: None,
         }

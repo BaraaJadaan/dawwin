@@ -43,6 +43,15 @@ macro_rules! tr {
 }
 
 static AR: &[(&str, &str)] = &[
+    // minutes
+    ("This transcript has no text to write minutes from.", "لا نص في هذا التفريغ لكتابة محضر منه."),
+    ("This transcript is still being written. Write the minutes when it is done.", "ما زال هذا التفريغ قيد الكتابة. اكتب المحضر حين ينتهي."),
+    ("There is no minutes model yet. Download one in Settings.", "لا يوجد نموذج محاضر بعد. نزّل واحدًا من الإعدادات."),
+    ("The model did not write minutes that Dawwin could read. Try again, or another minutes model.", "لم يكتب النموذج محضرًا يستطيع دَوِّن قراءته. حاول مرة أخرى، أو جرّب نموذج محاضر آخر."),
+    ("The minutes are written, but could not be saved next to the recording: {}", "كُتب المحضر، لكن تعذّر حفظه بجانب التسجيل: {}"),
+    ("The minutes are being written again. Correct them when that is done.", "يُكتب المحضر من جديد. صحّحه بعد أن ينتهي."),
+    ("There are no minutes of this transcript yet.", "لا يوجد محضر لهذا التفريغ بعد."),
+    ("Save the minutes", "حفظ المحضر"),
     // queue
     ("That folder does not hold a model file (.gguf).", "هذا المجلد لا يحوي ملف نموذج (.gguf)."),
     ("There is no model for this language yet. Choose one in Settings.", "لا يوجد نموذج لهذه اللغة بعد. اختر واحدًا من الإعدادات."),
@@ -167,6 +176,7 @@ static AR: &[(&str, &str)] = &[
     ("The voice is not installed. Download a voice in Settings.", "الصوت غير مثبّت. نزّل صوتًا من الإعدادات."),
     ("The voice program is not published yet.", "لم يُنشر برنامج الصوت بعد."),
     ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
+    ("This transcript has no minutes yet.", "لا محضر لهذا التفريغ بعد."),
     ("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يفرّغ أو يترجم. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
 ];
 

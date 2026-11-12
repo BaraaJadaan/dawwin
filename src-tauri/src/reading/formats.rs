@@ -18,6 +18,8 @@ pub enum Kind {
 pub struct Block {
     pub kind: Kind,
     pub text: String,
+    /// Who says it, in a transcript whose speakers were told apart
+    pub speaker: Option<u32>,
 }
 
 /// A block whose line breaks end sentences (the dashes of subtitles).
@@ -25,12 +27,12 @@ fn block_with_lines(kind: Kind, text: &str) -> Option<Block> {
     let lines: Vec<String> = text.lines().map(|l| l.split_whitespace().collect::<Vec<_>>().join(" ")).filter(|l| !l.is_empty()).collect();
     let text = lines.join("
 ");
-    text.chars().any(|c| c.is_alphanumeric()).then_some(Block { kind, text })
+    text.chars().any(|c| c.is_alphanumeric()).then_some(Block { kind, text, speaker: None })
 }
 
 fn block(kind: Kind, text: &str) -> Option<Block> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    text.chars().any(|c| c.is_alphanumeric()).then_some(Block { kind, text })
+    text.chars().any(|c| c.is_alphanumeric()).then_some(Block { kind, text, speaker: None })
 }
 
 /// What a file holds, and a title for it.

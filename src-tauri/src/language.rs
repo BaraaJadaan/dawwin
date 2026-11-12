@@ -14,6 +14,9 @@ pub const LISTEN_S: f32 = 30.0;
 /// Below this share of the probability on the languages with a model, the recording is taken to
 /// be in another language.
 const ENOUGH: f32 = 0.25;
+/// Arabic with English in it is Arabic: the Arabic model writes both. Heard as English, it stays
+/// Arabic when Arabic has this share of what the languages with a model hold.
+const ARABIC_WITH_ENGLISH: f32 = 0.25;
 
 /// What was heard.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +47,11 @@ pub fn decide(heard: &[Heard], with_model: &[&str]) -> Option<Decision> {
     let allowed: Vec<&Heard> = heard.iter().filter(|h| with_model.contains(&dawwin_code(&h.code))).collect();
     let mass: f32 = allowed.iter().map(|h| h.p).sum();
     if let Some(best) = allowed.iter().max_by(|a, b| a.p.total_cmp(&b.p)).filter(|_| mass >= ENOUGH) {
+        if best.code == "en" {
+            if let Some(ar) = allowed.iter().find(|h| h.code == "ar").filter(|ar| ar.p >= ARABIC_WITH_ENGLISH * mass) {
+                return Some(Decision { language: "ar".into(), name: ar.name.clone(), has_model: true });
+            }
+        }
         return Some(Decision { language: dawwin_code(&best.code).to_string(), name: best.name.clone(), has_model: true });
     }
     let language = dawwin_code(&top.code).to_string();
@@ -96,6 +104,10 @@ mod tests {
             (vec![("iw", 0.9), ("ar", 0.1)], vec!["he", "ar"], "he", true),
             // nothing installed: what it heard
             (vec![("en", 0.6), ("de", 0.4)], vec![], "en", false),
+            // Arabic with English in it (measured: 20 s of recitation, then 10 s of English): Arabic
+            (vec![("en", 0.551), ("ar", 0.352), ("pt", 0.027)], vec!["ar", "en"], "ar", true),
+            // English with a few Arabic words is English
+            (vec![("en", 0.9), ("ar", 0.05)], vec!["ar", "en"], "en", true),
         ];
         for (n, (h, with, want, has)) in cases.into_iter().enumerate() {
             let d = decide(&heard(&h), &with).unwrap();

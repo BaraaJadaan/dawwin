@@ -35,13 +35,13 @@ pub struct Tool {
 
 /// The release the tools are files of. A newer version of the app keeps pointing here until a
 /// tool itself changes.
-const RELEASE: &str = "v1.3.0";
+const RELEASE: &str = "v1.4.0";
 
 pub const TRANSLATOR: Tool = Tool {
     id: "translator",
     file: "dawwin-translator-llama.cpp-b12237.tar.xz",
-    size: 14_115_908,
-    sha256: "f66c4406f39a8eeb37d77b76a9c7ed07055295e2f1266fd06a14f90cd540864f",
+    size: 14_117_968,
+    sha256: "98f19e4bc87fc78e40bca8ec752d0a513d26fa04f464e77c015afaa67de02665",
     folder: "translate",
     exe: "llama-server.exe",
     // what the pack holds, but its two license files
@@ -58,8 +58,8 @@ pub const TRANSLATOR: Tool = Tool {
 pub const FFMPEG_AUDIO: Tool = Tool {
     id: "ffmpeg-audio",
     file: "dawwin-ffmpeg-audio-8.1.2.tar.xz",
-    size: 1_332_460,
-    sha256: "02d8a17aa61f3a09a8a80cdf84f26f65ceebe3f8c08e765190c57b8b25d00379",
+    size: 1_335_556,
+    sha256: "48a2b244b1815cdfe2f85a411812369e9efd480e67b42ef939d74e0719be4659",
     folder: "ffmpeg-audio",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
@@ -69,13 +69,13 @@ pub const FFMPEG_AUDIO: Tool = Tool {
 pub const FFMPEG_VIDEO: Tool = Tool {
     id: "ffmpeg-video",
     file: "dawwin-ffmpeg-video-8.1.2.tar.xz",
-    size: 3_219_168,
-    sha256: "c60e43a640f7cdf681f6d92574d2d1d15d87d37e924111df591c9d611ff90d59",
+    size: 3_847_048,
+    sha256: "464b379577c87fb1952093cde7ff0112488f4e43502735e02d821629bb41feaf",
     folder: "ffmpeg-video",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
-    // 2 (on the release of 1.4.0) reads AV1 (`video::reads_av1`): until its pins are here, 1
-    version: 1,
+    // 2 (on the release of 1.4.0) reads AV1 (`video::reads_av1`)
+    version: 2,
 };
 
 pub const TOOLS: [Tool; 3] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO];

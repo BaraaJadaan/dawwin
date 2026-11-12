@@ -77,8 +77,9 @@ pub const FFMPEG_VIDEO: Tool = Tool {
 pub const VOICE: Tool = Tool {
     id: "voice",
     file: "dawwin-voice-audio.cpp-v0.9.4.tar.xz",
-    size: 8_650_804,
-    sha256: "f3c59f5d9ec7ab04ad2639861e1fcff72340f57131c97c932b9beba77fcc9b4e",
+    // from Tools run 43178594170, whose packs a release can upload with from_run
+    size: 8_652_532,
+    sha256: "aa6ae390bce0762f4d814deb6b6d5a883bee9bcc5ad716c99b920ddd6fd33a52",
     folder: "voice",
     exe: "dawwin-voice.exe",
     files: &[

@@ -14,9 +14,12 @@ pub const LISTEN_S: f32 = 30.0;
 /// Below this share of the probability on the languages with a model, the recording is taken to
 /// be in another language.
 const ENOUGH: f32 = 0.25;
-/// Arabic with English in it is Arabic: the Arabic model writes both. Heard as English, it stays
-/// Arabic when Arabic has this share of what the languages with a model hold.
-const ARABIC_WITH_ENGLISH: f32 = 0.25;
+/// Languages the model mixes up, the second taking the place of the first when it holds this share
+/// of what the languages with a model hold: Arabic with English in it is Arabic, which the Arabic
+/// model writes, English words and all; Russian is often heard as Belarusian (measured on
+/// transcribe.cpp's Russian sample: 65 % Belarusian, 35 % Russian).
+const RATHER: &[(&str, &str)] = &[("en", "ar"), ("be", "ru")];
+const RATHER_SHARE: f32 = 0.25;
 
 /// What was heard.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,9 +50,12 @@ pub fn decide(heard: &[Heard], with_model: &[&str]) -> Option<Decision> {
     let allowed: Vec<&Heard> = heard.iter().filter(|h| with_model.contains(&dawwin_code(&h.code))).collect();
     let mass: f32 = allowed.iter().map(|h| h.p).sum();
     if let Some(best) = allowed.iter().max_by(|a, b| a.p.total_cmp(&b.p)).filter(|_| mass >= ENOUGH) {
-        if best.code == "en" {
-            if let Some(ar) = allowed.iter().find(|h| h.code == "ar").filter(|ar| ar.p >= ARABIC_WITH_ENGLISH * mass) {
-                return Some(Decision { language: "ar".into(), name: ar.name.clone(), has_model: true });
+        for (heard_as, rather) in RATHER {
+            if best.code != *heard_as {
+                continue;
+            }
+            if let Some(r) = allowed.iter().find(|h| h.code == *rather).filter(|r| r.p >= RATHER_SHARE * mass) {
+                return Some(Decision { language: rather.to_string(), name: r.name.clone(), has_model: true });
             }
         }
         return Some(Decision { language: dawwin_code(&best.code).to_string(), name: best.name.clone(), has_model: true });
@@ -140,6 +146,9 @@ mod tests {
             (vec![("en", 0.551), ("ar", 0.352), ("pt", 0.027)], vec!["ar", "en"], "ar", true),
             // the same as the app takes it (the first 30 s of speech of that recording)
             (vec![("en", 0.632), ("ar", 0.278), ("pt", 0.019), ("no", 0.013)], vec!["ar", "en"], "ar", true),
+            // Russian heard as Belarusian (measured), with an all-languages model on the disk
+            (vec![("be", 0.65), ("ru", 0.35)], vec!["ar", "en", "ru", "be"], "ru", true),
+            (vec![("be", 0.95), ("ru", 0.04)], vec!["ar", "en", "ru", "be"], "be", true),
             // English with a few Arabic words is English
             (vec![("en", 0.9), ("ar", 0.05)], vec!["ar", "en"], "en", true),
         ];

@@ -23,7 +23,7 @@ dependencies = [
 
 [[package]]
 name = "dawwin-engine"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "log",
  "serde_json",

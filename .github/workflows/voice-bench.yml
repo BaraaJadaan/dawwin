@@ -13,13 +13,62 @@ on:
     paths:
       - "tools/bench-voice/**"
       - ".github/workflows/voice-bench.yml"
+      - "voice/**"
 
 env:
   AUDIOCPP: v0.9.4
   PYTHONUTF8: "1"
 
 jobs:
+  # Dawwin's own voice program with audio.cpp's library: the GPU build and the processor build,
+  # on a real voice, against audio.cpp's CLI; and the pack the app would download.
+  program:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet huggingface_hub
+      - name: dawwin-voice.exe
+        run: cargo build --release --locked --manifest-path voice/Cargo.toml
+      - name: audio.cpp's library (both builds) and its CLI
+        shell: pwsh
+        run: |
+          $base = "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP"
+          foreach ($b in "cpu", "vulkan") {
+            curl.exe -sSL --fail --retry 5 -o "lib-$b.zip" "$base/audio-$env:AUDIOCPP-lib-windows-x64-$b.zip"
+            Expand-Archive "lib-$b.zip" "lib-$b"
+            New-Item -ItemType Directory -Force "voice-$b" | Out-Null
+            Get-ChildItem "lib-$b" -Recurse -Filter *.dll | Copy-Item -Destination "voice-$b"
+            Get-ChildItem "lib-$b" -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination "voice-$b"
+            Copy-Item voice/target/release/dawwin-voice.exe "voice-$b"
+            Write-Host "== $b"; Get-ChildItem "voice-$b" | Format-Table Name, Length
+          }
+          curl.exe -sSL --fail --retry 5 -o cli.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-cpu.zip"
+          Expand-Archive cli.zip cli
+          "CLI=" + (Get-ChildItem cli -Recurse -Filter audiocpp_cli.exe | Select-Object -First 1).FullName >> $env:GITHUB_ENV
+      - name: A real voice through it, processor build
+        run: python tools/bench-voice/program.py voice-cpu "$env:CLI" models out-program cpu
+      - name: The same with the GPU build, on a runner that has no GPU
+        continue-on-error: true
+        run: python tools/bench-voice/program.py voice-vulkan "$env:CLI" models out-program vulkan
+      - name: Pack
+        shell: pwsh
+        run: python tools/pack.py packs/dawwin-voice-audio.cpp-v0.9.4.tar.xz voice-cpu | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: program
+          path: |
+            out-program/
+            packs/
+
+  # the voices take hours: on a push they run only when its message asks for them with [bench]
   refs:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[bench]') }}
     runs-on: windows-2022
     timeout-minutes: 120
     steps:
@@ -51,7 +100,7 @@ jobs:
 
   bench:
     needs: refs
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.refs.result != 'skipped' }}
     runs-on: windows-2022
     timeout-minutes: 340
     strategy:
@@ -115,7 +164,7 @@ jobs:
 
   page:
     needs: bench
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && needs.bench.result != 'skipped' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

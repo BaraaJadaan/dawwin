@@ -7,6 +7,7 @@ __pycache__/
 /dist/
 /prototypes/
 /engine/target/
+/voice/target/
 /src-tauri/engine-bin/*
 !/src-tauri/engine-bin/README.md
 !/src-tauri/engine-bin/translate/

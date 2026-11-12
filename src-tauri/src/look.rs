@@ -66,7 +66,9 @@ impl Look {
         } else {
             "BorderStyle=1,OutlineColour=&H00000000,Outline=1.6,Shadow=0.8"
         };
-        let align = if self.place == "top" { 8 } else { 2 };
+        // ffmpeg's force_style takes SSA's old numbers: 2 is bottom centre, 6 top centre (8 would
+        // be the middle at the left)
+        let align = if self.place == "top" { 6 } else { 2 };
         format!(
             "FontName={},FontSize={},PrimaryColour={colour},{back},Alignment={align},MarginV=18,Encoding=-1",
             safe_font(if self.font.trim().is_empty() { DEFAULT_FONT } else { &self.font }),
@@ -112,7 +114,7 @@ mod tests {
         assert_eq!(d.style(), "FontName=Segoe UI,FontSize=18,PrimaryColour=&H00FFFFFF,BorderStyle=1,OutlineColour=&H00000000,Outline=1.6,Shadow=0.8,Alignment=2,MarginV=18,Encoding=-1");
         let mine = Look { size: "very-large".into(), font: "Noto Naskh Arabic".into(), color: "yellow".into(), back: "box".into(), place: "top".into(), sharp: true };
         let s = mine.style();
-        for part in ["FontName=Noto Naskh Arabic,", "FontSize=28,", "PrimaryColour=&H0000FFFF,", "BorderStyle=3,", "Alignment=8,", "Encoding=-1"] {
+        for part in ["FontName=Noto Naskh Arabic,", "FontSize=28,", "PrimaryColour=&H0000FFFF,", "BorderStyle=3,", "Alignment=6,", "Encoding=-1"] {
             assert!(s.contains(part), "{part} in {s}");
         }
         // a name that would end the style early cannot

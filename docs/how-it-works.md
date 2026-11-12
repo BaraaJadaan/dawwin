@@ -27,6 +27,11 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
 | `src-tauri/src/instance.rs` | One Dawwin per data folder: started again, it brings the open window forward and quits. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
+| `src-tauri/src/speakers.rs` | Who said what: the speaker model's turns given to the lines, a line split where the speaker changes, rename, merge, a line given to someone else. |
+| `src-tauri/src/language.rs` | Detect the language: the first half minute of speech heard in pieces, and the decision among the languages with a model. |
+| `src-tauri/src/words.rs` | Words and names: written the user's way as whole words, the list as a text file. |
+| `src-tauri/src/look.rs`, `src-tauri/src/fonts.rs` | How burned-in subtitles look, and the fonts of the PC they can be drawn in. |
+| `src-tauri/src/cmds.rs`, `ui/who.js` | The commands and the interface of what came with 1.4: speakers, the language heard, words and names, the subtitle look. |
 
 ## Details worth knowing
 
@@ -107,6 +112,30 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   that has libass. The **Tools** workflow builds and packs them (`tools/pack.py`), tries them on Windows
   with the app's own unpacking on files of the kinds people bring, runs the app's own sound and video
   tests on them, and, run by hand with a tag, puts them on that release.
+- **Who said what.** The engine runs NVIDIA's Streaming Sortformer (4 speakers at most) on the
+  processor, next to the speech model wherever that runs, at its offline operating point; one request
+  for the whole recording, which a `stop` request ends. When silences were taken out it hears what the
+  speech model heard, and the turns go back to the original times. `speakers::give_speakers` gives
+  each line the speaker who talks for most of it, ignoring turns under 0.3 s, and splits a line in two
+  only when two speakers each hold 1.5 s of it and one of its recorded pauses lies within 0.5 s of the
+  change. Speakers are numbered 1, 2… in the order they first speak; names belong to the transcript.
+  About 5 % of the recording's length on a Ryzen 7 7735HS.
+- **Detect the language.** VoxLingua107 hears the first 30 s of speech (`audio::speech_spans`), in
+  pieces of up to 10 s whose answers are averaged by length: one pass over Arabic and English together
+  let the clearer of the two decide. The decision is among the languages with a model on the disk;
+  when they hold under a quarter of the probability, the language heard is reported and its model
+  offered. Arabic with English in it stays Arabic, which the Arabic model writes.
+- **Words and names** are put right on every new line, folded like the search (hamzas, ة/ه, ى/ي, no
+  diacritics, any Latin case), as whole words; a Whisper model also gets them as its `vocabulary`.
+- **Subtitle look.** A setting (`look::Look`) turned into libass's `force_style` (whose `Alignment`
+  takes SSA's old numbers: 2 is the bottom, 6 the top). A video under 1080p is enlarged first (lanczos)
+  when sharp text is on, and its bitrate grows with its height. Fonts are the PC's own that hold Arabic
+  and Latin letters and that libass was seen to draw Arabic right in: many Windows fonts (Arial among
+  them) put a box before every lam-alef. The preview burns one second of a video of the user's with
+  Dawwin's ffmpeg, and the page plays it.
+- **Tool versions.** Each tool is pinned with a build number; unpacking writes it next to the tool
+  (`dawwin-version.txt`, missing for 1.3's builds, which count as 1), and an older one shows as an
+  update. The second ffmpeg builds add dav1d (AV1), the raw `pcm_f32le` reader and the `fd` protocol.
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 - **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event
   that brings the first window forward, and quits before it touches the cache, a download or the GPU. Leftover audio in the

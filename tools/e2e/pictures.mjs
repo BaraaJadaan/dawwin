@@ -26,7 +26,7 @@ made.forEach(([title, text, seconds], k) => writeFileSync(join(home, "history", 
 })));
 // a meeting with its speakers named where they change, and a video of test pictures for the look
 writeFileSync(join(home, "history", "made-who.json"), JSON.stringify({
-  id: "made-who", title: "اجتماع متطلبات التطبيق", source_path: "", created_ms: Date.now() - 3600000, duration_s: 34, language: "ar",
+  id: "made-who", title: "اجتماع الفريق الأسبوعي", source_path: "", created_ms: Date.now() - 3600000, duration_s: 34, language: "ar",
   elapsed_s: 4, device: "GPU · NVIDIA GeForce RTX 4060 Laptop GPU", model: "Cohere Transcribe Arabic (07-2026) · Q8", partial: false,
   segments: [
     [0, 6.1, 1, "طيب، خلونا نبدأ. اليوم عندنا ثلاث نقاط: الشاشة الرئيسية، تسجيل الدخول، والتقارير."],

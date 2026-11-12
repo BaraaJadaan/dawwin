@@ -510,7 +510,7 @@ pub fn save_sound(source: &Path, dest: &Path, spans: Option<&[(usize, usize)]>, 
         Some(spans) => cut_with_ffmpeg(ff, source, &part, spans, cancel),
     };
     if let Err(why) = result {
-        let _ = std::fs::remove_file(&part);
+        crate::setup::remove_when_free(&part);
         bail!(crate::tr!("ffmpeg could not save the sound: {}", why));
     }
     std::fs::rename(&part, &dest)?;
@@ -626,7 +626,7 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     };
     match failed {
         Some(why) => {
-            let _ = std::fs::remove_file(dest);
+            crate::setup::remove_when_free(dest);
             Err(why)
         }
         None => Ok(()),

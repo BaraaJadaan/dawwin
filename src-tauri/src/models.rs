@@ -22,17 +22,20 @@ const BUFFER: usize = 256 * 1024;
 const START_OVERS: u64 = 3;
 
 /// What a model is built on. It decides which languages the model is used for. The translator is
-/// the one that is no speech model: the app uses one at a time, whichever of them it is.
+/// the one that is no speech model: the app uses one at a time, whichever of them it is. The
+/// speaker and language models do not write text either: they tell who speaks, and in which language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Cohere,
     Canary,
     Whisper,
     Translator,
+    Speakers,
+    Language,
 }
 
 impl Family {
-    pub const ALL: [Family; 4] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator];
+    pub const ALL: [Family; 6] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Speakers, Family::Language];
 
     /// What the settings and the interface call it.
     pub fn key(self) -> &'static str {
@@ -41,6 +44,8 @@ impl Family {
             Family::Canary => "canary",
             Family::Whisper => "whisper",
             Family::Translator => "translator",
+            Family::Speakers => "speakers",
+            Family::Language => "language",
         }
     }
 
@@ -49,6 +54,8 @@ impl Family {
             "cohere_asr" => Some(Family::Cohere),
             "canary" => Some(Family::Canary),
             "whisper" => Some(Family::Whisper),
+            "sortformer" => Some(Family::Speakers),
+            "ecapa_tdnn" => Some(Family::Language),
             _ => None,
         }
     }
@@ -60,6 +67,8 @@ impl Family {
             Family::Canary => "NVIDIA Canary",
             Family::Whisper => "OpenAI Whisper",
             Family::Translator => "MiLMMT-46",
+            Family::Speakers => "NVIDIA Streaming Sortformer 4spk v2.1",
+            Family::Language => "VoxLingua107 ECAPA-TDNN",
         }
     }
 }
@@ -121,7 +130,7 @@ pub struct Variant {
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 7] = [
+pub const VARIANTS: [Variant; 9] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -202,6 +211,31 @@ pub const VARIANTS: [Variant; 7] = [
         sha256: "74d38ba75108d455326e9deeaf9ab01bb266dfa665eae9c4aa84e84485d4fdf9",
         size: 806_057_408,
         prompt: Some(Prompt::MiLMMT),
+    },
+    // Who speaks when, up to four people (NVIDIA Open Model License). Only near-reference
+    // quantizations exist for it: the smaller ones swap speakers in the middle of a recording.
+    Variant {
+        id: "speakers",
+        family: Family::Speakers,
+        label: "NVIDIA Streaming Sortformer 4spk v2.1 · Q8",
+        repository: "handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf",
+        revision: "60ebab3ef7cae9869be0abcde13360347e96ba03",
+        file: "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf",
+        sha256: "a5dacdc650790266c7a362e54e6bf51952015487edaa606c4e11632bc32442a9",
+        size: 139_310_336,
+        prompt: None,
+    },
+    // Which language is spoken, of 107 (SpeechBrain's VoxLingua107 ECAPA-TDNN, Apache-2.0)
+    Variant {
+        id: "language",
+        family: Family::Language,
+        label: "VoxLingua107 ECAPA-TDNN · Q8",
+        repository: "handy-computer/lang-id-voxlingua107-ecapa-gguf",
+        revision: "e59f0f3847e77723b7d58447ef9456fa0c7e9436",
+        file: "lang-id-voxlingua107-ecapa-Q8_0.gguf",
+        sha256: "063e6cb0af3d53085fc7d68356dfde5ecee2ffa7bc79855f7e4ff930081bfe3a",
+        size: 26_693_632,
+        prompt: None,
     },
 ];
 
@@ -370,6 +404,12 @@ pub fn check_file(path: &Path) -> Result<Family> {
     architecture(&head)
         .and_then(Family::from_architecture)
         .ok_or_else(|| anyhow!(crate::tr!("Dawwin cannot use that model. It works with Cohere Transcribe, Canary and Whisper model files.")))
+}
+
+/// Whether the family writes text: the speech models, not the translator nor the ones that tell
+/// speakers or languages apart.
+pub fn transcribes(f: Family) -> bool {
+    matches!(f, Family::Cohere | Family::Canary | Family::Whisper)
 }
 
 /// A model file in this folder, of this family if one is named, ours first and the larger first.

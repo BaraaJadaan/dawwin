@@ -240,6 +240,15 @@ pub struct Settings {
     /// What transcribing a folder writes next to each recording; unset means text only
     #[serde(default)]
     pub folder_formats: Option<Vec<String>>,
+    /// How to write the words Dawwin keeps getting wrong (see `words`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<crate::words::Entry>,
+    /// The speaker's name at the start of a subtitle where the speaker changes, in SRT and burned in
+    #[serde(default)]
+    pub names_in_srt: bool,
+    /// The speaker in WebVTT's voice tag; unset means yes
+    #[serde(default)]
+    pub names_in_vtt: Option<bool>,
 }
 
 impl Settings {
@@ -287,6 +296,11 @@ impl Settings {
             Some("cpu") | Some("cpu-fast") | Some("cpu-exact") => "cpu",
             _ => "auto",
         }
+    }
+
+    /// Tell the exports whether subtitles name the speaker.
+    pub fn apply_subtitle_names(&self) {
+        crate::speakers::set_subtitle_names(self.names_in_srt, self.names_in_vtt.unwrap_or(true));
     }
 
     pub fn folder_formats(&self) -> Vec<String> {

@@ -2,11 +2,13 @@
 
 mod audio;
 mod captions;
+mod cmds;
 mod engine;
 mod folder;
 mod history;
 pub mod i18n;
 mod instance;
+mod language;
 mod models;
 mod queue;
 mod setup;
@@ -16,6 +18,7 @@ mod transcript;
 mod translate;
 mod updates;
 mod video;
+mod words;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -195,7 +198,8 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 fn spoken(language: &str) -> String {
-    if models::known_language(language) { language } else { "ar" }.to_string()
+    // "auto": Dawwin finds it (see `language`)
+    if models::known_language(language) || language == language::AUTO { language } else { "ar" }.to_string()
 }
 
 #[derive(serde::Serialize)]
@@ -730,6 +734,17 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            cmds::find_speakers,
+            cmds::rename_speaker,
+            cmds::merge_speakers,
+            cmds::give_line,
+            cmds::get_extras,
+            cmds::set_words,
+            cmds::always_write,
+            cmds::apply_words,
+            cmds::save_words,
+            cmds::load_words,
+            cmds::set_subtitle_names,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

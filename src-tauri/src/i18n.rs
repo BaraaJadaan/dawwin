@@ -57,6 +57,15 @@ static AR: &[(&str, &str)] = &[
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
     // speakers, the language heard, words and names (1.4)
     ("Speaker {}", "المتحدث {}"),
+    ("This transcript is still being written. Find its speakers when it is done.", "هذا النص ما زال قيد الكتابة. ابحث عن متحدثيه حين ينتهي."),
+    ("Telling speakers apart needs its model. Download it in Settings.", "يحتاج التمييز بين المتحدثين إلى نموذجه. نزّله من الإعدادات."),
+    ("Transcribed, but the speakers could not be told apart: {}", "فُرّغ التسجيل، لكن تعذّر التمييز بين المتحدثين: {}"),
+    ("Detecting the language needs its model. Download it in Settings.", "يحتاج التعرّف على اللغة إلى نموذجه. نزّله من الإعدادات."),
+    ("This recording is in {}, and there is no model for it yet. Download one in Settings.", "هذا التسجيل باللغة {} ولا يوجد نموذج لها بعد. نزّل واحدًا من الإعدادات."),
+    ("There is too little speech in this recording to tell its language.", "الكلام في هذا التسجيل أقل من أن تُعرف لغته."),
+    ("Save the words and names", "حفظ الكلمات والأسماء"),
+    ("Dawwin words", "كلمات دَوِّن"),
+    ("Load words and names", "تحميل الكلمات والأسماء"),
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),
     ("Audio and video", "صوت وفيديو"),

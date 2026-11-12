@@ -8,6 +8,7 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -43,6 +44,14 @@ pub struct Recognized {
     pub stopped: bool,
 }
 
+/// One language the language model heard: its code (the model's own), its name, and how likely.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Heard {
+    pub code: String,
+    pub name: String,
+    pub p: f32,
+}
+
 pub trait Engine: Send {
     /// Start loading the model without waiting (so decoding can overlap with it).
     fn start_loading(&mut self) -> Result<()>;
@@ -52,7 +61,28 @@ pub trait Engine: Send {
     fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>>;
     /// Let the audio's cached data go.
     fn forget(&mut self, audio_id: &str);
+    /// The words the model should hear right, for a model that takes them (Whisper).
+    fn set_vocabulary(&mut self, _words: Vec<String>) {}
+    /// Who speaks when in all of `audio`, by the speaker model `model`; `stop` ends it early.
+    fn speakers(&mut self, _model: &str, _audio: &Audio, _stop: &AtomicBool) -> Result<Vec<crate::speakers::Turn>> {
+        bail!("this engine cannot tell speakers apart")
+    }
+    /// Which language the sample ranges of `audio` are in, by the language model `model`: every
+    /// language it knows, the likeliest first. Empty when there is too little speech to tell.
+    fn language(&mut self, _model: &str, _audio: &Audio, _ranges: &[(usize, usize)]) -> Result<Vec<Heard>> {
+        bail!("this engine cannot tell languages apart")
+    }
 }
+
+/// The request was stopped (see `Engine::speakers`).
+#[derive(Debug)]
+pub struct Stopped;
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stopped")
+    }
+}
+impl std::error::Error for Stopped {}
 
 /// "Try again with a smaller batch."
 #[derive(Debug)]
@@ -78,7 +108,9 @@ impl std::error::Error for EngineFailed {}
 /// is the engine's fault (and costs the GPU); a broken model file or a missing audio file is not.
 fn reply_error(v: &Value) -> anyhow::Error {
     let err = v.get("error").and_then(|e| e.as_str()).unwrap_or("unknown error").to_string();
-    if v.get("oom").and_then(|o| o.as_bool()) == Some(true) {
+    if v.get("stopped").and_then(|o| o.as_bool()) == Some(true) {
+        Stopped.into()
+    } else if v.get("oom").and_then(|o| o.as_bool()) == Some(true) {
         OutOfMemory(err).into()
     } else if v.get("device").and_then(|o| o.as_bool()) == Some(true) {
         EngineFailed(err).into()
@@ -106,6 +138,7 @@ pub struct EngineProcess {
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     cache_dir: PathBuf,
     raw_files: Vec<(String, PathBuf)>,
+    vocabulary: Vec<String>,
 }
 
 impl EngineProcess {
@@ -160,6 +193,7 @@ impl EngineProcess {
             stderr_tail,
             cache_dir: paths.cache_dir(),
             raw_files: Vec::new(),
+            vocabulary: Vec::new(),
         })
     }
 
@@ -196,8 +230,19 @@ impl EngineProcess {
     }
 
     fn wait(&mut self, id: u64) -> Result<Value> {
+        self.wait_or_stop(id, None)
+    }
+
+    /// Wait for the reply to `id`; when `stop` is set meanwhile, ask the engine to stop it.
+    fn wait_or_stop(&mut self, id: u64, stop: Option<&AtomicBool>) -> Result<Value> {
+        let mut asked = false;
         loop {
-            match self.replies.recv_timeout(Duration::from_secs(1)) {
+            if !asked && stop.is_some_and(|s| s.load(Ordering::SeqCst)) {
+                asked = true;
+                self.send(json!({"cmd": "stop", "target": id}))?;
+            }
+            let tick = if stop.is_some() { Duration::from_millis(200) } else { Duration::from_secs(1) };
+            match self.replies.recv_timeout(tick) {
                 Ok(v) => {
                     if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
                         continue; // a reply to a request nobody waits for any more
@@ -294,6 +339,7 @@ impl Engine for EngineProcess {
             "path": path,
             "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
             "language": language,
+            "vocabulary": self.vocabulary,
         }))?;
         let v = self.wait(id)?;
         let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
@@ -321,6 +367,56 @@ impl Engine for EngineProcess {
             }
         });
     }
+
+    fn set_vocabulary(&mut self, words: Vec<String>) {
+        self.vocabulary = words;
+    }
+
+    fn speakers(&mut self, model: &str, audio: &Audio, stop: &AtomicBool) -> Result<Vec<crate::speakers::Turn>> {
+        let path = self.raw_file(audio)?;
+        let id = self.send(json!({"cmd": "speakers", "model": model, "path": path}))?;
+        let v = self.wait_or_stop(id, Some(stop))?;
+        Ok(turns_of(&v))
+    }
+
+    fn language(&mut self, model: &str, audio: &Audio, ranges: &[(usize, usize)]) -> Result<Vec<Heard>> {
+        let path = self.raw_file(audio)?;
+        let id = self.send(json!({
+            "cmd": "language",
+            "model": model,
+            "path": path,
+            "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
+        }))?;
+        let v = self.wait(id)?;
+        Ok(heard_of(&v))
+    }
+}
+
+/// The engine's speaker turns, `[start_ms, end_ms, speaker]`, in seconds.
+fn turns_of(v: &Value) -> Vec<crate::speakers::Turn> {
+    v.get("turns")
+        .and_then(|t| t.as_array())
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| {
+                    let (a, b, s) = (x.get(0)?.as_f64()?, x.get(1)?.as_f64()?, x.get(2)?.as_u64()?);
+                    Some(crate::speakers::Turn { start: a / 1000.0, end: b / 1000.0, speaker: s as u32 })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The engine's languages, `[code, name, p]`.
+fn heard_of(v: &Value) -> Vec<Heard> {
+    v.get("candidates")
+        .and_then(|t| t.as_array())
+        .map(|t| {
+            t.iter()
+                .filter_map(|x| Some(Heard { code: x.get(0)?.as_str()?.to_string(), name: x.get(1)?.as_str()?.to_string(), p: x.get(2)?.as_f64()? as f32 }))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -334,6 +430,17 @@ mod tests {
         assert!(reply_error(&json!({"ok": false, "error": "backend error: vk", "device": true})).is::<EngineFailed>());
         assert!(reply_error(&json!({"ok": false, "error": "out of memory", "oom": true})).is::<OutOfMemory>());
         assert!(!reply_error(&json!({"ok": false, "error": "x"})).is::<EngineFailed>(), "an engine that does not say");
+    }
+
+    #[test]
+    fn speaker_turns_and_languages_are_read_from_the_engine() {
+        let turns = turns_of(&json!({"turns": [[320, 2400, 1], [2500, 4000, 2]]}));
+        assert_eq!(turns.len(), 2);
+        assert_eq!((turns[0].start, turns[0].end, turns[0].speaker), (0.32, 2.4, 1));
+        let heard = heard_of(&json!({"candidates": [["ar", "Arabic", 0.9], ["iw", "Hebrew", 0.05]]}));
+        assert_eq!(heard[1], Heard { code: "iw".into(), name: "Hebrew".into(), p: 0.05 });
+        assert!(heard_of(&json!({"candidates": [], "too_short": true})).is_empty());
+        assert!(reply_error(&json!({"ok": false, "error": "aborted", "stopped": true})).is::<Stopped>());
     }
 
     #[test]

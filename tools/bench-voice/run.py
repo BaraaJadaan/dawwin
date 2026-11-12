@@ -87,7 +87,8 @@ def watch(proc):
     return round(peak_ws / 2**20), round(peak_commit / 2**20)
 
 
-METRIC = re.compile(r"metrics\[([^\]]+)\]\.(\w+)\s*[=:]?\s*(-?[0-9.]+)")
+# "metrics[00].wall_ms=6404.03", "metrics[00].memory.peak_rss_mb=498"
+METRIC = re.compile(r"metrics\[([^\]]+)\]\.([\w.]+)=(-?\d+(?:\.\d+)?)\s*$", re.M)
 
 
 def run_sequence(args, cand, model_arg, requests, outdir):

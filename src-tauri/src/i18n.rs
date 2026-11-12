@@ -128,6 +128,19 @@ static AR: &[(&str, &str)] = &[
     ("Arabic", "العربية"),
     ("English", "الإنجليزية"),
     ("Duration {} · {}", "المدة {} · {}"),
+    // read aloud
+    ("There is nothing to read in it.", "لا يوجد فيه ما يُقرأ."),
+    ("That text is no longer open.", "لم يعد ذلك النص مفتوحًا."),
+    ("That translation is not there.", "تلك الترجمة غير موجودة."),
+    ("{} is not a text file Dawwin can read.", "{} ليس ملفًا نصيًا يستطيع دَوِّن قراءته."),
+    ("The voice did not answer in {} seconds.", "لم يستجب الصوت خلال {} ثانية."),
+    ("The voice stopped ({}). Last output:
+{}", "توقّف الصوت ({}). آخر ما كتبه:
+{}"),
+    ("There is no voice for {} yet. Choose one in Settings.", "لا يوجد صوت للغة {} بعد. اختر واحدًا من الإعدادات."),
+    ("The voice is not installed. Download a voice in Settings.", "الصوت غير مثبّت. نزّل صوتًا من الإعدادات."),
+    ("The voice program is not published yet.", "لم يُنشر برنامج الصوت بعد."),
+    ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
 ];
 
 #[cfg(test)]

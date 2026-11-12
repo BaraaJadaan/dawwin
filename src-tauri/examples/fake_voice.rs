@@ -5,7 +5,9 @@
 //! 330 Hz for English, a little higher for a woman's voice, as long as the text needs.
 //!
 //! `FAKE_VOICE_DELAY_MS`: how long a request takes (300 ms). `FAKE_VOICE_CRASH_AFTER`: exit after
-//! that many requests. `FAKE_VOICE_LOG`: a file where each request is written, one JSON a line.
+//! that many requests. `FAKE_VOICE_CRASH_TIMES` with `FAKE_VOICE_CRASH_FILE`: the first that many
+//! processes exit on their first request (the file counts them). `FAKE_VOICE_LOG`: a file where
+//! each request is written, one JSON a line.
 
 use std::io::{BufRead, Write};
 use std::time::Duration;
@@ -65,6 +67,14 @@ fn main() {
                 if crash_after.is_some_and(|n| done > n) {
                     eprintln!("stand-in voice: crashing as asked");
                     std::process::exit(3);
+                }
+                if let (Some(times), Ok(file)) = (std::env::var("FAKE_VOICE_CRASH_TIMES").ok().and_then(|v| v.parse::<u32>().ok()), std::env::var("FAKE_VOICE_CRASH_FILE")) {
+                    let count: u32 = std::fs::read_to_string(&file).ok().and_then(|c| c.trim().parse().ok()).unwrap_or(0);
+                    if count < times {
+                        let _ = std::fs::write(&file, (count + 1).to_string());
+                        eprintln!("stand-in voice: crashing as asked ({})", count + 1);
+                        std::process::exit(3);
+                    }
                 }
                 let text = req["text"].as_str().unwrap_or("");
                 let woman = req["voice_id"].as_str().unwrap_or("").contains('f');

@@ -102,6 +102,17 @@ fn lines_to_blocks<'a>(lines: impl Iterator<Item = (f64, f64, &'a str)>) -> Vec<
     out
 }
 
+/// Pasted text is named by its first line, cut at a word when it is long.
+fn title_of(text: &str) -> String {
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let first = text::sentences(line).into_iter().next().unwrap_or_default();
+    if first.chars().count() <= 60 {
+        return first;
+    }
+    let cut: String = first.chars().take(60).collect();
+    format!("{}…", cut.rsplit_once(' ').map_or(cut.as_str(), |(a, _)| a))
+}
+
 fn short_hash(s: &str) -> String {
     let d = Sha256::digest(s.as_bytes());
     d.iter().take(8).map(|b| format!("{b:02x}")).collect()
@@ -161,6 +172,8 @@ pub struct Reader {
     wake: Condvar,
     done: Condvar,
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// The voice died on the GPU: until the app restarts, it reads on the processor
+    no_gpu: AtomicBool,
 }
 
 fn cache_root(paths: &Paths) -> PathBuf {
@@ -182,6 +195,7 @@ impl Reader {
             wake: Condvar::new(),
             done: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
+            no_gpu: AtomicBool::new(false),
         });
         let r = reader.clone();
         std::thread::Builder::new().name("voice".into()).spawn(move || r.run()).expect("voice thread");
@@ -296,12 +310,22 @@ impl Reader {
             };
             let doc = self.docs.lock().unwrap().get(&doc_id).cloned();
             let made = match doc {
-                Some(doc) => self.make(&mut process, &doc, index).map_err(|e| {
-                    if e.downcast_ref::<voice::VoiceDied>().is_some() {
-                        process = None; // started again for the next sentence
+                Some(doc) => {
+                    let mut result = self.make(&mut process, &doc, index);
+                    // a voice that died (a GPU driver, say) costs a new process and one more try,
+                    // on the processor; only a second death is told
+                    if result.as_ref().is_err_and(|e| e.downcast_ref::<voice::VoiceDied>().is_some()) {
+                        if process.as_ref().is_some_and(|p| p.loaded.as_ref().is_some_and(|l| l.gpu)) {
+                            self.no_gpu.store(true, Ordering::SeqCst);
+                        }
+                        process = None;
+                        result = self.make(&mut process, &doc, index);
+                        if result.as_ref().is_err_and(|e| e.downcast_ref::<voice::VoiceDied>().is_some()) {
+                            process = None;
+                        }
                     }
-                    format!("{e:#}")
-                }),
+                    result.map_err(|e| format!("{e:#}"))
+                }
                 None => Err(crate::tr!("That text is no longer open.")),
             };
             if let Err(e) = &made {
@@ -337,7 +361,7 @@ impl Reader {
         let mut device = String::new();
         for (k, run) in s.runs.iter().enumerate() {
             let (m, v) = self.voice_for(run.lang).ok_or_else(|| anyhow!(crate::tr!("There is no voice for {} yet. Choose one in Settings.", lang_name(run.lang))))?;
-            let gpu = m.gpu && crate::setup::Settings::load(&self.paths).run_on() != "cpu" && !self.gpu_busy();
+            let gpu = m.gpu && !self.no_gpu.load(Ordering::SeqCst) && crate::setup::Settings::load(&self.paths).run_on() != "cpu" && !self.gpu_busy();
             let load = voice::Load { family: m.family.into(), model: voices::file(&self.paths, &m), gpu, options: Vec::new() };
             let p = self.ready_process(process, &load)?;
             device = if p.device.is_empty() || p.device == "CPU" { "CPU".into() } else { format!("GPU · {}", p.device) };
@@ -548,7 +572,7 @@ pub async fn reading_open(app: AppHandle, path: Option<String>, text: Option<Str
             let read = formats::read_path(Path::new(&p)).map_err(|e| format!("{e:#}"))?;
             r.open(format!("file:{}", p.to_lowercase()), read.title, read.blocks)
         } else if let Some(t) = text {
-            let title = t.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").chars().take(60).collect::<String>();
+            let title = title_of(&t);
             r.open(format!("text:{}", short_hash(&t)), title, formats::from_text(&t))
         } else if let Some(id) = transcript {
             let core = app.state::<Arc<Core>>();
@@ -612,10 +636,23 @@ pub fn reading_delete_voice(app: AppHandle, id: String) -> R<VoicesView> {
     Ok(r.voices())
 }
 
-/// The files Read aloud opens, for the file dialog and for dropping.
+/// The files Read aloud opens, for dropping.
 #[tauri::command]
 pub fn reading_formats() -> Vec<&'static str> {
     formats::EXTENSIONS.to_vec()
+}
+
+#[tauri::command]
+pub async fn reading_pick_file(app: AppHandle) -> Option<String> {
+    use tauri_plugin_dialog::DialogExt;
+    app.dialog()
+        .file()
+        .set_title(crate::tr!("Choose a file to read aloud"))
+        .add_filter(crate::tr!("Text"), formats::EXTENSIONS)
+        .add_filter(crate::tr!("All files"), &["*"])
+        .blocking_pick_file()
+        .and_then(|f| f.into_path().ok())
+        .map(|p| p.display().to_string())
 }
 
 #[cfg(test)]
@@ -640,6 +677,14 @@ mod tests {
         assert_eq!(s[2].runs[0].text, "ارتفعت الأسعار خمسة عشر بالمئة.");
         assert_eq!(s[2].text, "ارتفعت الأسعار 15%.");
         assert_eq!(s[3].runs[0].lang, Lang::En);
+    }
+
+    #[test]
+    fn pasted_text_is_named_by_its_first_sentence() {
+        assert_eq!(title_of("
+  رفعنا النسخة على GitHub أمس. وفي نهاية الاجتماع قال المدير"), "رفعنا النسخة على GitHub أمس.");
+        let long = title_of(&"word ".repeat(40));
+        assert!(long.ends_with('…') && long.chars().count() <= 61, "{long}");
     }
 
     #[test]

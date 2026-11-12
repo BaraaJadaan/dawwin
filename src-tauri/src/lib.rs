@@ -742,6 +742,7 @@ pub fn run() {
             reading::reading_pause_voice,
             reading::reading_delete_voice,
             reading::reading_formats,
+            reading::reading_pick_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

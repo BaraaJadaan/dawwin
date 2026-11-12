@@ -110,10 +110,12 @@ function toast(msg, action) {
 
 function showView(v) {
   S.view = v;
-  for (const id of ["home", "setup", "settings", "transcript", "guide"]) $("view-" + id).hidden = id !== v;
+  for (const id of ["home", "setup", "settings", "transcript", "guide", "read"]) $("view-" + id).hidden = id !== v;
   $("btn-settings").classList.toggle("active", v === "settings");
+  $("btn-read").classList.toggle("active", v === "read");
+  onReadView(v === "read");
   $("btn-guide").classList.toggle("active", v === "guide");
-  if (v === "settings") { renderSettings(); checkOldEngine(); }
+  if (v === "settings") { renderSettings(); checkOldEngine(); renderReadingSettings(); }
   if (v === "guide") renderGuide();
   if (v === "home") paintSteps();
   renderHistory();
@@ -1660,6 +1662,7 @@ function wire() {
   wireListen();
   wireVolume();
   wirePlayer();
+  wireReader();
   $("btn-new").onclick = () => { showView("home"); };
   $("dropzone").addEventListener("click", (ev) => {
     if (ev.target.closest("#home-folder")) chooseFolder();
@@ -1814,9 +1817,15 @@ function wire() {
   });
 
   const overlay = $("drop-overlay");
-  listen("tauri://drag-enter", () => { overlay.querySelector(".drop-card").textContent = dropText(); overlay.hidden = false; });
+  listen("tauri://drag-enter", () => { overlay.querySelector(".drop-card").textContent = S.view === "read" ? t("read.drop") : dropText(); overlay.hidden = false; });
   listen("tauri://drag-leave", () => { overlay.hidden = true; });
-  listen("tauri://drag-drop", (e) => { overlay.hidden = true; addFiles(e.payload.paths || []); });
+  listen("tauri://drag-drop", async (e) => {
+    overlay.hidden = true;
+    const paths = e.payload.paths || [];
+    // documents without recordings are for reading aloud
+    if (!paths.some((p) => MEDIA.all.includes(extOf(p))) && await readDropped(paths)) return;
+    addFiles(paths);
+  });
 
   listen("state", (e) => onState(e.payload));
   listen("segment", (e) => onSegment(e.payload));

@@ -463,3 +463,32 @@ mark.current { background: var(--mark-current); color: #1c1203; }
   .sidebar { width: 236px; }
   .segments, .t-head { padding-left: 18px; padding-right: 18px; }
 }
+
+/* ------------------------------------------------------------ read aloud */
+.view-read { display: flex; flex-direction: column; overflow: hidden; }
+.read-empty { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 28px; }
+.read-drop { width: min(760px, 100%); }
+.read-paste { width: min(760px, 100%); display: flex; flex-direction: column; gap: 10px; }
+.read-paste textarea { min-height: 140px; resize: vertical; font: inherit; line-height: 1.6; }
+.read-paste-row { display: flex; justify-content: flex-end; }
+.read-doc { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.read-doc[hidden] { display: none; }
+.read-head .t-title-row { justify-content: space-between; }
+.read-voices { gap: 14px; flex-wrap: wrap; }
+.read-voice { display: inline-flex; align-items: center; gap: 6px; }
+.read-text-box { flex: 1; overflow-y: auto; padding: 18px 28px 48px; font-size: 17px; line-height: 1.9; max-width: 860px; width: 100%; margin: 0 auto; }
+.read-block { margin: 0 0 14px; }
+h2.read-block { font-size: 20px; margin: 18px 0 10px; }
+li.read-block { margin-inline-start: 18px; }
+.rs { cursor: pointer; border-radius: 4px; padding: 1px 0; transition: background .15s; unicode-bidi: isolate; }
+.rs:hover { background: var(--bg); }
+.rs.now { background: var(--accent-soft); color: var(--text); box-shadow: 0 0 0 3px var(--accent-soft); }
+.read-error { display: flex; align-items: center; gap: 10px; justify-content: space-between; margin: 0 28px 8px; }
+.read-error[hidden] { display: none; }
+.read-player .controls { gap: 10px; }
+.read-player .grow { flex: 1; }
+.read-player .icon-btn:disabled { opacity: .4; cursor: default; }
+.read-player.playing .play .i-play { display: none; }
+.read-player.playing .play .i-pause { display: block; }
+.side-read { margin-top: auto; margin-bottom: -12px; }
+.side-read + .side-guide { margin-top: 0; }

@@ -131,7 +131,10 @@ pub fn installed(paths: &Paths, m: &VoiceModel) -> bool {
 
 /// The voice for a language when none was chosen: the first one installed, a woman's.
 pub fn default_voice(paths: &Paths, lang: Lang) -> Option<String> {
-    models().into_iter().filter(|m| installed(paths, m)).find_map(|m| m.voices.iter().find(|v| v.lang == lang).map(|v| voice_key(&m, v)))
+    models().into_iter().filter(|m| installed(paths, m)).find_map(|m| {
+        let v = m.voices.iter().find(|v| v.lang == lang && v.woman).or_else(|| m.voices.iter().find(|v| v.lang == lang))?;
+        Some(voice_key(&m, v))
+    })
 }
 
 #[cfg(test)]

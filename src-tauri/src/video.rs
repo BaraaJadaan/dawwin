@@ -379,29 +379,36 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
             let _ = std::io::Read::read_to_string(&mut err, &mut s);
             s
         });
-        let mut moved = false;
-        let mut cancelled = false;
-        for line in std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap())).map_while(|l| l.ok()) {
-            if cancel.load(Ordering::Relaxed) {
-                cancelled = true;
-                let _ = child.kill();
-                break;
-            }
-            if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
-                if us > 0.0 {
-                    moved = true;
-                    if p.duration_s > 0.0 {
+        let progress = child.stdout.take().unwrap();
+        let child = std::sync::Mutex::new(child);
+        // frames the encoder has written: ffmpeg may report a time before the encoder even opens
+        let mut frames = 0u64;
+        crate::setup::killing_on_stop(&[&child], cancel, || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(progress)).map_while(|l| l.ok()) {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if let Some(n) = line.strip_prefix("frame=").and_then(|v| v.trim().parse::<u64>().ok()) {
+                    frames = frames.max(n);
+                }
+                if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
+                    if us > 0.0 && p.duration_s > 0.0 {
                         on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
                     }
                 }
             }
-        }
-        let status = child.wait()?;
-        let stderr = err_thread.join().unwrap_or_default();
-        if cancelled || cancel.load(Ordering::Relaxed) {
+        });
+        let mut child = child.into_inner().unwrap_or_else(|e| e.into_inner());
+        if cancel.load(Ordering::Relaxed) {
+            crate::setup::kill_tree(&mut child);
+            let _ = child.wait();
+            // its stderr is not waited for: what it started may hold it open
             let _ = std::fs::remove_file(&part);
             bail!("cancelled");
         }
+        let status = child.wait()?;
+        let stderr = err_thread.join().unwrap_or_default();
+        let moved = frames > 0;
         if status.success() {
             std::fs::rename(&part, dest)?;
             on_progress(1.0);

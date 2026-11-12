@@ -6,7 +6,6 @@
 //! What was transcribed live is the final transcript. A recording interrupted by a crash is found
 //! at the next start by its journal and offered back.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};

@@ -128,6 +128,8 @@ pub struct Status {
     /// What stops a track: "mic-blocked" (Windows' privacy settings), "no-device", "failed"
     pub me_problem: Option<String>,
     pub them_problem: Option<String>,
+    /// What Windows said, for the log
+    pub problem_detail: Option<String>,
     /// Under 2 GB free on the recording's drive
     pub disk_low: bool,
     /// Stopped because under 500 MB were left
@@ -147,7 +149,6 @@ pub struct Config {
 pub struct Recorder {
     stop: Arc<AtomicBool>,
     mic: Sender<Option<String>>,
-    status: Arc<Mutex<Status>>,
     thread: Option<std::thread::JoinHandle<Result<u64>>>,
 }
 
@@ -189,9 +190,9 @@ impl Recorder {
         let (mic_tx, mic_rx) = mpsc::channel();
         let (pieces_tx, pieces_rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(Status::default()));
-        let (s, st) = (stop.clone(), status.clone());
-        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, s, mic_rx, st, pieces_tx))?;
-        Ok((Recorder { stop, mic: mic_tx, status, thread: Some(thread) }, pieces_rx))
+        let s = stop.clone();
+        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, s, mic_rx, status, pieces_tx))?;
+        Ok((Recorder { stop, mic: mic_tx, thread: Some(thread) }, pieces_rx))
     }
 
     pub fn stop(&self) {
@@ -201,10 +202,6 @@ impl Recorder {
     /// Record from another microphone from now on (none: the Windows default).
     pub fn switch_mic(&self, id: Option<String>) {
         let _ = self.mic.send(id);
-    }
-
-    pub fn status(&self) -> Status {
-        self.status.lock().unwrap().clone()
     }
 
     /// Wait until the WAV is whole: the frames in it.
@@ -306,8 +303,9 @@ fn run(
                     }
                 }
             }
-            Ok(Event::Problem { track, code, .. }) => {
+            Ok(Event::Problem { track, code, detail }) => {
                 let mut st = status.lock().unwrap();
+                st.problem_detail = Some(detail);
                 match track {
                     Track::Me => {
                         st.me_problem = Some(code);
@@ -378,7 +376,8 @@ fn run(
             }
         }
     }
-    // the end: every source closed, then what they sent, then the rest of the file
+    // the end: every source closed, then what they sent, then the rest of the file, up to Stop
+    let stopped_at = timeline::index_of(source::now(), t0).max(0) as u64;
     for s in stops.iter().flatten() {
         s.store(true, Ordering::SeqCst);
     }
@@ -391,7 +390,7 @@ fn run(
             tracks[track.index()].place(timeline::index_of(ts, t0), &data);
         }
     }
-    let end = tracks[0].end().max(tracks[1].end()).max(written as u64) as usize;
+    let end = tracks[0].end().max(tracks[1].end()).max(written as u64).max(stopped_at) as usize;
     let end = end.div_ceil(echo::BLOCK) * echo::BLOCK;
     let mut me = tracks[0].take(end as u64);
     let mut them = tracks[1].take(end as u64);

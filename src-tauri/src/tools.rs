@@ -29,17 +29,19 @@ pub struct Tool {
     /// Every file it needs to run: it counts as installed only when all are there, so a folder a
     /// cleaner emptied in part is offered again, not run
     pub files: &'static [&'static str],
+    /// Which build of it this is: one installed in an older version is offered as an update
+    pub version: u32,
 }
 
 /// The release the tools are files of. A newer version of the app keeps pointing here until a
 /// tool itself changes.
-const RELEASE: &str = "v1.3.0";
+const RELEASE: &str = "v1.4.0";
 
 pub const TRANSLATOR: Tool = Tool {
     id: "translator",
     file: "dawwin-translator-llama.cpp-b12237.tar.xz",
-    size: 14_115_908,
-    sha256: "f66c4406f39a8eeb37d77b76a9c7ed07055295e2f1266fd06a14f90cd540864f",
+    size: 14_117_968,
+    sha256: "98f19e4bc87fc78e40bca8ec752d0a513d26fa04f464e77c015afaa67de02665",
     folder: "translate",
     exe: "llama-server.exe",
     // what the pack holds, but its two license files
@@ -50,26 +52,30 @@ pub const TRANSLATOR: Tool = Tool {
         "ggml-cpu-skylakex.dll", "ggml-cpu-cannonlake.dll", "ggml-cpu-cascadelake.dll", "ggml-cpu-icelake.dll",
         "ggml-cpu-cooperlake.dll", "ggml-cpu-alderlake.dll", "ggml-cpu-sapphirerapids.dll", "ggml-cpu-zen4.dll",
     ],
+    version: 1,
 };
 
 pub const FFMPEG_AUDIO: Tool = Tool {
     id: "ffmpeg-audio",
     file: "dawwin-ffmpeg-audio-8.1.2.tar.xz",
-    size: 1_332_460,
-    sha256: "02d8a17aa61f3a09a8a80cdf84f26f65ceebe3f8c08e765190c57b8b25d00379",
+    size: 1_335_556,
+    sha256: "48a2b244b1815cdfe2f85a411812369e9efd480e67b42ef939d74e0719be4659",
     folder: "ffmpeg-audio",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
+    version: 1,
 };
 
 pub const FFMPEG_VIDEO: Tool = Tool {
     id: "ffmpeg-video",
     file: "dawwin-ffmpeg-video-8.1.2.tar.xz",
-    size: 3_219_168,
-    sha256: "c60e43a640f7cdf681f6d92574d2d1d15d87d37e924111df591c9d611ff90d59",
+    size: 3_847_048,
+    sha256: "464b379577c87fb1952093cde7ff0112488f4e43502735e02d821629bb41feaf",
     folder: "ffmpeg-video",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
+    // 2 (on the release of 1.4.0) reads AV1 (`video::reads_av1`)
+    version: 2,
 };
 
 pub const TOOLS: [Tool; 3] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO];
@@ -101,6 +107,22 @@ fn archive(paths: &Paths, t: &Tool) -> PathBuf {
 pub fn exe(paths: &Paths, t: &Tool) -> Option<PathBuf> {
     let dir = root(paths).join(t.folder);
     t.files.iter().all(|f| dir.join(f).is_file()).then(|| dir.join(t.exe))
+}
+
+/// The file in a tool's folder that says which build of it is there.
+const VERSION_FILE: &str = "dawwin-version.txt";
+
+/// Which build of the tool is installed: none, or the one its folder says (1 for the builds of
+/// 1.3, which did not say).
+pub fn installed_version(paths: &Paths, t: &Tool) -> Option<u32> {
+    exe(paths, t)?;
+    let said = std::fs::read_to_string(root(paths).join(t.folder).join(VERSION_FILE)).ok();
+    Some(said.and_then(|v| v.trim().parse().ok()).unwrap_or(1))
+}
+
+/// Installed, but an older build than the one the app now pins: offered as an update.
+pub fn outdated(paths: &Paths, t: &Tool) -> bool {
+    installed_version(paths, t).is_some_and(|v| v < t.version)
 }
 
 /// Tools unpacked by Dawwin 1.3.0 carry the date 1970-01-01, which cleaners and the antivirus take
@@ -135,6 +157,7 @@ pub fn install(paths: &Paths, t: &Tool, stop: &AtomicBool, on_event: &mut dyn Fn
     let unpacked = unpack(&dest, &root(paths).join(t.folder));
     let _ = std::fs::remove_file(&dest);
     unpacked?;
+    std::fs::write(root(paths).join(t.folder).join(VERSION_FILE), t.version.to_string())?;
     if exe(paths, t).is_none() {
         bail!("{} has no {}", t.file, t.exe);
     }
@@ -262,9 +285,16 @@ mod tests {
         refresh_dates(&paths);
         let dated = std::fs::metadata(into.join("ggml.dll")).unwrap().modified().unwrap();
         assert!(dated > std::time::SystemTime::now() - std::time::Duration::from_secs(3600), "{dated:?}");
+        // the builds of 1.3 did not say their version: the first
+        assert_eq!(installed_version(&paths, &t), Some(1));
+        let newer = Tool { version: 2, ..t };
+        assert!(outdated(&paths, &newer) && !outdated(&paths, &t), "a newer pin is offered as an update");
+        std::fs::write(into.join(VERSION_FILE), "2").unwrap();
+        assert!(!outdated(&paths, &newer));
         // a cleaner took one of its files: not installed, so it is offered again
         std::fs::remove_file(into.join("ggml-base.dll")).unwrap();
         assert_eq!(exe(&paths, &t), None);
+        assert_eq!(installed_version(&paths, &t), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

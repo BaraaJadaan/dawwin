@@ -72,6 +72,48 @@ impl Core {
     }
 }
 
+/// A recording started, or is under way: the minutes give it the engine and the GPU, and wait.
+#[derive(Debug)]
+pub(super) struct GiveWay;
+
+impl std::fmt::Display for GiveWay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a recording is under way")
+    }
+}
+
+impl std::error::Error for GiveWay {}
+
+/// Set when the run is stopped or a recording starts: either ends the model's request at once (the
+/// notes saved are kept). Watched until it is dropped.
+struct Watch {
+    stop: Arc<AtomicBool>,
+    done: Arc<AtomicBool>,
+}
+
+impl Watch {
+    fn new(cancel: Arc<AtomicBool>) -> Self {
+        let (stop, done) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+        let (s, d) = (stop.clone(), done.clone());
+        std::thread::spawn(move || {
+            while !d.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::SeqCst) || super::meeting::is_recording() {
+                    s.store(true, Ordering::SeqCst);
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        Watch { stop, done }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Relaxed);
+    }
+}
+
 /// The server, with this model and room for the minutes, loaded.
 fn ensure_server<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProcess>, model: &str, context: u32, cancel: &AtomicBool) -> Result<&'a mut TranslatorProcess> {
     let cpu_only = core.settings.lock().unwrap().run_on() == "cpu" || core.translator_gpu_failed.load(Ordering::SeqCst);
@@ -121,6 +163,12 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     }
     let (Some(transcript), Some(language)) = (job.transcript.clone(), job.target.clone()) else { return Ok(()) };
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
+    // a recording has the engine's turn: the minutes wait for it (the queue sends them again)
+    if super::meeting::is_recording() {
+        return Err(anyhow!(GiveWay));
+    }
+    let watch = Watch::new(cancel.clone());
+    let stop: &AtomicBool = &watch.stop;
     let started = Instant::now();
     let _awake = KeepAwake::new();
     core.update_job(id, |j| j.status = "loading".into());
@@ -133,8 +181,9 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     let dir = core.paths.history_dir();
     let t = history::load(&dir, &transcript)?;
     minutes::ensure_text(&t)?;
-    let file: Value = serde_json::from_slice(&std::fs::read(dir.join(format!("{transcript}.json")))?).unwrap_or_default();
-    let lines = minutes::lines(&t, &minutes::speakers(&file));
+    let lines = minutes::lines(&t, &minutes::speakers(&t));
+    // a recorded meeting: the model is told who "Me" and "Them" are
+    let note = minutes::who_is_who(&t);
     let from = minutes::fingerprint(&t);
     let parts = minutes::plan(&lines);
     let spans: Vec<[usize; 2]> = parts.iter().map(|&(a, b)| [lines[a].index, lines[b - 1].index]).collect();
@@ -145,7 +194,7 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
         .and_then(|m| m.draft.clone())
         .filter(|d| d.language == language && d.model == variant.label && d.from == from && d.parts == spans)
         .unwrap_or_else(|| Draft { language: language.clone(), model: variant.label.into(), from: from.clone(), parts: spans.clone(), notes: Vec::new() });
-    let w = ensure_server(core, server, &status.path, spec.context, &cancel)?;
+    let w = ensure_server(core, server, &status.path, spec.context, stop)?;
     let device = w.placement.label();
     core.update_job(id, |j| {
         j.status = "writing".into();
@@ -157,10 +206,10 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     let source = t.language.clone();
     let steps = if parts.len() == 1 { 1 } else { parts.len() + 1 };
     let answer = if parts.len() == 1 {
-        ask(core, id, w, &spec, &minutes::ask_whole(&lines, &source, &language), &cancel, 0, 1, started)?
+        ask(core, id, w, &spec, &minutes::with_note(minutes::ask_whole(&lines, &source, &language), note.as_deref()), stop, 0, 1, started)?
     } else {
         for (n, &(a, b)) in parts.iter().enumerate().skip(draft.notes.len()) {
-            let note = ask(core, id, w, &spec, &minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), &cancel, n, steps, started)?;
+            let note = ask(core, id, w, &spec, &minutes::with_note(minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), note.as_deref()), stop, n, steps, started)?;
             // a part the model could not answer still counts, empty, so the rest goes on
             draft.notes.push(note.unwrap_or_else(|| serde_json::json!({ "kind": "other", "summary": "" })));
             let kept = draft.clone();
@@ -170,7 +219,7 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
         let highest = lines.last().map_or(1, |l| l.index + 1);
         let last = steps - 1;
         Some(minutes::combine(draft.notes.clone(), times, |notes, times| {
-            ask(core, id, w, &spec, &minutes::ask_combine(notes, times, highest, &source, &language), &cancel, last, steps, started)
+            ask(core, id, w, &spec, &minutes::with_note(minutes::ask_combine(notes, times, highest, &source, &language), note.as_deref()), stop, last, steps, started)
         })?)
     };
     let Some(answer) = answer else {

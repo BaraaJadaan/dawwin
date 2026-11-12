@@ -22,19 +22,22 @@ const BUFFER: usize = 256 * 1024;
 const START_OVERS: u64 = 3;
 
 /// What a model is built on. It decides which languages the model is used for. The translator is
-/// the one that is no speech model: the app uses one at a time, whichever of them it is.
+/// the one that is no speech model: the app uses one at a time, whichever of them it is. The
+/// speaker and language models do not write text either: they tell who speaks, and in which language.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
     Cohere,
     Canary,
     Whisper,
     Translator,
+    Speakers,
+    Language,
     /// The models that write minutes, run by the translator's server too
     Minutes,
 }
 
 impl Family {
-    pub const ALL: [Family; 5] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Minutes];
+    pub const ALL: [Family; 7] = [Family::Cohere, Family::Canary, Family::Whisper, Family::Translator, Family::Speakers, Family::Language, Family::Minutes];
 
     /// What the settings and the interface call it.
     pub fn key(self) -> &'static str {
@@ -43,6 +46,8 @@ impl Family {
             Family::Canary => "canary",
             Family::Whisper => "whisper",
             Family::Translator => "translator",
+            Family::Speakers => "speakers",
+            Family::Language => "language",
             Family::Minutes => "minutes",
         }
     }
@@ -52,6 +57,8 @@ impl Family {
             "cohere_asr" => Some(Family::Cohere),
             "canary" => Some(Family::Canary),
             "whisper" => Some(Family::Whisper),
+            "sortformer" => Some(Family::Speakers),
+            "ecapa_tdnn" => Some(Family::Language),
             _ => None,
         }
     }
@@ -63,6 +70,8 @@ impl Family {
             Family::Canary => "NVIDIA Canary",
             Family::Whisper => "OpenAI Whisper",
             Family::Translator => "MiLMMT-46",
+            Family::Speakers => "NVIDIA Streaming Sortformer 4spk v2.1",
+            Family::Language => "VoxLingua107 ECAPA-TDNN",
             Family::Minutes => "Minutes model",
         }
     }
@@ -125,7 +134,7 @@ pub struct Variant {
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 10] = [
+pub const VARIANTS: [Variant; 12] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -206,6 +215,31 @@ pub const VARIANTS: [Variant; 10] = [
         sha256: "74d38ba75108d455326e9deeaf9ab01bb266dfa665eae9c4aa84e84485d4fdf9",
         size: 806_057_408,
         prompt: Some(Prompt::MiLMMT),
+    },
+    // Who speaks when, up to four people (NVIDIA Open Model License). Only near-reference
+    // quantizations exist for it: the smaller ones swap speakers in the middle of a recording.
+    Variant {
+        id: "speakers",
+        family: Family::Speakers,
+        label: "NVIDIA Streaming Sortformer 4spk v2.1 · Q8",
+        repository: "handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf",
+        revision: "60ebab3ef7cae9869be0abcde13360347e96ba03",
+        file: "diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf",
+        sha256: "a5dacdc650790266c7a362e54e6bf51952015487edaa606c4e11632bc32442a9",
+        size: 139_310_336,
+        prompt: None,
+    },
+    // Which language is spoken, of 107 (SpeechBrain's VoxLingua107 ECAPA-TDNN, Apache-2.0)
+    Variant {
+        id: "language",
+        family: Family::Language,
+        label: "VoxLingua107 ECAPA-TDNN · Q8",
+        repository: "handy-computer/lang-id-voxlingua107-ecapa-gguf",
+        revision: "e59f0f3847e77723b7d58447ef9456fa0c7e9436",
+        file: "lang-id-voxlingua107-ecapa-Q8_0.gguf",
+        sha256: "063e6cb0af3d53085fc7d68356dfde5ecee2ffa7bc79855f7e4ff930081bfe3a",
+        size: 26_693_632,
+        prompt: None,
     },
     // Minutes: the places the maintainer's rule fills, from tools/bench-minutes (results-1.6.0.md):
     // the best (Jais-3 7B, which with its context in 8 bits also fits an 8 GB GPU, so it fills the
@@ -290,6 +324,12 @@ pub fn is_right_to_left(code: &str) -> bool {
 
 /// The name of a language in English, or the code of one the app does not know. A language that is
 /// only translated into ("zh-Hant") has its name from the translation model's list.
+/// Whether `name`, in lower case, is the English name of a language Dawwin knows: those its
+/// subtitle tracks are called by.
+pub fn is_language_name(name: &str) -> bool {
+    LANGUAGES.iter().chain(MILMMT_LANGUAGES).any(|(_, n)| n.to_lowercase() == name)
+}
+
 pub fn language_name<'a>(code: &'a str) -> &'a str {
     LANGUAGES.iter().chain(MILMMT_LANGUAGES).find(|(c, _)| *c == code).map_or(code, |(_, name)| *name)
 }
@@ -412,6 +452,12 @@ pub fn check_file(path: &Path) -> Result<Family> {
         .ok_or_else(|| anyhow!(crate::tr!("Dawwin cannot use that model. It works with Cohere Transcribe, Canary and Whisper model files.")))
 }
 
+/// Whether the family writes text: the speech models, not the translator nor the ones that tell
+/// speakers or languages apart.
+pub fn transcribes(f: Family) -> bool {
+    matches!(f, Family::Cohere | Family::Canary | Family::Whisper)
+}
+
 /// A model file in this folder, of this family if one is named, ours first and the larger first.
 pub fn find_in_folder(dir: &Path, family: Option<Family>) -> Option<PathBuf> {
     let wanted = |p: &PathBuf| check_file(p).is_ok_and(|f| family.is_none() || family == Some(f));
@@ -437,8 +483,9 @@ pub struct Download {
 
 pub enum Event {
     Progress { done: u64 },
-    /// The connection is gone; trying again after this many seconds
-    Retrying { wait_s: u64, attempt: u64 },
+    /// The connection is gone; trying again after this many seconds. After five tries that got
+    /// nowhere, `reason` says why the last one failed.
+    Retrying { wait_s: u64, attempt: u64, reason: Option<String> },
     /// All of it is here; reading it back to check it
     Verifying { done: u64 },
 }
@@ -452,22 +499,30 @@ pub enum Finished {
 enum Fetch {
     Complete,
     Stopped,
-    /// Try again later
-    Retry,
+    /// Try again later; why it failed
+    Retry(String),
     /// The file on the server does not continue what we have
     StartOver,
 }
 
+/// After this many tries that got nowhere, the person waiting is told why.
+const TELL_AFTER: u64 = 5;
+/// A fifth of a second of the wait between tries (the tests do not wait).
+#[cfg(not(test))]
+const WAIT_TICK: Duration = Duration::from_millis(200);
+#[cfg(test)]
+const WAIT_TICK: Duration = Duration::from_millis(1);
+
+/// Download `d`, through the proxy Windows or `HTTPS_PROXY` names (see `net`).
 pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)) -> Result<Finished> {
+    download_via(d, crate::net::proxy_for(&d.url).as_deref(), stop, on_event)
+}
+
+pub fn download_via(d: &Download, proxy: Option<&str>, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)) -> Result<Finished> {
     if let Some(dir) = d.dest.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        // a connection that sends nothing for this long is dead, however slow it was before
-        .timeout_read(Duration::from_secs(60))
-        .tls_connector(std::sync::Arc::new(native_tls::TlsConnector::new()?))
-        .build();
+    let agent = crate::net::agent(proxy)?;
     let mut attempt = 0u64;
     let mut start_overs = 0u64;
     loop {
@@ -478,7 +533,7 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
         if before < d.size {
             need_space(d.dest.parent().unwrap_or(Path::new(".")), d.size - before)?;
         }
-        match fetch(&agent, d, before, stop, on_event)? {
+        match fetch(&agent, proxy, d, before, stop, on_event)? {
             Fetch::Complete => break,
             Fetch::Stopped => return Ok(Finished::Paused),
             Fetch::StartOver => {
@@ -490,7 +545,7 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
                     bail!(crate::tr!("The server keeps sending a different file. Try again later, or download it by hand."));
                 }
                 let wait_s = if cfg!(test) { 0 } else { 10 * start_overs };
-                on_event(Event::Retrying { wait_s, attempt: start_overs });
+                on_event(Event::Retrying { wait_s, attempt: start_overs, reason: None });
                 for _ in 0..wait_s * 5 {
                     if stop.load(Ordering::SeqCst) {
                         return Ok(Finished::Paused);
@@ -498,16 +553,16 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
                     std::thread::sleep(Duration::from_millis(200));
                 }
             }
-            Fetch::Retry => {
+            Fetch::Retry(why) => {
                 // what counts is whether it is getting anywhere, not how often it dropped
                 attempt = if downloaded(&d.dest) > before { 1 } else { attempt + 1 };
                 let wait_s = [5, 10, 20, 30, 60].get(attempt as usize - 1).copied().unwrap_or(60);
-                on_event(Event::Retrying { wait_s, attempt });
+                on_event(Event::Retrying { wait_s, attempt, reason: (attempt >= TELL_AFTER).then_some(why) });
                 for _ in 0..wait_s * 5 {
                     if stop.load(Ordering::SeqCst) {
                         return Ok(Finished::Paused);
                     }
-                    std::thread::sleep(Duration::from_millis(200));
+                    std::thread::sleep(WAIT_TICK);
                 }
             }
         }
@@ -527,7 +582,7 @@ pub fn download(d: &Download, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)
     Ok(Finished::Complete)
 }
 
-fn fetch(agent: &ureq::Agent, d: &Download, offset: u64, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)) -> Result<Fetch> {
+fn fetch(agent: &ureq::Agent, proxy: Option<&str>, d: &Download, offset: u64, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)) -> Result<Fetch> {
     if offset >= d.size {
         return Ok(Fetch::Complete);
     }
@@ -539,9 +594,10 @@ fn fetch(agent: &ureq::Agent, d: &Download, offset: u64, stop: &AtomicBool, on_e
     let response = match response {
         Ok(r) => r,
         Err(ureq::Error::Status(416, _)) => return Ok(Fetch::StartOver),
-        Err(ureq::Error::Status(code, _)) if code == 429 || code >= 500 => return Ok(Fetch::Retry),
-        Err(ureq::Error::Status(code, _)) => bail!(crate::tr!("The server refused the download (error {}).", code)),
-        Err(ureq::Error::Transport(_)) => return Ok(Fetch::Retry),
+        // busy, or a proxy that wants a sign-in: it may let us through later
+        Err(e @ ureq::Error::Status(code, _)) if code == 429 || code == 407 || code >= 500 => return Ok(Fetch::Retry(crate::net::why(&e, proxy))),
+        Err(e @ ureq::Error::Status(..)) => bail!(crate::net::why(&e, proxy)),
+        Err(e @ ureq::Error::Transport(_)) => return Ok(Fetch::Retry(crate::net::why(&e, proxy))),
     };
     // a server may answer a range request with the whole file: then that is what we write
     let mut at = if response.status() == 206 { offset } else { 0 };
@@ -565,9 +621,9 @@ fn fetch(agent: &ureq::Agent, d: &Download, offset: u64, stop: &AtomicBool, on_e
             break Fetch::Stopped;
         }
         let n = match body.read(&mut buf) {
-            Ok(0) => break if at >= d.size { Fetch::Complete } else { Fetch::Retry },
+            Ok(0) => break if at >= d.size { Fetch::Complete } else { Fetch::Retry(crate::tr!("The connection stopped answering.")) },
             Ok(n) => n,
-            Err(_) => break Fetch::Retry,
+            Err(_) => break Fetch::Retry(crate::tr!("The connection stopped answering.")),
         };
         if at + n as u64 > d.size {
             // longer than the file we are after: it is not that file
@@ -747,6 +803,109 @@ mod tests {
             }
         });
         Server { url, ranges }
+    }
+
+    /// A proxy that tunnels as proxies do (CONNECT), counts who came through it, and with
+    /// `sign_in` asks for one instead (407), as a company's might.
+    fn proxy(sign_in: bool) -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut client) = stream else { return };
+                let log = log.clone();
+                std::thread::spawn(move || {
+                    let mut reader = std::io::BufReader::new(client.try_clone().unwrap());
+                    let mut first = String::new();
+                    let _ = reader.read_line(&mut first);
+                    let mut headers = String::new();
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                            break;
+                        }
+                        headers.push_str(&line);
+                    }
+                    log.lock().unwrap().push(first.trim().to_string());
+                    if sign_in {
+                        let _ = client.write_all(b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"uni\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        return;
+                    }
+                    let mut parts = first.split_whitespace();
+                    let (method, target) = (parts.next().unwrap_or_default().to_string(), parts.next().unwrap_or_default().to_string());
+                    // https: a tunnel to the server; http: the request passed on, with its path only
+                    let host = if method == "CONNECT" { target.clone() } else { target.trim_start_matches("http://").split('/').next().unwrap_or_default().to_string() };
+                    let Ok(mut server) = std::net::TcpStream::connect(&host) else { return };
+                    if method == "CONNECT" {
+                        let _ = client.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n");
+                    } else {
+                        let path = target.trim_start_matches("http://").trim_start_matches(host.as_str());
+                        let _ = server.write_all(format!("{method} {path} HTTP/1.1\r\n{headers}\r\n").as_bytes());
+                    }
+                    let (mut c2, mut s2) = (client.try_clone().unwrap(), server.try_clone().unwrap());
+                    std::thread::spawn(move || {
+                        let _ = std::io::copy(&mut c2, &mut s2);
+                    });
+                    let _ = std::io::copy(&mut server, &mut client);
+                    // the server hung up: so does the proxy, as a real one would
+                    let _ = client.shutdown(std::net::Shutdown::Both);
+                });
+            }
+        });
+        (url, seen)
+    }
+
+    #[test]
+    fn a_download_goes_through_the_proxy() {
+        let (body, dir) = (payload(), folder("proxy"));
+        let s = serve(body.clone(), Serve::Normal);
+        let (p, seen) = proxy(false);
+        let d = job(&s, &dir, &body);
+        assert_eq!(download_via(&d, Some(&p), &AtomicBool::new(false), &mut |_| {}).unwrap(), Finished::Complete);
+        assert_eq!(std::fs::read(&d.dest).unwrap(), body);
+        assert_eq!(seen.lock().unwrap().first().map(String::as_str), Some(format!("GET {} HTTP/1.1", s.url).as_str()));
+        // the real downloads are https: they ask the proxy for a tunnel to the server
+        // a server that hangs up at once: the try ends quickly, after the proxy was asked
+        let gone = TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = gone.local_addr().unwrap().to_string();
+        std::thread::spawn(move || {
+            for c in gone.incoming() {
+                drop(c);
+            }
+        });
+        let mut secure = job(&s, &dir, &body);
+        secure.url = format!("https://{host}/model.gguf");
+        let stop = AtomicBool::new(false);
+        let _ = download_via(&secure, Some(&p), &stop, &mut |e| {
+            if let Event::Retrying { .. } = e {
+                stop.store(true, Ordering::SeqCst); // the stand-in server has no TLS: one try shows enough
+            }
+        });
+        assert!(seen.lock().unwrap().iter().any(|l| l == &format!("CONNECT {host} HTTP/1.1")), "{:?}", seen.lock().unwrap());
+    }
+
+    #[test]
+    fn a_proxy_that_wants_a_sign_in_is_said_after_five_tries() {
+        let (body, dir) = (payload(), folder("proxy-sign-in"));
+        let s = serve(body.clone(), Serve::Normal);
+        let (p, _) = proxy(true);
+        let d = job(&s, &dir, &body);
+        let stop = AtomicBool::new(false);
+        let mut told = Vec::new();
+        let end = download_via(&d, Some(&p), &stop, &mut |e| {
+            if let Event::Retrying { attempt, reason, .. } = e {
+                told.push((attempt, reason));
+                // no need to sit through the waits: the fifth try is enough
+                if attempt >= 5 {
+                    stop.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+        assert_eq!(end.unwrap(), Finished::Paused);
+        assert!(told[..4].iter().all(|(_, r)| r.is_none()), "not before the fifth try: {told:?}");
+        assert!(told[4].1.as_deref().is_some_and(|r| r.contains("sign-in")), "{told:?}");
     }
 
     fn payload() -> Vec<u8> {

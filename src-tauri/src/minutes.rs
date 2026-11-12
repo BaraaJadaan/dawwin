@@ -201,6 +201,10 @@ struct Prompts {
     same_language: String,
     other_language: String,
     fields: String,
+    /// A recorded meeting: who is who (not part of the benchmark's prompts, which have no such meeting)
+    recorded: String,
+    recorded_me: String,
+    recorded_them: String,
 }
 
 fn prompts() -> &'static Prompts {
@@ -235,47 +239,49 @@ pub fn lines(t: &Transcript, speakers: &[Option<String>]) -> Vec<Line> {
         .collect()
 }
 
-/// Who says each line, from the transcript's file as it is on the disk: transcripts with speakers
-/// (Dawwin 1.4) give each line a speaker's number and the transcript their names. Read loosely, so
-/// that the minutes work with transcripts from before speakers, and with any of the shapes.
-pub fn speakers(file: &Value) -> Vec<Option<String>> {
-    let names: Vec<(String, String)> = match file.get("speakers") {
-        Some(Value::Array(list)) => list
-            .iter()
-            .enumerate()
-            .filter_map(|(i, s)| match s {
-                Value::String(name) => Some(((i + 1).to_string(), name.clone())),
-                Value::Object(o) => {
-                    let id = o.get("number").or_else(|| o.get("id")).or_else(|| o.get("speaker")).map(id_text)?;
-                    let name = o.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                    Some((id, name))
-                }
-                _ => None,
-            })
-            .collect(),
-        Some(Value::Object(map)) => map.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect(),
-        _ => Vec::new(),
-    };
-    let Some(segments) = file.get("segments").and_then(Value::as_array) else { return Vec::new() };
-    segments
-        .iter()
-        .map(|s| {
-            let id = s.get("speaker").filter(|v| !v.is_null()).map(id_text)?;
-            if id.is_empty() {
-                return None;
-            }
-            let name = names.iter().find(|(k, _)| *k == id).map(|(_, n)| n.trim().to_string()).filter(|n| !n.is_empty());
-            Some(name.unwrap_or_else(|| if id.chars().all(|c| c.is_ascii_digit()) { format!("Speaker {id}") } else { id }))
-        })
-        .collect()
+/// Who says each line: the name the transcript gives its speaker ("Sara", or "Me" and "Them" in a
+/// recorded meeting, whose two tracks are speakers too), else "Speaker 2"; none when the speakers
+/// were not told apart.
+pub fn speakers(t: &Transcript) -> Vec<Option<String>> {
+    t.segments.iter().map(|s| s.speaker.map(|id| t.speaker_name(id))).collect()
 }
 
-fn id_text(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.trim().to_string(),
-        Value::Number(n) => n.to_string(),
-        _ => String::new(),
+/// In a recorded meeting, who is who, for the model: the speakers of the microphone's track recorded
+/// it, those of the PC's track are the other side of the call (by the names the transcript gives
+/// them). None for any other transcript.
+pub fn who_is_who(t: &Transcript) -> Option<String> {
+    let names = |track: &str| -> String {
+        let mut out: Vec<String> = Vec::new();
+        for s in t.segments.iter().filter(|s| s.track.as_deref() == Some(track) && !s.text.trim().is_empty()) {
+            if let Some(name) = s.speaker.map(|id| t.speaker_name(id)).filter(|n| !out.contains(n)) {
+                out.push(name);
+            }
+        }
+        out.join(", ")
+    };
+    let (me, them) = (names("me"), names("them"));
+    if me.is_empty() && them.is_empty() {
+        return None;
     }
+    let p = prompts();
+    let mut said = vec![p.recorded.clone()];
+    if !me.is_empty() {
+        said.push(p.recorded_me.replace("{me}", &me));
+    }
+    if !them.is_empty() {
+        said.push(p.recorded_them.replace("{them}", &them));
+    }
+    Some(said.join(" "))
+}
+
+/// The request with `note` first in what the model is asked (who is who in a recorded meeting).
+pub fn with_note(mut a: Ask, note: Option<&str>) -> Ask {
+    if let Some(note) = note {
+        if let Some(text) = a.messages[1]["content"].as_str().map(|c| format!("{note}\n\n{c}")) {
+            a.messages[1]["content"] = text.into();
+        }
+    }
+    a
 }
 
 /// The lines as the model reads them: "[12] 03:41 Sara: text".
@@ -858,6 +864,9 @@ mod tests {
                 voice: vec![],
                 words: vec![],
                 pauses: vec![],
+                heard: vec![],
+                speaker: None,
+                track: None,
             })
             .collect();
         Transcript {
@@ -871,9 +880,14 @@ mod tests {
             device: String::new(),
             model: String::new(),
             partial: false,
+            timed: false,
+            outputs: vec![],
+            outputs_listed: false,
             segments,
             translations: vec![],
             minutes: None,
+            speakers: vec![],
+            detected: None,
         }
     }
 
@@ -947,16 +961,30 @@ mod tests {
     }
 
     #[test]
-    fn speakers_are_read_from_any_shape_and_lines_without_one_have_none() {
-        let file = serde_json::json!({
-            "speakers": [{ "number": 1, "name": "سامي" }, { "number": 2, "name": "" }],
-            "segments": [{ "speaker": 1 }, { "speaker": 2 }, {}, { "speaker": null }],
-        });
-        assert_eq!(speakers(&file), vec![Some("سامي".to_string()), Some("Speaker 2".into()), None, None]);
-        let file = serde_json::json!({ "speakers": ["Ann", "Bo"], "segments": [{ "speaker": 2 }, { "speaker": "1" }] });
-        assert_eq!(speakers(&file), vec![Some("Bo".to_string()), Some("Ann".into())]);
-        let file = serde_json::json!({ "segments": [{ "text": "x" }] });
-        assert_eq!(speakers(&file), vec![None], "a transcript from before speakers");
+    fn speakers_are_named_as_the_transcript_names_them_and_a_recorded_meeting_says_who_is_who() {
+        let mut t = meeting();
+        t.speakers = vec![crate::transcript::Speaker { id: 1, name: "سامي".into() }, crate::transcript::Speaker { id: 2, name: String::new() }];
+        t.segments[0].speaker = Some(1);
+        t.segments[2].speaker = Some(2);
+        let named = speakers(&t);
+        assert_eq!(named[0].as_deref(), Some("سامي"));
+        assert_eq!(named[2].as_deref(), Some("Speaker 2"));
+        assert_eq!(named[3], None, "a line nobody was found for");
+        assert_eq!(lines(&t, &named)[0].speaker.as_deref(), Some("سامي"));
+        assert_eq!(who_is_who(&t), None, "not a recorded meeting");
+
+        // a recorded meeting: the microphone's track is "Me", the PC's is "Them" (or names given)
+        t.speakers = vec![crate::transcript::Speaker { id: 1, name: "Me".into() }, crate::transcript::Speaker { id: 2, name: "Lina".into() }];
+        for (i, s) in t.segments.iter_mut().enumerate() {
+            s.track = Some(if i % 2 == 0 { "me" } else { "them" }.into());
+            s.speaker = Some(if i % 2 == 0 { 1 } else { 2 });
+        }
+        let note = who_is_who(&t).unwrap();
+        assert!(note.contains("Me: the person who recorded") && note.contains("Lina: the other side"), "{note}");
+        let a = with_note(ask_whole(&lines(&t, &speakers(&t)), "en", "en"), Some(&note));
+        let user = a.messages[1]["content"].as_str().unwrap();
+        assert!(user.starts_with(&note) && user.contains("Me: ") && user.contains("Lina: "));
+        assert_eq!(with_note(ask_whole(&lines(&t, &[]), "en", "en"), None).messages, ask_whole(&lines(&t, &[]), "en", "en").messages);
     }
 
     #[test]
@@ -1117,8 +1145,8 @@ mod tests {
         assert_eq!(m["summary"], "2 notes");
     }
 
-    /// The minutes change only their own field of the transcript's file: a newer version's speakers,
-    /// unknown to this one, are still there after they are written and corrected.
+    /// The minutes change only their own field of the transcript's file: the speakers, the tracks
+    /// and anything a later version adds are still there after they are written and corrected.
     #[test]
     fn writing_and_correcting_minutes_keeps_the_rest_of_the_file() {
         let dir = std::env::temp_dir().join(format!("dawwin-minutes-keep-{}", std::process::id()));
@@ -1128,8 +1156,11 @@ mod tests {
         crate::history::save(&dir, &t).unwrap();
         let path = dir.join("keep-1.json");
         let mut raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        raw["speakers"] = serde_json::json!([{ "id": "S1", "name": "Sara" }]);
-        raw["segments"][0]["speaker"] = "S1".into();
+        // 1.4's speakers and 1.5's tracks, and a field some later version adds
+        raw["speakers"] = serde_json::json!([{ "id": 1, "name": "Sara" }]);
+        raw["segments"][0]["speaker"] = 1.into();
+        raw["segments"][0]["track"] = "me".into();
+        raw["later"] = serde_json::json!({ "kept": true });
         std::fs::write(&path, serde_json::to_vec(&raw).unwrap()).unwrap();
 
         let answer = serde_json::json!({ "kind": "meeting", "summary": "S.", "decisions": [{ "text": "A", "lines": [1] }], "actions": [], "topics": [], "open_questions": [] });
@@ -1141,7 +1172,9 @@ mod tests {
 
         let raw: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(raw["speakers"][0]["name"], "Sara");
-        assert_eq!(raw["segments"][0]["speaker"], "S1");
+        assert_eq!(raw["segments"][0]["speaker"], 1);
+        assert_eq!(raw["segments"][0]["track"], "me");
+        assert_eq!(raw["later"]["kept"], true);
         let kept = crate::history::load(&dir, "keep-1").unwrap().minutes.unwrap();
         assert!(kept.summary == "Mine." && kept.summary_edited && kept.decisions[0].text == "A");
         std::fs::remove_dir_all(&dir).ok();

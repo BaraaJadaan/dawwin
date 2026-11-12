@@ -9,5 +9,8 @@
   "task_combine": "Write the minutes of the whole recording in {language} from these notes. Merge items that say the same thing, keep the line numbers the notes give, and where a later part changes something agreed earlier, keep only the final version.",
   "same_language": "Keep names as the transcript writes them, and words said in another language (often English) as they were said.",
   "other_language": "Write names in {language} letters as they sound.",
+  "recorded": "This is a call recorded on this computer.",
+  "recorded_me": "{me}: the person who recorded it, on their own microphone.",
+  "recorded_them": "{them}: the other side of the call, as this computer played it.",
   "fields": "Fill in the JSON fields:\n- kind: \"meeting\" when people discuss and decide together, \"lecture\" when one person teaches or presents, \"interview\" when one person asks and another answers, \"other\" otherwise.\n- topics: the subjects in the order they come up, each with a short title and the number of the line where it starts.\n- decisions: what was clearly agreed or decided, one sentence each, with the numbers of the lines where it was agreed. Leave out proposals that were turned down or left for later.\n- actions: tasks someone took on: who (the person's name as said, or the speaker; empty if nobody was named), what, due (the deadline as said; empty if none was given), and the numbers of the lines. If a task moved to someone else, give only the last person.\n- open_questions: questions that were raised and not answered, with their lines.\n- summary: two to five sentences for someone who was not there.\nLeave decisions and actions empty unless kind is \"meeting\". Answer with the JSON only."
 }

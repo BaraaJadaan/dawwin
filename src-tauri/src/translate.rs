@@ -183,6 +183,35 @@ fn end_with_the_app(child: &Child) {
 #[cfg(not(windows))]
 fn end_with_the_app(_child: &Child) {}
 
+/// Another program took the port between the moment it was free and the translator's start, and
+/// answers on it: the transcript's lines must not go there. Start again on another port.
+#[derive(Debug)]
+pub struct PortTaken;
+impl std::fmt::Display for PortTaken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("another program answers on the translator's port")
+    }
+}
+impl std::error::Error for PortTaken {}
+
+/// Which process listens on `port` of 127.0.0.1, from Windows' `netstat -ano` listing. None when
+/// that cannot be told.
+fn listener_of(listing: &str, port: u16) -> Option<u32> {
+    let local = format!("127.0.0.1:{port}");
+    listing.lines().find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() >= 5 && f[0] == "TCP" && f[1] == local && f[3] == "LISTENING").then(|| f[4].parse().ok()).flatten()
+    })
+}
+
+fn listener_pid(port: u16) -> Option<u32> {
+    let mut cmd = Command::new("netstat.exe");
+    cmd.args(["-ano", "-p", "TCP"]).stdin(Stdio::null()).stderr(Stdio::null());
+    no_window(&mut cmd);
+    let out = cmd.output().ok()?;
+    listener_of(&String::from_utf8_lossy(&out.stdout), port)
+}
+
 /// A port nobody listens on now.
 fn free_port() -> Result<u16> {
     Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?.port())
@@ -295,7 +324,17 @@ impl TranslatorProcess {
                 return Err(anyhow!(crate::tr!("Cancelled.")));
             }
             match self.agent.get(&format!("{}/health", self.base)).timeout(Duration::from_secs(5)).call() {
-                Ok(r) if r.status() == 200 => break,
+                Ok(r) if r.status() == 200 => {
+                    // the one that answers must be ours, not a program that took the port first
+                    let ours = self.child.id();
+                    let port = self.base.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(0);
+                    let exited = matches!(self.child.try_wait(), Ok(Some(_)));
+                    if exited || listener_pid(port).is_some_and(|pid| pid != ours) {
+                        let _ = self.child.kill();
+                        return Err(PortTaken.into());
+                    }
+                    break;
+                }
                 _ => {}
             }
             if started.elapsed() > Duration::from_secs(15 * 60) {
@@ -337,11 +376,18 @@ impl TranslatorProcess {
                 let detail = r.into_string().unwrap_or_default();
                 return Err(anyhow!("translator error {code}: {detail}"));
             }
-            // only a server that died counts against the GPU
-            Err(_) if !self.alive() => {
-                return Err(EngineFailed(crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12))).into());
+            // only a server that died counts against the GPU. A server that crashed in the middle of
+            // the line resets the connection a moment before Windows says it has exited: wait for that
+            Err(e) => {
+                let gone = Instant::now();
+                while self.alive() && gone.elapsed() < Duration::from_millis(1500) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                if !self.alive() {
+                    return Err(EngineFailed(crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12))).into());
+                }
+                return Err(anyhow!("{e}"));
             }
-            Err(e) => return Err(anyhow!("{e}")),
         };
         let v: Value = serde_json::from_str(&reply.into_string()?)?;
         let out = v.get("content").and_then(Value::as_str).unwrap_or_default().trim().to_string();
@@ -483,6 +529,14 @@ impl Drop for TranslatorProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_program_on_a_port_is_read_from_netstat() {
+        let listing = "\r\nActive Connections\r\n\r\n  Proto  Local Address          Foreign Address        State           PID\r\n  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       1180\r\n  TCP    127.0.0.1:52811        0.0.0.0:0              LISTENING       4242\r\n  TCP    127.0.0.1:52811        127.0.0.1:60001        ESTABLISHED     4242\r\n  TCP    127.0.0.1:60001        127.0.0.1:52811        ESTABLISHED     900\r\n";
+        assert_eq!(listener_of(listing, 52811), Some(4242));
+        assert_eq!(listener_of(listing, 60001), None, "only who listens counts");
+        assert_eq!(listener_of(listing, 135), None, "on this computer's own address only");
+    }
 
     /// What llama.cpp b12237 printed on this laptop, with a GPU of its own and one in the processor.
     const LISTING: &str = "Available devices:\n  Vulkan0: NVIDIA GeForce RTX 4060 Laptop GPU (7956 MiB, 7179 MiB free)\n  Vulkan1: AMD Radeon(TM) Graphics (8060 MiB, 7657 MiB free)\n";

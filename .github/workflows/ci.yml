@@ -20,3 +20,4 @@ jobs:
         run: |
           node --check ui/app.js
           node --check ui/i18n.js
+          node --check ui/who.js

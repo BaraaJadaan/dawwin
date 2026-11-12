@@ -5,9 +5,13 @@
 #   tools/ffmpeg/build.sh audio   what Dawwin itself needs: read the sound of every recording and
 #                                 video (Opus, AC-3, E-AC-3, DTS, ...), save it as M4A, and put
 #                                 subtitle tracks into MP4 and MKV files
-#   tools/ffmpeg/build.sh video   the same, and subtitles burned into the picture: video decoders,
-#                                 libass with FreeType, HarfBuzz and FriBidi (Arabic shaping), and the
-#                                 H.264 encoders of Windows (Media Foundation), NVIDIA and AMD
+#   tools/ffmpeg/build.sh video   the same, and subtitles burned into the picture: video decoders
+#                                 (AV1 through dav1d), libass with FreeType, HarfBuzz and FriBidi
+#                                 (Arabic shaping), and the H.264 encoders of Windows (Media
+#                                 Foundation), NVIDIA and AMD
+#
+# Both read raw 32-bit float sound (f32le) and take "-" as input (the fd protocol). The second
+# builds (Dawwin 1.4.0) added those and dav1d; the app records which build it unpacked.
 #
 # Writes out/ffmpeg-<variant>/: ffmpeg.exe, README.txt (what the build is made of and where its
 # source is, which the LGPL asks to be stated) and the licenses of what is in it. tools/pack.py packs
@@ -20,6 +24,7 @@ FREETYPE=2.13.3
 FRIBIDI=1.0.16
 HARFBUZZ=10.1.0
 LIBASS=0.17.3
+DAV1D=1.5.1
 HOST=x86_64-w64-mingw32
 ROOT="$PWD"
 WORK="$ROOT/build-$VARIANT"
@@ -66,6 +71,8 @@ if [ "$VARIANT" = video ]; then
   fetch "https://github.com/harfbuzz/harfbuzz/releases/download/$HARFBUZZ/harfbuzz-$HARFBUZZ.tar.xz" "harfbuzz-$HARFBUZZ"
   meson_lib "harfbuzz-$HARFBUZZ" -Dfreetype=enabled -Dglib=disabled -Dgobject=disabled -Dcairo=disabled -Dicu=disabled \
     -Dtests=disabled -Ddocs=disabled -Dutilities=disabled -Dintrospection=disabled
+  fetch "https://downloads.videolan.org/pub/videolan/dav1d/$DAV1D/dav1d-$DAV1D.tar.xz" "dav1d-$DAV1D"
+  meson_lib "dav1d-$DAV1D" -Denable_tools=false -Denable_tests=false -Denable_examples=false
   fetch "https://github.com/libass/libass/releases/download/$LIBASS/libass-$LIBASS.tar.xz" "libass-$LIBASS"
   (cd "$WORK/src/libass-$LIBASS" && ./configure --host="$HOST" --prefix="$PREFIX" --enable-static --disable-shared \
     --disable-fontconfig --enable-directwrite --disable-require-system-font-provider && make -j "$JOBS" && make install)
@@ -77,9 +84,9 @@ if [ "$VARIANT" = video ]; then
   (cd "$WORK/src/AMF" && git sparse-checkout set amf/public/include)
   mkdir -p "$PREFIX/include/AMF" && cp -r "$WORK/src/AMF/amf/public/include/." "$PREFIX/include/AMF/"
   EXTRA=(
-    --enable-swscale --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz
+    --enable-swscale --enable-libass --enable-libfreetype --enable-libfribidi --enable-libharfbuzz --enable-libdav1d
     --enable-mediafoundation --enable-d3d11va --enable-ffnvcodec --enable-nvenc --enable-amf
-    --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,mjpeg,prores,h263,msmpeg4v3,wmv3,vc1
+    --enable-decoder=h264,hevc,vp8,vp9,mpeg4,mpeg2video,mpeg1video,mjpeg,prores,h263,msmpeg4v3,wmv3,vc1,libdav1d
     --enable-encoder=h264_mf,hevc_mf,h264_nvenc,hevc_nvenc,h264_amf,hevc_amf
     --enable-filter=subtitles,ass,scale,format,null,setsar,pad,fps,transpose,hflip,vflip
     --extra-cflags="-I$PREFIX/include"
@@ -95,8 +102,8 @@ cd "$WORK/src/ffmpeg-$FFMPEG"
   --enable-static --disable-shared --extra-ldflags="-static -static-libgcc -static-libstdc++" --extra-libs="-lstdc++" \
   --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug \
   --disable-ffplay --disable-ffprobe --disable-avdevice --enable-small \
-  --enable-protocol=file,pipe \
-  --enable-demuxer=mov,matroska,ogg,mp3,aac,ac3,eac3,dts,dtshd,truehd,wav,w64,flac,amr,asf,avi,flv,mpegts,mpegps,aiff,caf,srt,webvtt,ass \
+  --enable-protocol=file,pipe,fd \
+  --enable-demuxer=mov,matroska,ogg,mp3,aac,ac3,eac3,dts,dtshd,truehd,wav,w64,flac,amr,asf,avi,flv,mpegts,mpegps,aiff,caf,srt,webvtt,ass,pcm_f32le \
   --enable-decoder=aac,aac_latm,ac3,eac3,dca,truehd,mlp,mp1,mp2,mp3,mp3float,opus,vorbis,flac,alac,amrnb,amrwb,wmav1,wmav2,wmapro \
   --enable-decoder=pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_u8,pcm_alaw,pcm_mulaw,adpcm_ima_wav,adpcm_ms,gsm_ms \
   --enable-decoder=srt,subrip,webvtt,movtext,ass,ssa \
@@ -117,7 +124,7 @@ cp COPYING.LGPLv2.1 "$DEST/LICENSE-ffmpeg.txt"
   echo "FFmpeg is free software under the GNU Lesser General Public License, version 2.1 or later (LICENSE-ffmpeg.txt)."
   echo "Its source: https://ffmpeg.org/releases/ffmpeg-$FFMPEG.tar.xz"
   if [ "$VARIANT" = video ]; then
-    echo "With FreeType $FREETYPE, FriBidi $FRIBIDI, HarfBuzz $HARFBUZZ and libass $LIBASS, whose licenses are next to this file,"
+    echo "With FreeType $FREETYPE, FriBidi $FRIBIDI, HarfBuzz $HARFBUZZ, libass $LIBASS and dav1d $DAV1D, whose licenses are next to this file,"
     echo "and the encoder headers of NVIDIA (nv-codec-headers n12.1.14.0) and AMD (AMF), both MIT."
   fi
   echo
@@ -128,6 +135,7 @@ if [ "$VARIANT" = video ]; then
   cp "$WORK/src/fribidi-$FRIBIDI/COPYING" "$DEST/LICENSE-fribidi.txt"
   cp "$WORK/src/harfbuzz-$HARFBUZZ/COPYING" "$DEST/LICENSE-harfbuzz.txt"
   cp "$WORK/src/libass-$LIBASS/COPYING" "$DEST/LICENSE-libass.txt"
+  cp "$WORK/src/dav1d-$DAV1D/COPYING" "$DEST/LICENSE-dav1d.txt"
   cp "$WORK/src/AMF/LICENSE.txt" "$DEST/LICENSE-AMF.txt" 2>/dev/null || true
 fi
 ls -l "$DEST"

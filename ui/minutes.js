@@ -51,7 +51,7 @@ Object.assign(I18N.en.s, {
   "job.loadingMinutes": "Loading the minutes model…",
   "job.cancelledNotes": "Stopped · what was done is kept",
   "steps.minutes": "Write the minutes",
-  "steps.minutesTip": "After the transcript, a summary, the decisions and the action items",
+  "tip.minutes": "After the transcript, a summary, the decisions and the action items",
   "drop.minutes": "write the minutes",
   "toast.needMinutes": "Minutes need a minutes model.",
   "toast.getMinutes": "Choose one",
@@ -117,7 +117,7 @@ Object.assign(I18N.ar.s, {
   "job.loadingMinutes": "جارٍ تحميل نموذج المحاضر…",
   "job.cancelledNotes": "أُوقف · حُفظ ما أُنجز",
   "steps.minutes": "اكتب المحضر",
-  "steps.minutesTip": "بعد النص: ملخّص، والقرارات، والمهام",
+  "tip.minutes": "بعد النص: ملخّص، والقرارات، والمهام",
   "drop.minutes": "كتابة المحضر",
   "toast.needMinutes": "يحتاج المحضر إلى نموذج محاضر.",
   "toast.getMinutes": "اختر واحدًا",
@@ -261,14 +261,14 @@ function minutesBar(m, running) {
   const write = document.createElement("button");
   write.className = "btn btn-sm" + (m ? "" : " btn-primary") + (Minutes.armed ? " armed" : "");
   write.textContent = Minutes.armed ? t("min.againArmed") : t(m ? "min.again" : "min.write");
-  if (m) write.title = t("min.againTip");
+  if (m) describe(write, t("min.againTip"));
   write.disabled = !!running;
   write.onclick = () => writeMinutes(m);
 
   const lang = document.createElement("select");
   lang.className = "input select select-sm";
   lang.setAttribute("aria-label", t("min.language"));
-  lang.title = t("min.languageTip");
+  describe(lang, t("min.languageTip"));
   const status = S.snap?.setup.families?.minutes;
   const spec = status?.found ? minutesSpec(status.variant) : null;
   const codes = [cur.language, ...(spec?.languages || ["ar", "en"])].filter((c, i, all) => c && all.indexOf(c) === i);
@@ -292,7 +292,7 @@ function minutesBar(m, running) {
     const scope = document.createElement("div");
     scope.className = "menu-scope";
     scope.setAttribute("role", "radiogroup");
-    scope.title = t("min.scopeTip");
+    describe(scope, t("min.scopeTip"));
     for (const [key, label] of [["alone", "min.alone"], ["both", "min.withLines"]]) {
       const b = document.createElement("button");
       b.type = "button";
@@ -364,7 +364,7 @@ function minutesOffer() {
     row.querySelector(".name").textContent = `${modelName(m)} · ${gb(m.size)} GB`;
     const f = row.querySelector(".fit");
     f.textContent = fit ? t({ gpu: "min.fitsGpu", cpu: "min.fitsCpu", big: "min.tooBig" }[fit]) : "";
-    f.title = t("min.fitTip");
+    describe(f, t("min.fitTip"));
     row.classList.toggle("fits", fit === "gpu");
     const b = row.querySelector("button");
     const mine = d.active && d.model === m.id;
@@ -446,7 +446,7 @@ function minutesBody(m, running) {
     const b = document.createElement("button");
     b.className = "minutes-time";
     b.textContent = item.time == null ? "–" : ts(item.time);
-    b.title = t("min.jumpTip");
+    describe(b, t("min.jumpTip"));
     b.disabled = !(item.lines?.length || item.line != null);
     b.onclick = () => jumpToLines(item.lines?.length ? item.lines : [item.line]);
     return b;
@@ -630,7 +630,10 @@ async function exportMinutes(fmt) {
   const label = document.createElement("label");
   label.className = "toggle";
   label.innerHTML = `<input type="checkbox" id="step-minutes"> <span data-i18n="steps.minutes"></span>`;
-  $("spoken").after(label);
+  // in the text's step, after telling the speakers apart: the minutes name them
+  $("step-speakers").closest("label").after(label);
+  // its tooltip, the way the other steps have theirs (tips.js)
+  TIPS.push(["step-minutes", "tip.minutes", true]);
   const baseFor = stepsForJob;
   stepsForJob = function () { return { ...baseFor(), minutes: !!(S.steps.transcribe && S.steps.minutes) }; };
   const baseSet = setStep;
@@ -644,7 +647,6 @@ async function exportMinutes(fmt) {
     label.querySelector("span").textContent = t("steps.minutes");
     const box = $("step-minutes");
     box.checked = !!(S.steps.transcribe && S.steps.minutes);
-    box.parentElement.title = t("steps.minutesTip");
     basePaint();
   };
   const baseWire = wireSteps;
@@ -665,6 +667,7 @@ async function exportMinutes(fmt) {
     if (steps.minutes && !S.snap.setup.translator_found) return offerTool("translator", "toast.needTranslatorTool");
     return true;
   };
+  applyTips();
 }
 
 // Settings: a card of the minutes models, after the translation's

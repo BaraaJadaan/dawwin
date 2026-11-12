@@ -2,23 +2,34 @@
 
 mod audio;
 mod captions;
+mod cmds;
 mod engine;
 mod folder;
+mod fonts;
 mod history;
 pub mod i18n;
 mod instance;
 mod minutes;
 mod minutes_commands;
+mod language;
+mod look;
 mod models;
+mod net;
 mod queue;
+mod record;
+mod saving;
+mod script;
 mod setup;
+mod speakers;
+mod timing;
 mod tools;
 mod transcript;
 mod translate;
 mod updates;
 mod video;
+mod words;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -196,7 +207,8 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 fn spoken(language: &str) -> String {
-    if models::known_language(language) { language } else { "ar" }.to_string()
+    // "auto": Dawwin finds it (see `language`)
+    if models::known_language(language) || language == language::AUTO { language } else { "ar" }.to_string()
 }
 
 #[derive(serde::Serialize)]
@@ -227,18 +239,24 @@ fn enqueue(core: C, paths: Vec<String>, language: String, steps: Option<queue::S
     core.enqueue(paths, spoken(&language), steps.unwrap_or_default())
 }
 
+/// A folder's recordings, as jobs: looking through it runs off the interface's thread, and shows
+/// in the list until it is done or stopped.
 #[tauri::command]
-fn enqueue_folder(core: C, path: String, language: String, steps: Option<queue::Steps>) -> queue::FolderScan {
-    core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language), steps.unwrap_or_default())
+async fn enqueue_folder(app: AppHandle, path: String, language: String, steps: Option<queue::Steps>) -> R<queue::FolderScan> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.enqueue_folder(std::path::Path::new(&path.replace('/', "\\")), spoken(&language), steps.unwrap_or_default()))
+        .await
+        .map_err(|x| x.to_string())
 }
 
-/// What a dropped path is: a model to import, a folder to transcribe, or something else.
+/// What a dropped path is: a model to import, a folder to transcribe, or something else. Only the
+/// folder itself is looked at, not what is under it: a whole drive is told at once.
 #[tauri::command]
-fn path_kind(path: String) -> &'static str {
+async fn path_kind(path: String) -> &'static str {
     let p = PathBuf::from(path.replace('/', "\\"));
     if p.is_dir() {
         // a folder of recordings stays a folder of recordings, even with a model in it
-        if folder::recordings_in(&p).is_empty() && models::find_in_folder(&p, None).is_some() {
+        if !folder::has_recordings_at_top(&p) && models::find_in_folder(&p, None).is_some() {
             "model"
         } else {
             "folder"
@@ -273,34 +291,79 @@ fn dismiss_job(core: C, id: String) {
 }
 
 #[tauri::command]
-fn list_history(core: C) -> Vec<history::Summary> {
-    history::list(&core.paths.history_dir())
+async fn list_history(app: AppHandle) -> R<Vec<history::Summary>> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || history::list(&core.paths.history_dir())).await.map_err(|x| x.to_string())
 }
 
+/// A transcript; a long one is read off the interface's thread.
 #[tauri::command]
-fn get_transcript(core: C, id: String) -> R<Transcript> {
-    core.transcript(&id).map_err(e)
+async fn get_transcript(app: AppHandle, id: String) -> R<Transcript> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core.transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)
 }
 
 fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript> {
     if core.is_live(id) {
         return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
+    core.check_line(id, 0, None).map_err(e)?;
     history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
+/// Correct a line: the line as it is now, with its words placed in time again.
 #[tauri::command]
-fn update_segment(core: C, id: String, index: usize, text: String) -> R<()> {
-    edit(&core, &id, |t| {
+fn update_segment(core: C, id: String, index: usize, text: String, start: Option<f64>) -> R<Option<transcript::Segment>> {
+    core.check_line(&id, index, start).map_err(e)?;
+    let t = edit(&core, &id, |t| {
         if let Some(s) = t.segments.get_mut(index) {
             if s.text != text {
                 s.text = text;
                 s.edited = true;
-                s.words.clear(); // they no longer fit the text
+                // the old times no longer fit the text: matched again with what was heard, if anything
+                s.words.clear();
+                timing::apply(s);
             }
         }
     })?;
-    Ok(())
+    Ok(t.segments.get(index).cloned())
+}
+
+/// Save files from the steps, and open save dialogs, in a folder of one's own: chosen here.
+#[tauri::command]
+async fn choose_save_dir(app: AppHandle) -> R<Snapshot> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should Dawwin save its files?")).blocking_pick_folder() else {
+        return Ok(core.snapshot());
+    };
+    let dir = dir.into_path().map_err(|x| x.to_string())?;
+    core.change_settings(|s| s.save_dir = Some(dir.display().to_string())).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+/// Save files next to each recording again, as it comes.
+#[tauri::command]
+fn save_next_to_recording(core: C) -> R<Snapshot> {
+    core.change_settings(|s| s.save_dir = None).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+/// How large the interface is drawn: the webview's own zoom, from half to twice the size, kept
+/// in the settings. The size it ended up at.
+#[tauri::command]
+fn set_zoom(app: AppHandle, core: C, level: f64) -> R<f64> {
+    let level = ((level * 10.0).round() / 10.0).clamp(0.5, 2.0);
+    if let Some(w) = app.get_webview_window("main") {
+        w.set_zoom(level).map_err(|x| x.to_string())?;
+    }
+    core.change_settings(|s| s.zoom = (level != 1.0).then_some(level)).map_err(e)?;
+    Ok(level)
+}
+
+/// Place the words of a transcript in time again (see `timing`): a job in the queue.
+#[tauri::command]
+fn fix_timing(core: C, id: String) -> R<String> {
+    core.fix_timing(&id).map_err(e)
 }
 
 #[derive(serde::Serialize)]
@@ -326,7 +389,8 @@ fn translate(core: C, id: String, language: String) -> R<String> {
 }
 
 #[tauri::command]
-fn update_translation(core: C, id: String, language: String, index: usize, text: String) -> R<()> {
+fn update_translation(core: C, id: String, language: String, index: usize, text: String, start: Option<f64>) -> R<()> {
+    core.check_line(&id, index, start).map_err(e)?;
     edit(&core, &id, |t| {
         let count = t.segments.len();
         let from = t.segments.get(index).map(|s| s.text.clone());
@@ -423,22 +487,37 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
         .set_title(crate::tr!("Export transcript"))
         .set_file_name(format!("{name}.{ext}"))
         .add_filter(label, &[ext]);
-    if let Some(dir) = PathBuf::from(&t.source_path).parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), Path::new(&t.source_path)) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
+    let t = if matches!(ext, "srt" | "vtt") { timed(&core, &id).await? } else { t };
     write_export(&t, ext, stamps, &view, &dest)?;
+    core.remember_outputs(&id, std::slice::from_ref(&dest));
     Ok(Some(dest.display().to_string()))
+}
+
+/// The transcript with its words placed in time, for subtitles: a timing job first when they are
+/// not (see `Core::timed_transcript`), off the interface's thread.
+async fn timed(core: &Arc<Core>, id: &str) -> R<Transcript> {
+    let (core2, id) = (core.clone(), id.to_string());
+    let (t, waited) = tauri::async_runtime::spawn_blocking(move || core2.timed_transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)?;
+    if !waited {
+        // made at once, behind a running job: say so, and that the words are placed in time later
+        let _ = core.app().emit("timing-later", t.id.clone());
+    }
+    Ok(t)
 }
 
 /// Export without asking where (the file name decides the format).
 #[cfg(debug_assertions)]
 #[tauri::command]
-fn export_to_path(core: C, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
-    let t = core.transcript(&id).map_err(e)?;
+async fn export_to_path(app: AppHandle, id: String, path: String, stamps: bool, view: Option<String>, language: Option<String>) -> R<String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
     let dest = PathBuf::from(&path);
     let ext = dest.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+    let t = if matches!(ext.as_str(), "srt" | "vtt") { timed(&core, &id).await? } else { core.transcript(&id).map_err(e)? };
     write_export(&t, &ext, stamps, &View::parse(view.as_deref(), language.as_deref()), &dest)?;
     Ok(path)
 }
@@ -480,13 +559,14 @@ async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<O
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
     let name = if without_silences { format!("{} ({}).{ext}", safe_name(&stem), crate::tr!("without silences")) } else { format!("{}.{ext}", safe_name(&stem)) };
     let mut dlg = app.dialog().file().set_title(crate::tr!("Save the sound")).set_file_name(name).add_filter(crate::tr!("Sound"), &[ext]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
     let _ = app.emit("audio-saving", dest.display().to_string());
     let saved = tauri::async_runtime::spawn_blocking(move || save_sound_of(&t, without_silences, &dest, ffmpeg)).await.map_err(|x| x.to_string())??;
+    core.remember_outputs(&id, std::slice::from_ref(&saved));
     Ok(Some(saved.display().to_string()))
 }
 
@@ -519,7 +599,7 @@ fn video_job(core: &Core, t: &Transcript, view: Option<&str>, language: Option<&
 #[tauri::command]
 async fn export_video_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let t = core.transcript(&id).map_err(e)?;
+    let t = timed(&core, &id).await?;
     let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
     let (dest, scratch) = (PathBuf::from(&path), core.paths.cache_dir());
     tauri::async_runtime::spawn_blocking(move || video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &scratch))
@@ -543,12 +623,14 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
         .set_title(crate::tr!("Save the video with its subtitles"))
         .set_file_name(format!("{} ({}).{ext}", safe_name(&stem), safe_name(&names)))
         .add_filter(crate::tr!("Video"), &[ext]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?;
     let dest = if dest.extension().is_some_and(|x| x.eq_ignore_ascii_case(ext)) { dest } else { dest.with_extension(ext) };
+    let t = timed(&core, &id).await?;
+    let (source, ffmpeg, tracks) = video_job(&core, &t, view.as_deref(), language.as_deref())?;
     let _ = app.emit("video-saving", dest.display().to_string());
     let scratch = core.paths.cache_dir();
     let out = dest.clone();
@@ -556,6 +638,7 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
         .await
         .map_err(|x| x.to_string())?
         .map_err(e)?;
+    core.remember_outputs(&id, std::slice::from_ref(&dest));
     Ok(Some(dest.display().to_string()))
 }
 
@@ -576,11 +659,12 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
     let tracks = video::tracks(&t, &view)?;
     let name = video::burned_dest(&source, &tracks).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut dlg = app.dialog().file().set_title(crate::tr!("Save the video with its subtitles")).set_file_name(name).add_filter(crate::tr!("Video"), &["mp4"]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
     let dest = dest.into_path().map_err(|x| x.to_string())?.with_extension("mp4");
+    timed(&core, &id).await?;
     core.burn(&id, &view, dest.clone()).map_err(e)?;
     Ok(Some(dest.display().to_string()))
 }
@@ -588,8 +672,9 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
 /// The same, to `path` without asking where: the job's id.
 #[cfg(debug_assertions)]
 #[tauri::command]
-fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
+async fn export_burned_to_path(app: AppHandle, id: String, path: String, view: Option<String>, language: Option<String>) -> R<String> {
     let core = app.state::<Arc<Core>>().inner().clone();
+    timed(&core, &id).await?;
     core.burn(&id, &View::parse(view.as_deref(), language.as_deref()), PathBuf::from(path)).map_err(e)
 }
 
@@ -662,6 +747,11 @@ pub fn run() {
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                queue::meeting::on_close(window, api);
+            }
+        })
         .setup(move |app| {
             if let Some(g) = guard {
                 let handle = app.handle().clone();
@@ -674,6 +764,11 @@ pub fn run() {
                 });
             }
             let core = Core::start(app.handle().clone())?;
+            // the size the interface was left at
+            let zoom = core.settings.lock().unwrap().zoom;
+            if let (Some(z), Some(w)) = (zoom, app.get_webview_window("main")) {
+                let _ = w.set_zoom(z);
+            }
             app.manage(core);
             Ok(())
         })
@@ -709,6 +804,10 @@ pub fn run() {
             list_history,
             get_transcript,
             update_segment,
+            fix_timing,
+            set_zoom,
+            choose_save_dir,
+            save_next_to_recording,
             translation_targets,
             translate,
             update_translation,
@@ -738,6 +837,30 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            cmds::find_speakers,
+            cmds::rename_speaker,
+            cmds::merge_speakers,
+            cmds::give_line,
+            cmds::get_extras,
+            cmds::set_words,
+            cmds::always_write,
+            cmds::apply_words,
+            cmds::save_words,
+            cmds::load_words,
+            cmds::set_subtitle_names,
+            cmds::set_look,
+            cmds::preview_look,
+            cmds::subtitle_fonts,
+            queue::meeting::start_recording,
+            queue::meeting::stop_recording,
+            queue::meeting::recording_state,
+            queue::meeting::record_setup,
+            queue::meeting::set_record_sources,
+            queue::meeting::choose_microphone,
+            queue::meeting::recording_notice,
+            queue::meeting::interrupted_recordings,
+            queue::meeting::recover_recording,
+            queue::meeting::open_microphone_privacy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

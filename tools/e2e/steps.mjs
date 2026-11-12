@@ -138,7 +138,8 @@ check("and the recording is still whole", Math.abs(duration(clip) - CLIP_S) < 0.
 // ---- the guide and the address to write to
 await a.ev(`showView('guide')`);
 await sleep(300);
-check("How to use has nine parts, Who said what among them", (await a.ev(`document.querySelectorAll('#guide-items .guide-item').length`)) === 9, await a.ev(`[...document.querySelectorAll('#guide-items h2')].map(h=>h.textContent)`));
+const guideParts = await a.ev(`[...document.querySelectorAll('#guide-items h2')].map(h=>h.textContent)`);
+check("How to use has eleven parts, Record a meeting, Who said what and Write the minutes among them", guideParts.length === 11 && ["Record a meeting", "Who said what", "Write the minutes"].every((p) => guideParts.some((h) => h.includes(p))), guideParts);
 const mail = await a.ev(`document.getElementById('guide-mail').textContent.trim()`);
 check("and an email address to write to", /^[^\s@]+@[^\s@]+\.\w+$/.test(mail), mail);
 await a.ev(`showView('settings')`);

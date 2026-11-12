@@ -384,7 +384,7 @@ function renderQueue() {
       <div class="title" dir="auto">${esc(j.title)}</div>
       ${what}
       <div class="sub">${esc(jobLine(j))}</div>
-      ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
+      ${ACTIVE.has(j.status) && j.status !== "recording" ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
       <button class="icon-btn x" aria-label="${esc(t(j.status === "recording" ? "rec.stop" : ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     // a job that only saves the sound has no transcript: it shows the file
     li.onclick = () => (j.kind === "burn" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));

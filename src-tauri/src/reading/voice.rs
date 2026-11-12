@@ -49,6 +49,8 @@ pub struct VoiceProcess {
     next_id: u64,
     pub loaded: Option<Load>,
     pub device: String,
+    /// It was started with the GPU build of audio.cpp's library
+    pub gpu_library: bool,
 }
 
 impl VoiceProcess {
@@ -90,7 +92,12 @@ impl VoiceProcess {
                 t.push_back(line);
             }
         });
-        Ok(VoiceProcess { child, stdin, lines, tail, next_id: 1, loaded: None, device: String::new() })
+        Ok(VoiceProcess { child, stdin, lines, tail, next_id: 1, loaded: None, device: String::new(), gpu_library: false })
+    }
+
+    /// It holds the GPU: its model is loaded there.
+    pub fn on_gpu(&self) -> bool {
+        self.loaded.is_some() && !self.device.is_empty() && self.device != "CPU"
     }
 
     fn last_lines(&self, n: usize) -> String {

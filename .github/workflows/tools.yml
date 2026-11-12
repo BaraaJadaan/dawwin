@@ -4,7 +4,7 @@ name: Tools
 # ffmpeg in two sizes (tools/ffmpeg/build.sh), "audio", for reading and saving sound and adding
 # subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
 # llama.cpp's official server; and the voice, Dawwin's dawwin-voice.exe (voice/) with audio.cpp's official
-# library for the processor. Each is built or taken, packed (tools/pack.py), and tried on Windows
+# library for the processor and VoxCPM 2's ready-made voices (voice/refs), and that library's GPU build. Each is built or taken, packed (tools/pack.py), and tried on Windows
 # with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
 # tag, the files go on that release, where the app downloads them from. With the id of an earlier
 # run, its files are tried and uploaded instead of new ones: the app pins their exact bytes.
@@ -80,21 +80,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: dawwin-voice.exe, and audio.cpp's library from its official release
+      - name: dawwin-voice.exe, and audio.cpp's library (processor and GPU builds) from its official release
         shell: pwsh
         run: |
           cargo build --release --locked --manifest-path voice/Cargo.toml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          curl.exe -sSL --fail --retry 5 -o lib.zip "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP/audio-$env:AUDIOCPP-lib-windows-x64-cpu.zip"
-          Expand-Archive lib.zip lib
-          New-Item -ItemType Directory -Force voice-pack | Out-Null
-          Get-ChildItem lib -Recurse -Filter *.dll | Copy-Item -Destination voice-pack
-          Get-ChildItem lib -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-pack
+          foreach ($b in "cpu", "vulkan") {
+            curl.exe -sSL --fail --retry 5 -o "lib-$b.zip" "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP/audio-$env:AUDIOCPP-lib-windows-x64-$b.zip"
+            Expand-Archive "lib-$b.zip" "lib-$b"
+          }
+          New-Item -ItemType Directory -Force voice-pack, voice-gpu-pack | Out-Null
+          Get-ChildItem lib-cpu -Recurse -Filter *.dll | Copy-Item -Destination voice-pack
+          Get-ChildItem lib-cpu -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-pack
           Copy-Item voice/target/release/dawwin-voice.exe voice-pack
-          Get-ChildItem voice-pack | Format-Table Name, Length
+          Copy-Item voice/refs/*.wav voice-pack
+          Get-ChildItem lib-vulkan -Recurse -Filter *.dll | Copy-Item -Destination voice-gpu-pack
+          Get-ChildItem lib-vulkan -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-gpu-pack
+          Write-Host "== voice"; Get-ChildItem voice-pack | Format-Table Name, Length
+          Write-Host "== voice-gpu"; Get-ChildItem voice-gpu-pack | Format-Table Name, Length
       - name: Pack
         shell: pwsh
-        run: python tools/pack.py "packs/dawwin-voice-audio.cpp-$env:AUDIOCPP.tar.xz" voice-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+        run: |
+          python tools/pack.py "packs/dawwin-voice-audio.cpp-$env:AUDIOCPP.tar.xz" voice-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          python tools/pack.py "packs/dawwin-voice-gpu-audio.cpp-$env:AUDIOCPP.tar.xz" voice-gpu-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: pack-voice

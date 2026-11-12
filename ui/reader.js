@@ -327,11 +327,12 @@ async function renderReadingSettings() {
       : m.partial > 0 ? t("set.modelPaused", { pct: Math.floor((100 * m.partial) / m.size) }) : t("set.modelNone");
     const text = readEl("div", { class: "setting-text" },
       readEl("h3", {}, m.name, " ", readEl("span", { class: "muted small", text: sizeText(m.size) })),
+      readEl("p", { class: "muted small", text: t("read.about." + m.id) }),
       readEl("p", { class: "muted small" }, readEl("a", { class: "link", href: "#", text: `${t("read.license")}: ${m.license}`, on: { click: (e) => { e.preventDefault(); invoke("open_url", { url: m.license_url }); } } })),
       readEl("p", { class: "muted small status", text: READ.dl?.[m.id]?.state === "program" ? t("read.programFirst", { pct: Math.floor((100 * READ.dl[m.id].done) / (READ.dl[m.id].total || 1)) }) : status }));
     row.append(text);
-    if (m.samples) {
-      for (const lang of ["ar", "en"]) {
+    for (const [k, lang] of ["ar", "en"].entries()) {
+      if (m.samples[k]) {
         row.append(readEl("button", { class: "btn btn-sm btn-ghost", text: t("read.hear." + lang), on: { click: () => {
           stopReading();
           READ.sample = READ.sample || new Audio();

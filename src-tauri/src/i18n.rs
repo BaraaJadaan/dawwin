@@ -167,6 +167,7 @@ static AR: &[(&str, &str)] = &[
     ("The voice is not installed. Download a voice in Settings.", "الصوت غير مثبّت. نزّل صوتًا من الإعدادات."),
     ("The voice program is not published yet.", "لم يُنشر برنامج الصوت بعد."),
     ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
+    ("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يفرّغ أو يترجم. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
 ];
 
 #[cfg(test)]

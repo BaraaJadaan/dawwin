@@ -1162,6 +1162,8 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
             Err(RecvTimeoutError::Disconnected) => break,
         };
         last_used = Instant::now();
+        // a voice reading aloud on the GPU gives it back first: they take turns, as these two do
+        crate::reading::let_go_of_gpu(&core.app);
         match msg {
             Msg::Probe => match ensure_engine(&core, &mut engine, None).and_then(|e| e.probe()) {
                 Ok(v) => {

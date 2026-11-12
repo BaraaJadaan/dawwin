@@ -24,7 +24,7 @@ jobs:
   # on a real voice, against audio.cpp's CLI; and the pack the app would download.
   program:
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,6 +45,7 @@ jobs:
             Get-ChildItem "lib-$b" -Recurse -Filter *.dll | Copy-Item -Destination "voice-$b"
             Get-ChildItem "lib-$b" -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination "voice-$b"
             Copy-Item voice/target/release/dawwin-voice.exe "voice-$b"
+            Copy-Item voice/refs/*.wav "voice-$b"
             Write-Host "== $b"; Get-ChildItem "voice-$b" | Format-Table Name, Length
           }
           curl.exe -sSL --fail --retry 5 -o cli.zip "$base/audio-$env:AUDIOCPP-bin-windows-x64-cpu.zip"
@@ -55,17 +56,16 @@ jobs:
       - name: The same with the GPU build, on a runner that has no GPU
         continue-on-error: true
         run: python tools/bench-voice/program.py voice-vulkan "$env:CLI" models out-program vulkan
-      - name: Pack
-        shell: pwsh
-        run: python tools/pack.py packs/dawwin-voice-audio.cpp-v0.9.4.tar.xz voice-cpu | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - name: The voices the app offers, as voices.rs pins them
+        run: python tools/bench-voice/fetch.py voicedata
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-      - name: The app's own reading code with this program and a real voice (mixed Arabic and English, numbers)
+      - name: The app's own reading code with this program and each voice it offers (Arabic with English inside, numbers, a heading)
         shell: pwsh
         run: |
           $env:DAWWIN_TEST_VOICE_EXE = (Resolve-Path voice-cpu/dawwin-voice.exe).Path
-          $env:DAWWIN_TEST_VOICE_MODEL = (Get-ChildItem models -Recurse -Filter supertonic-3-f16.gguf | Select-Object -First 1).FullName
+          $env:DAWWIN_TEST_VOICE_DIR = (Resolve-Path voicedata).Path
           $env:DAWWIN_TEST_VOICE_OUT = "$PWD\out-program\app"
           cargo test --manifest-path src-tauri/Cargo.toml --locked real_voice -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -73,9 +73,7 @@ jobs:
         if: always()
         with:
           name: program
-          path: |
-            out-program/
-            packs/
+          path: out-program/
 
   # the voices take hours: on a push they run only when its message asks for them with [bench]
   refs:

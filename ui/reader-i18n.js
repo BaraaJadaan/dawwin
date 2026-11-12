@@ -37,6 +37,9 @@ Object.assign(I18N.en.s, {
   "read.lang.en": "English",
   "read.hear.ar": "Hear it in Arabic",
   "read.hear.en": "Hear it in English",
+  "read.about.voxcpm2": "The most natural voice, in Arabic and English. Wants a graphics card.",
+  "read.about.supertonic3": "Arabic and English, ten voices. Fast on any processor.",
+  "read.about.phonon": "English only, five voices. The smallest.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -75,4 +78,7 @@ Object.assign(I18N.ar.s, {
   "read.lang.en": "الإنجليزية",
   "read.hear.ar": "استمع إليه بالعربية",
   "read.hear.en": "استمع إليه بالإنجليزية",
+  "read.about.voxcpm2": "الصوت الأقرب إلى الطبيعي، بالعربية والإنجليزية. يحتاج بطاقة رسوميات.",
+  "read.about.supertonic3": "العربية والإنجليزية، عشرة أصوات. سريع على أي معالج.",
+  "read.about.phonon": "الإنجليزية فقط، خمسة أصوات. الأصغر حجمًا.",
 });

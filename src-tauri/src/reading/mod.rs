@@ -176,6 +176,12 @@ pub struct Reader {
     downloads: Mutex<HashMap<String, Arc<AtomicBool>>>,
     /// The voice died on the GPU: until the app restarts, it reads on the processor
     no_gpu: AtomicBool,
+    /// A voice program holds the GPU
+    gpu_held: AtomicBool,
+    /// The speech engine or the translator wants the GPU: the voice lets go of it
+    let_go: AtomicBool,
+    /// Every voice program is to end (a model is being deleted)
+    end_all: AtomicBool,
 }
 
 fn cache_root(paths: &Paths) -> PathBuf {
@@ -198,6 +204,9 @@ impl Reader {
             done: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
             no_gpu: AtomicBool::new(false),
+            gpu_held: AtomicBool::new(false),
+            let_go: AtomicBool::new(false),
+            end_all: AtomicBool::new(false),
         });
         let r = reader.clone();
         std::thread::Builder::new().name("voice".into()).spawn(move || r.run()).expect("voice thread");
@@ -295,11 +304,13 @@ impl Reader {
     }
 
     fn run(self: Arc<Self>) {
-        let mut process: Option<voice::VoiceProcess> = None;
+        // one program for each model in use: Arabic and English may be read by different ones
+        let mut procs: HashMap<String, voice::VoiceProcess> = HashMap::new();
         loop {
             let (doc_id, index, sig) = {
                 let mut w = self.work.lock().unwrap();
                 loop {
+                    self.let_go_if_asked(&mut procs);
                     if let Some(k) = w.wanted.pop_front() {
                         let sig = self.signature();
                         if w.made.get(&k).is_some_and(|(s, m)| *s == sig && m.is_ok()) {
@@ -307,25 +318,29 @@ impl Reader {
                         }
                         break (k.0, k.1, sig);
                     }
-                    w = self.wake.wait(w).unwrap();
+                    w = self.wake.wait_timeout(w, Duration::from_secs(1)).unwrap().0;
                 }
             };
             let doc = self.docs.lock().unwrap().get(&doc_id).cloned();
             let made = match doc {
                 Some(doc) => {
-                    let mut result = self.make(&mut process, &doc, index);
+                    let mut result = self.make(&mut procs, &doc, index);
                     // a voice that died (a GPU driver, say) costs a new process and one more try,
-                    // on the processor; only a second death is told
+                    // on the processor; only a second death is told. One that let go of the GPU
+                    // for the speech engine did not fail.
                     if result.as_ref().is_err_and(|e| e.downcast_ref::<voice::VoiceDied>().is_some()) {
-                        if process.as_ref().is_some_and(|p| p.loaded.as_ref().is_some_and(|l| l.gpu)) {
+                        let gave_way = self.let_go.load(Ordering::SeqCst);
+                        if !gave_way && procs.values_mut().any(|p| !p.alive() && p.on_gpu()) {
                             self.no_gpu.store(true, Ordering::SeqCst);
                         }
-                        process = None;
-                        result = self.make(&mut process, &doc, index);
+                        procs.retain(|_, p| p.alive());
+                        self.let_go_if_asked(&mut procs);
+                        result = self.make(&mut procs, &doc, index);
                         if result.as_ref().is_err_and(|e| e.downcast_ref::<voice::VoiceDied>().is_some()) {
-                            process = None;
+                            procs.retain(|_, p| p.alive());
                         }
                     }
+                    self.gpu_held.store(procs.values().any(|p| p.on_gpu()), Ordering::SeqCst);
                     result.map_err(|e| format!("{e:#}"))
                 }
                 None => Err(crate::tr!("That text is no longer open.")),
@@ -339,37 +354,69 @@ impl Reader {
         }
     }
 
-    /// The voice program, and the folder of its library.
-    fn program(&self) -> Option<(PathBuf, Option<PathBuf>)> {
+    /// The queue asked for the GPU, or a model is being deleted: the programs concerned end.
+    fn let_go_if_asked(&self, procs: &mut HashMap<String, voice::VoiceProcess>) {
+        if self.end_all.load(Ordering::SeqCst) {
+            procs.clear();
+            self.end_all.store(false, Ordering::SeqCst);
+        }
+        if self.let_go.load(Ordering::SeqCst) {
+            procs.retain(|_, p| !p.on_gpu());
+            self.let_go.store(false, Ordering::SeqCst);
+        }
+        self.gpu_held.store(procs.values().any(|p| p.on_gpu()), Ordering::SeqCst);
+    }
+
+    /// The voice program; with the folder of the GPU build of audio.cpp's library, when the GPU is
+    /// wanted and that build is there (the program's own folder holds the processor build).
+    fn program(&self, gpu: bool) -> Option<(PathBuf, Option<PathBuf>)> {
         if let Some(test) = voices::test_voice() {
             return Some((test, None));
         }
-        let t = crate::tools::tool("voice")?;
-        crate::tools::exe(&self.paths, &t).map(|exe| (exe, None))
+        let exe = crate::tools::exe(&self.paths, &crate::tools::VOICE)?;
+        let lib = gpu.then(|| crate::tools::exe(&self.paths, &crate::tools::VOICE_GPU)).flatten().and_then(|dll| dll.parent().map(Path::to_path_buf));
+        Some((exe, lib))
     }
 
-    /// Whether the speech engine or the translator is at work: a voice that would want the GPU
-    /// then reads on the processor, so that neither waits for the other.
+    /// Whether the speech engine or the translator is at work (it holds the GPU while it is).
     fn gpu_busy(&self) -> bool {
-        const BUSY: [&str; 7] = ["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
-        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| BUSY.contains(&j.status.as_str()) && j.status != "queued"))
+        if cfg!(debug_assertions) && std::env::var_os("DAWWIN_TEST_GPU_BUSY").is_some() {
+            return true;
+        }
+        const IDLE: [&str; 4] = ["queued", "done", "failed", "cancelled"];
+        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| !IDLE.contains(&j.status.as_str())))
     }
 
-    fn make(&self, process: &mut Option<voice::VoiceProcess>, doc: &Doc, index: usize) -> Result<Ready> {
+    /// Whether this PC has a GPU the speech engine found.
+    fn has_gpu(&self) -> bool {
+        (cfg!(debug_assertions) && std::env::var_os("DAWWIN_TEST_GPU_BUSY").is_some())
+            || self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().engine.gpu.is_some())
+    }
+
+    fn make(&self, procs: &mut HashMap<String, voice::VoiceProcess>, doc: &Doc, index: usize) -> Result<Ready> {
         let s = doc.sentences.get(index).ok_or_else(|| anyhow!("no sentence {index}"))?;
         let dir = cache_root(&self.paths).join(&doc.id);
         std::fs::create_dir_all(&dir)?;
         let mut pieces = Vec::new();
         let mut device = String::new();
+        let program_dir = crate::tools::exe(&self.paths, &crate::tools::VOICE).and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
         for (k, run) in spoken(&s.text, doc.lang).iter().enumerate() {
             let (m, v) = self.voice_for(run.lang).ok_or_else(|| anyhow!(crate::tr!("There is no voice for {} yet. Choose one in Settings.", lang_name(run.lang))))?;
-            let gpu = m.gpu && !self.no_gpu.load(Ordering::SeqCst) && crate::setup::Settings::load(&self.paths).run_on() != "cpu" && !self.gpu_busy();
-            let load = voice::Load { family: m.family.into(), model: voices::file(&self.paths, &m), gpu, options: Vec::new() };
-            let p = self.ready_process(process, &load)?;
-            device = if p.device.is_empty() || p.device == "CPU" { "CPU".into() } else { format!("GPU · {}", p.device) };
+            let gpu = m.gpu && !self.no_gpu.load(Ordering::SeqCst) && crate::setup::Settings::load(&self.paths).run_on() != "cpu";
+            // the speech engine and the translator have the GPU while they work: a voice that
+            // needs it waits, and says so; one on the processor reads on
+            if gpu && self.has_gpu() && self.gpu_busy() {
+                if procs.get(m.id).is_some_and(|p| p.on_gpu()) {
+                    procs.remove(m.id);
+                }
+                return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", m.name)));
+            }
+            let model_dir = voices::dir(&self.paths, &m);
+            let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: Vec::new() };
+            let p = self.ready_process(procs, m.id, &load)?;
+            device = if p.on_gpu() { format!("GPU · {}", p.device) } else { "CPU".into() };
             let out = dir.join(format!("{index}-{k}.wav"));
-            let voice = serde_json::json!({ "voice_id": v.voice_id });
-            p.speak(&run.text, m.code(run.lang), &voice, &out)?;
+            p.speak(&run.text, m.code(run.lang), &voices::request(&m, &v, &model_dir, &program_dir), &out)?;
             pieces.push(voice::read_wav(&out)?);
             let _ = std::fs::remove_file(&out);
         }
@@ -380,19 +427,32 @@ impl Reader {
         Ok(Ready { path: out.display().to_string(), seconds: samples.len() as f64 / rate as f64, device })
     }
 
-    fn ready_process<'a>(&self, process: &'a mut Option<voice::VoiceProcess>, load: &voice::Load) -> Result<&'a mut voice::VoiceProcess> {
-        if process.as_mut().is_some_and(|p| !p.alive()) {
-            *process = None;
+    fn ready_process<'a>(&self, procs: &'a mut HashMap<String, voice::VoiceProcess>, model: &str, load: &voice::Load) -> Result<&'a mut voice::VoiceProcess> {
+        // a program started with the processor's library cannot use the GPU, nor the other way round
+        let wants_gpu_lib = load.gpu && self.program(true).is_some_and(|(_, lib)| lib.is_some());
+        if procs.get_mut(model).is_some_and(|p| !p.alive() || p.gpu_library != wants_gpu_lib) {
+            procs.remove(model);
         }
-        if process.is_none() {
-            let (exe, lib) = self.program().ok_or_else(|| anyhow!(crate::tr!("The voice is not installed. Download a voice in Settings.")))?;
-            *process = Some(voice::VoiceProcess::spawn(&exe, lib.as_deref(), &self.paths.logs_dir().join("voice.log"))?);
+        if !procs.contains_key(model) {
+            let (exe, lib) = self.program(wants_gpu_lib).ok_or_else(|| anyhow!(crate::tr!("The voice is not installed. Download a voice in Settings.")))?;
+            let mut p = voice::VoiceProcess::spawn(&exe, lib.as_deref(), &self.paths.logs_dir().join("voice.log"))?;
+            p.gpu_library = lib.is_some();
+            procs.insert(model.to_string(), p);
         }
-        let p = process.as_mut().unwrap();
+        let p = procs.get_mut(model).unwrap();
         if p.loaded.as_ref() != Some(load) {
-            p.load(load)?;
+            if let Err(e) = p.load(load) {
+                // the GPU build of the library does not load here (no Vulkan driver): the processor's
+                if p.gpu_library && format!("{e:#}").contains("audiocpp.dll") {
+                    self.no_gpu.store(true, Ordering::SeqCst);
+                    procs.remove(model);
+                    let cpu = voice::Load { gpu: false, ..load.clone() };
+                    return self.ready_process(procs, model, &cpu);
+                }
+                return Err(e);
+            }
         }
-        Ok(p)
+        Ok(procs.get_mut(model).unwrap())
     }
 }
 
@@ -431,7 +491,12 @@ pub struct ModelView {
     pub license: String,
     pub license_url: String,
     pub restricted: bool,
-    pub samples: bool,
+    /// It needs a graphics card to read as fast as it speaks
+    pub gpu: bool,
+    /// The languages it reads
+    pub reads: Vec<Lang>,
+    /// A sample in Arabic and in English shipped with the app
+    pub samples: [bool; 2],
     pub installed: bool,
     pub downloading: bool,
     pub partial: u64,
@@ -472,18 +537,20 @@ impl Reader {
                 .map(|m| ModelView {
                     id: m.id.into(),
                     name: m.name.into(),
-                    size: m.size,
+                    size: m.size(),
                     license: m.license.into(),
                     license_url: m.license_url.into(),
                     restricted: m.restricted,
+                    gpu: m.gpu,
+                    reads: [Lang::Ar, Lang::En].into_iter().filter(|&l| m.reads(l)).collect(),
                     samples: m.samples,
                     installed: voices::installed(&self.paths, m),
                     downloading: downloading.contains_key(m.id),
-                    partial: crate::models::downloaded(&voices::file(&self.paths, m)),
+                    partial: voices::on_disk(&self.paths, m),
                 })
                 .collect(),
             chosen,
-            program: self.program().is_some(),
+            program: self.program(false).is_some(),
         }
     }
 
@@ -511,29 +578,47 @@ impl Reader {
             let emit = |state: &str, done: u64, total: u64, error: Option<String>| {
                 let _ = r.app.emit("voice-download", serde_json::json!({ "id": m.id, "state": state, "done": done, "total": total, "error": error }));
             };
+            let total = m.size();
             let result = (|| -> Result<crate::models::Finished> {
-                if r.program().is_none() {
-                    let t = crate::tools::tool("voice").ok_or_else(|| anyhow!(crate::tr!("The voice program is not published yet.")))?;
-                    let mut on = |e: crate::models::Event| {
-                        if let crate::models::Event::Progress { done } = e {
+                use crate::models::{Event, Finished};
+                // the voice program with the first voice, and the GPU build of its library with
+                // the first voice that wants a graphics card
+                let tools = [Some(crate::tools::VOICE), m.gpu.then_some(crate::tools::VOICE_GPU)];
+                for t in tools.into_iter().flatten().filter(|_| voices::test_voice().is_none()) {
+                    if crate::tools::exe(&r.paths, &t).is_some() {
+                        continue;
+                    }
+                    let mut on = |e: Event| {
+                        if let Event::Progress { done } = e {
                             emit("program", done, t.size, None);
                         }
                     };
-                    if crate::tools::install(&r.paths, &t, &stop, &mut on)? == crate::models::Finished::Paused {
-                        return Ok(crate::models::Finished::Paused);
+                    if crate::tools::install(&r.paths, &t, &stop, &mut on)? == Finished::Paused {
+                        return Ok(Finished::Paused);
                     }
                 }
-                let job = crate::models::Download { url: voices::url(&m), dest: voices::file(&r.paths, &m), size: m.size, sha256: m.sha256.into() };
-                crate::models::download(&job, &stop, &mut |e| match e {
-                    crate::models::Event::Progress { done } | crate::models::Event::Verifying { done } => emit("model", done, m.size, None),
-                    crate::models::Event::Retrying { .. } => emit("retrying", 0, m.size, None),
-                })
+                let mut before = 0;
+                for f in m.files {
+                    let dest = voices::file(&r.paths, &m, f);
+                    if !std::fs::metadata(&dest).is_ok_and(|x| x.len() == f.size) {
+                        let job = crate::models::Download { url: voices::url(f), dest, size: f.size, sha256: f.sha256.into() };
+                        let got = crate::models::download(&job, &stop, &mut |e| match e {
+                            Event::Progress { done } | Event::Verifying { done } => emit("model", before + done, total, None),
+                            Event::Retrying { .. } => emit("retrying", before, total, None),
+                        })?;
+                        if got == Finished::Paused {
+                            return Ok(Finished::Paused);
+                        }
+                    }
+                    before += f.size;
+                }
+                Ok(Finished::Complete)
             })();
             r.downloads.lock().unwrap().remove(m.id);
             match result {
-                Ok(crate::models::Finished::Complete) => emit("done", m.size, m.size, None),
-                Ok(crate::models::Finished::Paused) => emit("paused", 0, m.size, None),
-                Err(e) => emit("failed", 0, m.size, Some(format!("{e:#}"))),
+                Ok(crate::models::Finished::Complete) => emit("done", total, total, None),
+                Ok(crate::models::Finished::Paused) => emit("paused", 0, total, None),
+                Err(e) => emit("failed", 0, total, Some(format!("{e:#}"))),
             }
         });
         Ok(())
@@ -548,12 +633,33 @@ impl Reader {
     pub fn delete(&self, id: &str) -> Result<()> {
         let m = voices::model(id).ok_or_else(|| anyhow!("no voice model {id}"))?;
         self.pause(id);
-        let f = voices::file(&self.paths, &m);
-        crate::models::discard(&f);
-        if f.exists() {
-            std::fs::remove_file(&f).map_err(|_| anyhow!(crate::tr!("{} is in use. Close what uses it and try again.", f.display())))?;
+        // the programs let go of its files first
+        self.end_all.store(true, Ordering::SeqCst);
+        self.wake.notify_all();
+        let until = std::time::Instant::now() + Duration::from_secs(20);
+        while self.end_all.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let dir = voices::dir(&self.paths, &m);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir).map_err(|_| anyhow!(crate::tr!("{} is in use. Close what uses it and try again.", dir.display())))?;
         }
         Ok(())
+    }
+}
+
+/// The speech engine or the translator is about to use the GPU: a voice holding it lets go first,
+/// after the sentence it is making (they take turns, as the two of them do).
+pub fn let_go_of_gpu(app: &AppHandle) {
+    let Some(r) = app.try_state::<Arc<Reader>>() else { return };
+    if !r.gpu_held.load(Ordering::SeqCst) {
+        return;
+    }
+    r.let_go.store(true, Ordering::SeqCst);
+    r.wake.notify_all();
+    let until = std::time::Instant::now() + Duration::from_secs(20);
+    while r.gpu_held.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -683,46 +789,65 @@ mod tests {
         assert_eq!(spoken(&s[3].text, lang)[0].lang, Lang::En);
     }
 
-    /// The real voice, through the app's own process code: `DAWWIN_TEST_VOICE_EXE=<dawwin-voice.exe>
-    /// DAWWIN_TEST_VOICE_MODEL=<supertonic-3-f16.gguf> [DAWWIN_TEST_VOICE_OUT=<folder>] cargo test
-    /// real_voice -- --ignored --nocapture`. The Voice bench runs it.
+    /// The real voices, through the app's own process and request code, on the processor:
+    /// `DAWWIN_TEST_VOICE_EXE=<dawwin-voice.exe beside its library and VoxCPM 2's voices>
+    /// DAWWIN_TEST_VOICE_DIR=<a folder of voices\<model id>\… as the app downloads them>
+    /// [DAWWIN_TEST_VOICE_OUT=<folder>] cargo test real_voice -- --ignored --nocapture`. Each model
+    /// there reads a heading, numbers, and Arabic with English inside (in what it reads), with a
+    /// man's and a woman's voice. The Voice bench runs it.
     #[test]
     #[ignore]
-    fn real_voice_reads_mixed_arabic_and_english() {
+    fn real_voice_reads_with_each_chosen_model() {
         let exe = PathBuf::from(std::env::var("DAWWIN_TEST_VOICE_EXE").expect("DAWWIN_TEST_VOICE_EXE"));
-        let model = PathBuf::from(std::env::var("DAWWIN_TEST_VOICE_MODEL").expect("DAWWIN_TEST_VOICE_MODEL"));
-        let dir = std::env::var_os("DAWWIN_TEST_VOICE_OUT").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("dawwin-real-voice-{}", std::process::id())));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut p = voice::VoiceProcess::spawn(&exe, None, &dir.join("voice.log")).unwrap();
-        let started = std::time::Instant::now();
-        p.load(&voice::Load { family: "supertonic".into(), model, gpu: false, options: Vec::new() }).unwrap();
-        println!("loaded in {:.1} s on {}", started.elapsed().as_secs_f32(), p.device);
-        let text = "# عادة القراءة
-
-في 12 مارس 2026 قال المدير: we will ship it next week, no matter what. رفعنا النسخة على GitHub أمس، وارتفعت الأسعار 15%.
-
-The meeting is at 10:30 a.m. in room 7.";
-        let (lang, sentences) = sentences_of(&formats::from_markdown(text));
-        let m = voices::SUPERTONIC;
-        let mut whole = Vec::new();
-        for (i, s) in sentences.iter().enumerate() {
-            let mut pieces = Vec::new();
-            for (k, run) in spoken(&s.text, lang).iter().enumerate() {
-                let out = dir.join(format!("{i}-{k}.wav"));
-                let voice = serde_json::json!({ "voice_id": if run.lang == Lang::Ar { "F1" } else { "M1" } });
-                let t = std::time::Instant::now();
-                let secs = p.speak(&run.text, m.code(run.lang), &voice, &out).unwrap();
-                println!("{} {:.2} s for {:.2} s: {}", run.lang.code(), t.elapsed().as_secs_f32(), secs, run.text);
-                assert!(secs > 0.3, "{}", run.text);
-                pieces.push(voice::read_wav(&out).unwrap());
+        let root = PathBuf::from(std::env::var("DAWWIN_TEST_VOICE_DIR").expect("DAWWIN_TEST_VOICE_DIR"));
+        let out = std::env::var_os("DAWWIN_TEST_VOICE_OUT").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("dawwin-real-voice-{}", std::process::id())));
+        std::fs::create_dir_all(&out).unwrap();
+        let program_dir = exe.parent().unwrap().to_path_buf();
+        let mut tried = 0;
+        for m in [voices::VOXCPM2, voices::SUPERTONIC, voices::PHONON] {
+            let model_dir = root.join("voices").join(m.id);
+            if !m.files.iter().all(|f| f.name.split('/').fold(model_dir.clone(), |p, x| p.join(x)).is_file()) {
+                println!("{}: not there", m.name);
+                continue;
             }
-            let (rate, samples) = voice::join(&pieces, PAUSE_PIECE, s.pause);
-            whole.push((rate, samples));
+            tried += 1;
+            let mut p = voice::VoiceProcess::spawn(&exe, None, &out.join(format!("{}.log", m.id))).unwrap();
+            let started = std::time::Instant::now();
+            p.load(&voice::Load { family: m.family.into(), model: model_dir.clone(), gpu: false, options: Vec::new() }).unwrap();
+            println!("{}: loaded in {:.1} s on {}", m.name, started.elapsed().as_secs_f32(), p.device);
+            let text = if m.reads(Lang::Ar) {
+                "# عادة القراءة\n\nفي 12 مارس 2026 قال المدير: we will ship it next week, no matter what. رفعنا النسخة على GitHub أمس، وارتفعت الأسعار 15%.\n\nThe meeting is at 10:30 a.m. in room 7."
+            } else {
+                "# Starting a small garden\n\nYou do not need a large yard to grow your own vegetables. The meeting is at 10:30 a.m. in room 7, and it costs $66.50."
+            };
+            let (lang, sentences) = sentences_of(&formats::from_markdown(text));
+            for woman in [true, false] {
+                let mut whole = Vec::new();
+                for (i, s) in sentences.iter().enumerate() {
+                    let mut pieces = Vec::new();
+                    for (k, run) in spoken(&s.text, lang).iter().enumerate() {
+                        // a run in a language the model does not read goes to the other model in the app
+                        let Some(v) = m.voices.iter().find(|v| v.lang == run.lang && v.woman == woman) else { continue };
+                        let wav = out.join(format!("{}-{i}-{k}.wav", m.id));
+                        let t = std::time::Instant::now();
+                        let secs = p.speak(&run.text, m.code(run.lang), &voices::request(&m, v, &model_dir, &program_dir), &wav).unwrap();
+                        println!("  {} {} {:.2} s for {:.2} s: {}", v.id, run.lang.code(), t.elapsed().as_secs_f32(), secs, run.text);
+                        assert!(secs > 0.3, "{}", run.text);
+                        pieces.push(voice::read_wav(&wav).unwrap());
+                        let _ = std::fs::remove_file(&wav);
+                    }
+                    if !pieces.is_empty() {
+                        whole.push(voice::join(&pieces, PAUSE_PIECE, s.pause));
+                    }
+                }
+                // all of it as one file, as it is heard
+                let (rate, samples) = voice::join(&whole, 0.0, 0.0);
+                let file = out.join(format!("{}-{}.wav", m.id, if woman { "woman" } else { "man" }));
+                voice::write_wav(&file, rate, &samples).unwrap();
+                println!("  {:.1} s of speech in {}", samples.len() as f64 / rate as f64, file.display());
+            }
         }
-        // all of it as one file, as it is heard
-        let (rate, samples) = voice::join(&whole, 0.0, 0.0);
-        voice::write_wav(&dir.join("read-aloud.wav"), rate, &samples).unwrap();
-        println!("{:.1} s of speech in {}", samples.len() as f64 / rate as f64, dir.join("read-aloud.wav").display());
+        assert!(tried > 0, "no voice model in {}", root.display());
     }
 
     #[test]

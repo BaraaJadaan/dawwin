@@ -91,11 +91,30 @@ pub const VOICE: Tool = Tool {
     files: &[
         "dawwin-voice.exe", "audiocpp.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
         "msvcp140_codecvt_ids.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll",
+        // VoxCPM 2's ready-made voices (voice/refs)
+        "voxcpm2-ar-f.wav", "voxcpm2-ar-m.wav", "voxcpm2-en-f.wav", "voxcpm2-en-m.wav",
     ],
     version: 1,
 };
 
-pub const TOOLS: [Tool; 4] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE];
+/// The GPU build of audio.cpp's library (Vulkan, for every brand), for the voices that want a
+/// graphics card. The voice program loads it from here; where it cannot (no Vulkan driver), it
+/// takes the processor build beside itself.
+pub const VOICE_GPU: Tool = Tool {
+    id: "voice-gpu",
+    file: "dawwin-voice-gpu-audio.cpp-v0.9.4.tar.xz",
+    size: 0,
+    sha256: "",
+    folder: "voice-gpu",
+    exe: "audiocpp.dll",
+    files: &[
+        "audiocpp.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll",
+    ],
+    version: 1,
+};
+
+pub const TOOLS: [Tool; 5] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE, VOICE_GPU];
 
 pub fn tool(id: &str) -> Option<Tool> {
     TOOLS.into_iter().find(|t| t.id == id)
@@ -414,6 +433,11 @@ mod tests {
             let started = std::time::Instant::now();
             unpack(&file, &root(&paths).join(t.folder)).unwrap();
             let exe = exe(&paths, &t).unwrap_or_else(|| panic!("{} has no {}", t.file, t.exe));
+            // a library is not a program: that it unpacked whole is what can be checked here
+            if t.id == "voice-gpu" {
+                println!("{}: unpacked in {:.1} s", t.id, started.elapsed().as_secs_f64());
+                continue;
+            }
             let flag = if t.id == "translator" || t.id == "voice" { "--version" } else { "-version" };
             let out = std::process::Command::new(&exe).arg(flag).output().unwrap();
             let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));

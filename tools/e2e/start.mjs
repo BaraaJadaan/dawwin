@@ -84,6 +84,20 @@ await a.ev(`setUiLang('ar')`);
 tp = await tips();
 check("in Arabic too", /ثانية/.test(tp.step) && /اللهجات/.test(tp.arabic) && /ملفًا صوتيًا/.test(tp.job) && tp.side[0] === tp.side[1] && /[؀-ۿ]/.test(tp.side[0]), tp);
 
+// ---- the working bar moves in Arabic too; nothing moves with animations off in Windows
+const bar = () => a.ev(`(async()=>{
+  const p=document.createElement('div'); p.className='progress indeterminate'; p.style.width='300px'; p.innerHTML='<div class="bar"></div>';
+  document.getElementById('main').append(p); const b=p.firstChild; const at=[];
+  for (let k=0;k<4;k++){ at.push(b.getBoundingClientRect().left); await new Promise(r=>setTimeout(r,150)); }
+  const name=getComputedStyle(b).animationName; p.remove(); return {name, moved: Math.max(...at)-Math.min(...at)};
+})()`);
+const rtl = await bar();
+check("the working bar moves in the Arabic interface", rtl.name === "slide-rtl" && rtl.moved > 20, rtl);
+await a.call("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+const still = await bar();
+check("with animations off in Windows, it stands still", still.moved < 1, still);
+await a.call("Emulation.setEmulatedMedia", { features: [] });
+
 // ---- pictures, both languages
 for (const lang of ["en", "ar"]) {
   await a.ev(`setUiLang('${lang}')`);

@@ -3,7 +3,8 @@ name: Tools
 # The programs Dawwin downloads only when they are wanted (src-tauri/src/tools.rs): its own small
 # ffmpeg in two sizes (tools/ffmpeg/build.sh), "audio", for reading and saving sound and adding
 # subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
-# llama.cpp's official server. Each is built or taken, packed (tools/pack.py), and tried on Windows
+# llama.cpp's official server; and the voice, Dawwin's dawwin-voice.exe (voice/) with audio.cpp's official
+# library for the processor. Each is built or taken, packed (tools/pack.py), and tried on Windows
 # with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
 # tag, the files go on that release, where the app downloads them from. With the id of an earlier
 # run, its files are tried and uploaded instead of new ones: the app pins their exact bytes.
@@ -24,6 +25,7 @@ on:
       - "tools/ffmpeg/**"
       - "tools/pack.py"
       - "src-tauri/src/tools.rs"
+      - "voice/**"
       - ".github/workflows/tools.yml"
 
 permissions:
@@ -70,6 +72,34 @@ jobs:
           name: pack-translator
           path: packs/
 
+  voice:
+    if: inputs.from_run == ''
+    runs-on: windows-2022
+    env:
+      AUDIOCPP: v0.9.4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: dawwin-voice.exe, and audio.cpp's library from its official release
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path voice/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          curl.exe -sSL --fail --retry 5 -o lib.zip "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP/audio-$env:AUDIOCPP-lib-windows-x64-cpu.zip"
+          Expand-Archive lib.zip lib
+          New-Item -ItemType Directory -Force voice-pack | Out-Null
+          Get-ChildItem lib -Recurse -Filter *.dll | Copy-Item -Destination voice-pack
+          Get-ChildItem lib -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-pack
+          Copy-Item voice/target/release/dawwin-voice.exe voice-pack
+          Get-ChildItem voice-pack | Format-Table Name, Length
+      - name: Pack
+        shell: pwsh
+        run: python tools/pack.py "packs/dawwin-voice-audio.cpp-$env:AUDIOCPP.tar.xz" voice-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-voice
+          path: packs/
+
   samples:
     # Files of the kinds people bring, made with Ubuntu's full ffmpeg: only for the test.
     runs-on: ubuntu-24.04
@@ -92,7 +122,7 @@ jobs:
           path: s/
 
   try:
-    needs: [ffmpeg, translator, samples]
+    needs: [ffmpeg, translator, voice, samples]
     if: ${{ !failure() && !cancelled() }}
     runs-on: windows-2022
     steps:

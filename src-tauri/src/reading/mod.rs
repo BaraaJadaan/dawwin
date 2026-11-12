@@ -683,6 +683,48 @@ mod tests {
         assert_eq!(spoken(&s[3].text, lang)[0].lang, Lang::En);
     }
 
+    /// The real voice, through the app's own process code: `DAWWIN_TEST_VOICE_EXE=<dawwin-voice.exe>
+    /// DAWWIN_TEST_VOICE_MODEL=<supertonic-3-f16.gguf> [DAWWIN_TEST_VOICE_OUT=<folder>] cargo test
+    /// real_voice -- --ignored --nocapture`. The Voice bench runs it.
+    #[test]
+    #[ignore]
+    fn real_voice_reads_mixed_arabic_and_english() {
+        let exe = PathBuf::from(std::env::var("DAWWIN_TEST_VOICE_EXE").expect("DAWWIN_TEST_VOICE_EXE"));
+        let model = PathBuf::from(std::env::var("DAWWIN_TEST_VOICE_MODEL").expect("DAWWIN_TEST_VOICE_MODEL"));
+        let dir = std::env::var_os("DAWWIN_TEST_VOICE_OUT").map(PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join(format!("dawwin-real-voice-{}", std::process::id())));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = voice::VoiceProcess::spawn(&exe, None, &dir.join("voice.log")).unwrap();
+        let started = std::time::Instant::now();
+        p.load(&voice::Load { family: "supertonic".into(), model, gpu: false, options: Vec::new() }).unwrap();
+        println!("loaded in {:.1} s on {}", started.elapsed().as_secs_f32(), p.device);
+        let text = "# عادة القراءة
+
+في 12 مارس 2026 قال المدير: we will ship it next week, no matter what. رفعنا النسخة على GitHub أمس، وارتفعت الأسعار 15%.
+
+The meeting is at 10:30 a.m. in room 7.";
+        let (lang, sentences) = sentences_of(&formats::from_markdown(text));
+        let m = voices::SUPERTONIC;
+        let mut whole = Vec::new();
+        for (i, s) in sentences.iter().enumerate() {
+            let mut pieces = Vec::new();
+            for (k, run) in spoken(&s.text, lang).iter().enumerate() {
+                let out = dir.join(format!("{i}-{k}.wav"));
+                let voice = serde_json::json!({ "voice_id": if run.lang == Lang::Ar { "F1" } else { "M1" } });
+                let t = std::time::Instant::now();
+                let secs = p.speak(&run.text, m.code(run.lang), &voice, &out).unwrap();
+                println!("{} {:.2} s for {:.2} s: {}", run.lang.code(), t.elapsed().as_secs_f32(), secs, run.text);
+                assert!(secs > 0.3, "{}", run.text);
+                pieces.push(voice::read_wav(&out).unwrap());
+            }
+            let (rate, samples) = voice::join(&pieces, PAUSE_PIECE, s.pause);
+            whole.push((rate, samples));
+        }
+        // all of it as one file, as it is heard
+        let (rate, samples) = voice::join(&whole, 0.0, 0.0);
+        voice::write_wav(&dir.join("read-aloud.wav"), rate, &samples).unwrap();
+        println!("{:.1} s of speech in {}", samples.len() as f64 / rate as f64, dir.join("read-aloud.wav").display());
+    }
+
     #[test]
     fn pasted_text_is_named_by_its_first_sentence() {
         assert_eq!(title_of("

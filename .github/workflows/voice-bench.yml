@@ -58,6 +58,17 @@ jobs:
       - name: Pack
         shell: pwsh
         run: python tools/pack.py packs/dawwin-voice-audio.cpp-v0.9.4.tar.xz voice-cpu | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: The app's own reading code with this program and a real voice (mixed Arabic and English, numbers)
+        shell: pwsh
+        run: |
+          $env:DAWWIN_TEST_VOICE_EXE = (Resolve-Path voice-cpu/dawwin-voice.exe).Path
+          $env:DAWWIN_TEST_VOICE_MODEL = (Get-ChildItem models -Recurse -Filter supertonic-3-f16.gguf | Select-Object -First 1).FullName
+          $env:DAWWIN_TEST_VOICE_OUT = "$PWD\out-program\app"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked real_voice -- --ignored --nocapture
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v4
         if: always()
         with:

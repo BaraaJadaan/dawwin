@@ -157,6 +157,12 @@ pub fn folder_size(dir: &Path) -> u64 {
 
 /// The speech engine ships in a folder next to the app.
 pub fn engine_exe() -> Option<PathBuf> {
+    // for trying the app with a stand-in engine (examples/fake_engine.rs); not in release builds
+    if cfg!(debug_assertions) {
+        if let Some(exe) = std::env::var_os("DAWWIN_TEST_ENGINE").map(PathBuf::from).filter(|p| p.is_file()) {
+            return Some(exe);
+        }
+    }
     let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("dawwin-engine.exe");
     exe.is_file().then_some(exe)
 }

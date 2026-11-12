@@ -60,6 +60,10 @@ static AR: &[(&str, &str)] = &[
     ("No connection to the internet: the server's name could not be looked up.", "لا يوجد اتصال بالإنترنت: تعذّر العثور على اسم الخادم."),
     ("The server could not be reached: the network may be blocking it.", "تعذّر الوصول إلى الخادم: ربما تحجبه الشبكة."),
     ("The connection stopped answering.", "توقف الاتصال عن الاستجابة."),
+    ("The model did not load in {} minutes: the graphics driver may be stuck.", "لم يُحمَّل النموذج خلال {} دقائق: ربما علق برنامج تشغيل الرسوميات."),
+    ("Something went wrong in Dawwin while it worked on this: {}", "حدث خطأ في دَوِّن أثناء العمل على هذا: {}"),
+    ("Dawwin's queue has stopped. Please start Dawwin again.", "توقفت قائمة المهام في دَوِّن. أعد تشغيل دَوِّن من فضلك."),
+    ("Another program keeps taking the translator's place. Close it and try again.", "برنامج آخر يأخذ مكان المترجم كل مرة. أغلقه وحاول من جديد."),
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),

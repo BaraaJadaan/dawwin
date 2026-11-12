@@ -430,6 +430,23 @@ pub fn speech_spans(audio: &[f32], min_gap_s: f32, keep_s: f32) -> Vec<(usize, u
 }
 
 /// The kept parts, one after the other.
+/// The same, in the memory the recording already takes: the kept parts moved to its front. A
+/// three-hour recording without its silences takes no more memory than with them (`spans` are
+/// in order and do not overlap, as `speech_spans` gives them).
+pub fn keep_spans(mut audio: Vec<f32>, spans: &[(usize, usize)]) -> Vec<f32> {
+    let mut to = 0;
+    for &(a, b) in spans {
+        let b = b.min(audio.len());
+        if a < to || a >= b {
+            continue;
+        }
+        audio.copy_within(a..b, to);
+        to += b - a;
+    }
+    audio.truncate(to);
+    audio
+}
+
 pub fn join_spans(audio: &[f32], spans: &[(usize, usize)]) -> Vec<f32> {
     let mut out = Vec::with_capacity(spans.iter().map(|(a, b)| b - a).sum());
     for &(a, b) in spans {
@@ -731,6 +748,10 @@ mod tests {
         let kept: f32 = s.iter().map(|(a, b)| b - a).sum();
         assert!(kept > 5.0 && kept < 6.5, "from 9.8 s to about 5.9: {kept}");
         assert_eq!(join_spans(&audio, &spans).len(), spans.iter().map(|(a, b)| b - a).sum::<usize>());
+        let (joined, ptr) = (join_spans(&audio, &spans), audio.as_ptr());
+        let kept = keep_spans(audio, &spans);
+        assert_eq!(kept, joined, "the same sound, made in place");
+        assert_eq!(kept.as_ptr(), ptr, "in the memory the recording took, not a second copy");
         assert!(speech_spans(&vec![0.0; 3 * SR], 0.7, 0.3).is_empty(), "silence only: nothing to keep");
     }
 

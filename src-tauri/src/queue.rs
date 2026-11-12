@@ -296,8 +296,16 @@ impl Core {
         Ok(core)
     }
 
+    /// Hand a message to the queue's thread. Should that thread be gone, the job the message was
+    /// for says so, rather than wait for ever.
     fn send(&self, m: Msg) {
-        let _ = self.tx.lock().unwrap().send(m);
+        let undelivered = self.tx.lock().unwrap().send(m).err().map(|e| e.0);
+        if let Some(Msg::Job(id) | Msg::Priority(id) | Msg::Translate(id)) = undelivered {
+            self.update_job(&id, |j| {
+                j.status = "failed".into();
+                j.error = Some(crate::tr!("Dawwin's queue has stopped. Please start Dawwin again."));
+            });
+        }
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -1056,15 +1064,21 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
         last_used = Instant::now();
         match msg {
             Msg::Probe => match ensure_engine(&core, &mut engine, None).and_then(|e| e.probe()) {
-                Ok(v) => core.update(|s| {
-                    let e = &mut s.engine;
-                    if e.state == "starting" || e.state == "off" {
-                        e.state = "ready".into();
+                Ok(v) => {
+                    // it found the GPU: no process stays behind for nothing; a job starts one
+                    if let Some(e) = engine.take() {
+                        e.shutdown();
                     }
-                    e.gpu = v.get("gpu").and_then(|x| x.as_str()).map(String::from);
-                    e.vram_total_gb = v.get("vram_total_gb").and_then(|x| x.as_f64());
-                    e.device = Some(if e.gpu.is_some() { "gpu".into() } else { "cpu".into() });
-                }),
+                    core.update(|s| {
+                        let e = &mut s.engine;
+                        if e.state == "starting" || e.state == "off" {
+                            e.state = "ready".into();
+                        }
+                        e.gpu = v.get("gpu").and_then(|x| x.as_str()).map(String::from);
+                        e.vram_total_gb = v.get("vram_total_gb").and_then(|x| x.as_f64());
+                        e.device = Some(if e.gpu.is_some() { "gpu".into() } else { "cpu".into() });
+                    })
+                }
                 Err(err) if err.is::<EngineFailed>() && !core.gpu_failed.load(Ordering::SeqCst) => {
                     // perhaps the GPU driver took it down: the engine can do without it
                     give_up_on_gpu(&core, &mut engine);
@@ -1111,7 +1125,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     e.shutdown();
                     core.update(|s| s.engine.state = "off".into());
                 }
-                if let Err(err) = run_translation(&core, &mut translator, &id) {
+                if let Err(err) = guarded(|| run_translation(&core, &mut translator, &id)) {
                     let on_gpu = translator.as_ref().is_some_and(|t| !t.cpu_only);
                     let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
                     if err.is::<EngineFailed>() && on_gpu && !cancelled && !core.translator_gpu_failed.swap(true, Ordering::SeqCst) {
@@ -1139,7 +1153,15 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 if let Some(t) = translator.take() {
                     t.shutdown();
                 }
-                let res = run_job(&core, &mut engine, &id);
+                let res = guarded(|| run_job(&core, &mut engine, &id));
+                if let Some(e) = engine.as_mut() {
+                    e.watch(None);
+                }
+                if res.as_ref().is_err_and(|e| e.is::<Panicked>()) {
+                    // whatever the engine was in the middle of, the next job starts it fresh
+                    engine = None;
+                    core.update(|s| s.engine.state = "off".into());
+                }
                 if let Err(err) = res {
                     let engine_at_fault = err.is::<EngineFailed>() || err.is::<OutOfMemory>();
                     let on_gpu = core.snapshot().engine.device.as_deref() == Some("gpu");
@@ -1180,6 +1202,24 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     }
 }
 
+/// A job that went wrong inside Dawwin itself (a bug): it fails with the reason, and the queue
+/// goes on with the next one.
+#[derive(Debug)]
+struct Panicked(String);
+impl std::fmt::Display for Panicked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&crate::tr!("Something went wrong in Dawwin while it worked on this: {}", self.0))
+    }
+}
+impl std::error::Error for Panicked {}
+
+fn guarded(job: impl FnOnce() -> Result<()>) -> Result<()> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(job)).unwrap_or_else(|p| {
+        let why = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+        Err(Panicked(why).into())
+    })
+}
+
 /// A job that ended in an error: stopped, when the user had pressed stop (whatever the error says:
 /// a stop while ffmpeg reads or the translator loads ends in one), else failed with the reason.
 fn end_in_error(core: &Arc<Core>, id: &str, err: anyhow::Error, cancelled: bool) {
@@ -1203,15 +1243,23 @@ fn ensure_translator<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProces
             slot.take().unwrap().shutdown();
         }
     }
-    if slot.is_none() {
-        let exe = setup::translator_exe(&core.paths).ok_or_else(|| anyhow!(crate::tr!("The translator is not downloaded. Download it in Settings.")))?;
-        // the GPU the speech engine found best: a dedicated one before one in the processor
-        let gpu = core.snapshot().engine.gpu;
-        *slot = Some(TranslatorProcess::spawn(&exe, &core.paths, model, cpu_only, gpu.as_deref())?);
+    // a program that took its port first gets nothing: the translator starts again on another
+    for _ in 0..3 {
+        if slot.is_none() {
+            let exe = setup::translator_exe(&core.paths).ok_or_else(|| anyhow!(crate::tr!("The translator is not downloaded. Download it in Settings.")))?;
+            // the GPU the speech engine found best: a dedicated one before one in the processor
+            let gpu = core.snapshot().engine.gpu;
+            *slot = Some(TranslatorProcess::spawn(&exe, &core.paths, model, cpu_only, gpu.as_deref())?);
+        }
+        match slot.as_mut().unwrap().wait_ready(cancel) {
+            Err(e) if e.is::<crate::translate::PortTaken>() => {
+                slot.take();
+            }
+            Err(e) => return Err(e),
+            Ok(()) => return Ok(slot.as_mut().unwrap()),
+        }
     }
-    let t = slot.as_mut().unwrap();
-    t.wait_ready(cancel)?;
-    Ok(t)
+    Err(anyhow!(crate::tr!("Another program keeps taking the translator's place. Close it and try again.")))
 }
 
 /// The lines of a transcript to translate: those with text and without a translation of what they say now.
@@ -1384,6 +1432,7 @@ fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobVie
         return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
     };
     let w = ensure_engine(core, engine, Some(&model.path))?;
+    w.watch(Some(cancel.clone()));
     w.start_loading()?;
     let samples = audio::decode(&source, setup::ffmpeg(&core.paths).as_ref(), &cancel)?;
     core.update_job(id, |j| j.status = "loading".into());
@@ -1460,6 +1509,10 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     if job.kind == "timing" {
         return run_timing(core, engine, &job);
     }
+    // for trying what a bug in a job does to the queue; not in release builds
+    if cfg!(debug_assertions) && std::env::var("DAWWIN_TEST_PANIC").is_ok_and(|p| !p.is_empty() && job.path.contains(&p)) {
+        panic!("a test asked this job to go wrong");
+    }
     let steps = job.steps.clone();
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
     let started = Instant::now();
@@ -1474,6 +1527,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
             return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
         };
         let w = ensure_engine(core, engine, Some(&model.path))?;
+        w.watch(Some(cancel.clone()));
         w.start_loading()?; // the model loads while the audio decodes
         model_in_use = Some((family, model));
     }
@@ -1511,8 +1565,9 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         return Ok(());
     };
 
+    // the silences out in place: the recording is never in memory twice
     let heard = match &spans {
-        Some(s) => audio::join_spans(&samples, s),
+        Some(s) => audio::keep_spans(samples, s),
         None => samples,
     };
     let total = heard.len();
@@ -1521,6 +1576,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let audio = Audio { id: id.to_string(), samples: heard };
     core.update_job(id, |j| j.status = "loading".into());
     let w = ensure_engine(core, engine, Some(&model.path))?;
+    w.watch(Some(cancel.clone()));
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
     let device = match &info.gpu {

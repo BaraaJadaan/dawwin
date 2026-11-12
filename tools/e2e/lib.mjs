@@ -63,7 +63,8 @@ export function ffmpeg(args) {
 export async function open(home, port, env = {}) {
   // the interface starts as a new user's, without what the last run left in its storage
   const webview = join(OUT, `webview-${port}`);
-  if (!env.KEEP_WEBVIEW) rmSync(webview, { recursive: true, force: true });
+  // the webview of an app just closed lets go of its folder a moment later
+  if (!env.KEEP_WEBVIEW) rmSync(webview, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 });
   const proc = spawn(APP, [], {
     stdio: "ignore",
     env: { ...process.env, DAWWIN_HOME: home, WEBVIEW2_USER_DATA_FOLDER: webview, WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --mute-audio`, ...env },

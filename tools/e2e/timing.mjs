@@ -19,7 +19,7 @@ const truth = (name) => JSON.parse(readFileSync(join(voices, `${name}.truth.json
 const work = join(OUT, "timing-recordings");
 rmSync(work, { recursive: true, force: true });
 mkdirSync(work, { recursive: true });
-const room = (wav, out, extra = []) => ffmpeg(["-i", wav, "-f", "lavfi", "-i", "anoisesrc=c=pink:a=0.003:r=16000", "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:normalize=0", ...extra, out]);
+const room = (wav, out, extra = []) => ffmpeg(["-i", wav, "-f", "lavfi", "-i", "anoisesrc=c=pink:a=0.003:r=16000:seed=7", "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:normalize=0", ...extra, out]);
 const lecture = join(work, "lecture.mp4");
 room(join(voices, "lecture-en.wav"), join(work, "lecture.wav"));
 ffmpeg(["-f", "lavfi", "-i", "testsrc=size=640x360:rate=24", "-i", join(work, "lecture.wav"), "-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-shortest", lecture]);
@@ -56,9 +56,10 @@ function scoreSrt(file, name) {
   const m = match(words.map((x) => x.w), said.map((x) => fold(x.text)));
   let goneEarly = 0, counted = 0;
   const lastOf = new Map();
+  const early = [];
   words.forEach((x, i) => { if (m[i] >= 0) lastOf.set(x.k, said[m[i]].start); });
-  for (const [k, t] of lastOf) { counted++; if (cues[k].end < t) goneEarly++; }
-  return { cues, counted, goneEarly, said, words, m };
+  for (const [k, t] of lastOf) { counted++; if (cues[k].end < t) { goneEarly++; early.push({ cue: cues[k], lastWordSaid: t }); } }
+  return { cues, counted, goneEarly, early, said, words, m };
 }
 /** How many words of a transcript start within half a second of when they are said. */
 function scoreWords(tx, name) {
@@ -93,7 +94,7 @@ check("the video with subtitles is saved next to it", !!withSubs, readdirSync(wo
 const lecSrt = join(work, "lecture.srt");
 await a.invoke("export_to_path", { id: lec.id, path: slash(lecSrt), stamps: false });
 const ls = scoreSrt(lecSrt, "lecture-en");
-check("no subtitle of the lecture is gone before its last word is said", ls.goneEarly === 0, { gone: ls.goneEarly, of: ls.counted });
+check("no subtitle of the lecture is gone before its last word is said", ls.goneEarly === 0, { gone: ls.goneEarly, of: ls.counted, early: ls.early });
 const subject = ls.cues.find((c) => /subject/.test(c.text));
 const subjectSaid = ls.said.find((w) => w.text === "subject")?.start;
 check("\"subject to\" is on the screen when it is said", subject && subject.start <= subjectSaid && subject.end >= subjectSaid + 0.3, { cue: subject, said: subjectSaid });

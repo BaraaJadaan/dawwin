@@ -29,6 +29,7 @@ A script without what it needs says so and is skipped.
 | `timing.mjs` | Subtitles that follow the speaker: words placed in time while a video with subtitles is made, when subtitles are exported, from "Fix the timing" and for Follow words; edited lines; a recording that moved. |
 | `subtitles.mjs` | Subtitles in Chinese, Japanese, Korean, Thai and Khmer cut to each language's line length; a subtitle track and burned-in subtitles with Dawwin's own ffmpeg; both languages, the translation in whole sentences; exports a player or a spreadsheet would misread. |
 | `proxy.mjs` | Downloads and the update check through the proxy `HTTPS_PROXY` names (a stand-in that asks for a sign-in; nothing reaches the internet), and why a download cannot go on, in English and Arabic. Needs no model. |
+| `queue.mjs` | The queue when things go wrong, with the stand-in engine (`cargo build --example fake_engine`): a model load that hangs ends after its time limit and the job is done on the CPU; a stop during the hang; a job that goes wrong fails alone; no engine process after the GPU is found; an hour with "Remove silences" in about the memory it takes without. |
 | `lists.mjs` | Long recordings and big folders: a made-up 5,000-line transcript (opening, scrolling, search a key at a time), 300 transcripts in History, a folder of 1,000 recordings, a huge folder stopped, a folder run twice, keyboard access, zoom. |
 
 ```bash
@@ -36,4 +37,5 @@ node tools/e2e/timing.mjs
 node tools/e2e/lists.mjs
 node tools/e2e/subtitles.mjs
 node tools/e2e/proxy.mjs
+node tools/e2e/queue.mjs
 ```

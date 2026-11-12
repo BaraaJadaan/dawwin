@@ -8,9 +8,10 @@ use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
@@ -52,6 +53,34 @@ pub trait Engine: Send {
     fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>>;
     /// Let the audio's cached data go.
     fn forget(&mut self, audio_id: &str);
+    /// The stop of the job it works for: waiting for the engine ends soon after it is set.
+    fn watch(&mut self, _stop: Option<Arc<AtomicBool>>) {}
+}
+
+/// Loading a model takes a minute at most, even from a slow disk on the CPU. One that takes this
+/// long is stuck (a graphics driver that hangs): the engine is ended, and the job goes on the CPU.
+const LOAD_LIMIT: Duration = Duration::from_secs(5 * 60);
+/// After a stop, how long the engine has to answer before it is ended.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
+/// The job was stopped while the engine worked for it. Not the engine's fault, nor the GPU's.
+#[derive(Debug)]
+pub struct Stopped;
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("stopped")
+    }
+}
+impl std::error::Error for Stopped {}
+
+/// The time limit on loading, which a debug build can shorten for its tests.
+fn load_limit() -> Duration {
+    if cfg!(debug_assertions) {
+        if let Some(s) = std::env::var("DAWWIN_TEST_LOAD_LIMIT_S").ok().and_then(|v| v.parse().ok()) {
+            return Duration::from_secs(s);
+        }
+    }
+    LOAD_LIMIT
 }
 
 /// "Try again with a smaller batch."
@@ -106,6 +135,8 @@ pub struct EngineProcess {
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
     cache_dir: PathBuf,
     raw_files: Vec<(String, PathBuf)>,
+    /// The stop of the job it works for
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl EngineProcess {
@@ -160,6 +191,7 @@ impl EngineProcess {
             stderr_tail,
             cache_dir: paths.cache_dir(),
             raw_files: Vec::new(),
+            stop: None,
         })
     }
 
@@ -195,9 +227,26 @@ impl EngineProcess {
         true
     }
 
-    fn wait(&mut self, id: u64) -> Result<Value> {
+    /// The reply to request `id`. Within `limit`, if one is given: past it the engine is ended. A
+    /// stop of the job is waited out for a moment, then the engine is ended too, so that a stuck
+    /// driver never keeps a job, and the jobs after it, waiting.
+    fn wait(&mut self, id: u64, limit: Option<Duration>) -> Result<Value> {
+        let started = Instant::now();
+        let mut stopped_at: Option<Instant> = None;
         loop {
-            match self.replies.recv_timeout(Duration::from_secs(1)) {
+            if stopped_at.is_none() && self.stop.as_ref().is_some_and(|s| s.load(Ordering::SeqCst)) {
+                stopped_at = Some(Instant::now());
+            }
+            if stopped_at.is_some_and(|t| t.elapsed() >= STOP_GRACE) {
+                let _ = self.child.kill();
+                return Err(Stopped.into());
+            }
+            if limit.is_some_and(|l| started.elapsed() >= l) {
+                let _ = self.child.kill();
+                let minutes = limit.unwrap().as_secs().div_ceil(60);
+                return Err(EngineFailed(crate::tr!("The model did not load in {} minutes: the graphics driver may be stuck.", minutes)).into());
+            }
+            match self.replies.recv_timeout(Duration::from_millis(200)) {
                 Ok(v) => {
                     if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
                         continue; // a reply to a request nobody waits for any more
@@ -223,7 +272,7 @@ impl EngineProcess {
     /// What this computer has to run on.
     pub fn probe(&mut self) -> Result<Value> {
         let id = self.send(json!({"cmd": "probe"}))?;
-        self.wait(id)
+        self.wait(id, Some(load_limit()))
     }
 
     fn raw_file(&mut self, audio: &Audio) -> Result<PathBuf> {
@@ -274,7 +323,7 @@ impl Engine for EngineProcess {
         }
         self.start_loading()?;
         let id = self.pending_load.take().unwrap();
-        let v = self.wait(id)?;
+        let v = self.wait(id, Some(load_limit()))?;
         let info = EngineInfo {
             device: v.get("device").and_then(|d| d.as_str()).unwrap_or("cpu").to_string(),
             gpu: v.get("gpu").and_then(|d| d.as_str()).map(String::from),
@@ -295,7 +344,7 @@ impl Engine for EngineProcess {
             "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
             "language": language,
         }))?;
-        let v = self.wait(id)?;
+        let v = self.wait(id, None)?;
         let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
         let stopped = v.get("stopped").and_then(|t| t.as_array());
         if texts.len() != ranges.len() {
@@ -309,6 +358,10 @@ impl Engine for EngineProcess {
                 stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
             })
             .collect())
+    }
+
+    fn watch(&mut self, stop: Option<Arc<AtomicBool>>) {
+        self.stop = stop;
     }
 
     fn forget(&mut self, audio_id: &str) {

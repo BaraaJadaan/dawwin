@@ -8,7 +8,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::minutes::{self, Minutes};
 use crate::queue::Core;
-use crate::{e, safe_name, test_hook, C, R};
+use crate::{e, safe_name, C, R};
 
 /// Write the minutes, in the queue: the job's id. `language`: the transcript's own when empty.
 #[tauri::command]
@@ -97,9 +97,9 @@ pub async fn export_minutes(app: AppHandle, id: String, format: String, with_tra
 }
 
 /// The same without asking where (the file name decides the format), for the tests.
+#[cfg(debug_assertions)]
 #[tauri::command]
 pub fn export_minutes_to_path(core: C, id: String, path: String, with_transcript: bool) -> R<String> {
-    test_hook()?;
     let (t, m) = minutes_of(&core, &id)?;
     let ext = std::path::Path::new(&path).extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
     std::fs::write(&path, minutes::export(&t, &m, &ext, with_transcript).map_err(e)?).map_err(|x| x.to_string())?;

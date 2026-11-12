@@ -57,8 +57,9 @@ subscription, no limit on hours.
 **Transcribe**
 
 - Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg, also
-  WhatsApp voice notes, webm, avi and any other format: Dawwin offers it when a file needs it (a
-  download of 1.3 MB), or uses one already on the PC. Several files queue up.
+  WhatsApp voice notes, webm, avi, wmv, flv, mpg, a camera's mts, m2ts and ts, aiff, caf and ac3:
+  Dawwin offers it when a file needs it (a download of 1.3 MB), or uses one already on the PC. Several
+  files queue up. The message while you drag a file over the window says what the ticked steps will do.
 - Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
   recordings that are already done are skipped, so a stopped run picks up where it left off.
 - Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
@@ -87,11 +88,13 @@ subscription, no limit on hours.
 - SRT and WebVTT files of the transcript, of the translation, or of both.
 - **Video with subtitles**: the video itself, with a subtitle track for each language. The picture and
   sound are copied untouched, so it takes seconds, even for a long film. MP4 and MOV videos give an
-  MP4, everything else an MKV.
+  MP4 (a MOV an MP4 cannot hold, such as ProRes from a camera, stays a MOV), everything else an MKV.
+  The video's own subtitles stay exactly as they were, picture-based (PGS, VobSub) and styled (ASS) ones too.
 - **Video with subtitles burned in**: the subtitles drawn on the picture, for WhatsApp, Instagram, TVs
-  and players that show no tracks. Arabic is joined and runs right to left, and the picture is encoded
-  again on the graphics chip (NVIDIA, AMD or Intel, or Windows' own encoder): about 5 seconds for a
-  minute of 1080p video on an RTX 4060 laptop. The list on the side shows how far it is.
+  and players that show no tracks. Arabic is joined and runs right to left, its full stops and the
+  English words in it in their place, and the picture is encoded again on the graphics chip (NVIDIA,
+  AMD or Intel, or Windows' own encoder): about 5 seconds for a minute of 1080p video on an RTX 4060
+  laptop. The new file is about the size of the original. The list on the side shows how far it is.
 - Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.2 MB
   for burning in. Both are in **Settings**, to download or delete by hand.
 

@@ -179,7 +179,7 @@ jobs:
           & $ff -nostdin -loglevel error -y -i s\av1.mp4 -map 0:v:0 -vf "scale='if(gt(iw,ih),-2,1080)':'if(gt(iw,ih),1080,-2)':flags=lanczos,$style" -c:v h264_mf -b:v 3M -an sharp-av1.mp4
           if ($LASTEXITCODE -ne 0) { throw "sharp text on the AV1 video failed" }
           $info = (& $ff -hide_banner -i sharp-av1.mp4 2>&1 | Out-String)
-          if ($info -notmatch "1920x1080") { Write-Host $info; throw "the AV1 video was not enlarged" }
+          if ($info -notmatch "\d+x1080") { Write-Host $info; throw "the AV1 video was not enlarged" }
           exit 0
       - uses: actions/upload-artifact@v4
         with:

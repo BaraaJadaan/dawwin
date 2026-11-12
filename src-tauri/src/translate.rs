@@ -344,11 +344,18 @@ impl TranslatorProcess {
                 let detail = r.into_string().unwrap_or_default();
                 return Err(anyhow!("translator error {code}: {detail}"));
             }
-            // only a server that died counts against the GPU
-            Err(_) if !self.alive() => {
-                return Err(EngineFailed(crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12))).into());
+            // only a server that died counts against the GPU. A server that crashed in the middle of
+            // the line resets the connection a moment before Windows says it has exited: wait for that
+            Err(e) => {
+                let gone = Instant::now();
+                while self.alive() && gone.elapsed() < Duration::from_millis(1500) {
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                if !self.alive() {
+                    return Err(EngineFailed(crate::tr!("the translator exited. Last output:\n{}", self.last_lines(12))).into());
+                }
+                return Err(anyhow!("{e}"));
             }
-            Err(e) => return Err(anyhow!("{e}")),
         };
         let v: Value = serde_json::from_str(&reply.into_string()?)?;
         let out = v.get("content").and_then(Value::as_str).unwrap_or_default().trim().to_string();

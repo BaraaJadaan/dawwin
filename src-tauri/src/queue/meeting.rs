@@ -36,14 +36,57 @@ fn behind_limit() -> f64 {
     120.0
 }
 
-/// Where recordings are kept. Release 1.3.2 brings a folder for what Dawwin saves, chosen in
-/// Settings: this is the one place to switch to it.
+/// Where recordings are kept: Documents\Dawwin, or, when Documents is in OneDrive (Windows 11
+/// often puts it there), Dawwin in the user's own folder, which OneDrive does not take. A recording
+/// is not to leave the computer by itself. Release 1.3.2 brings a folder for what Dawwin saves,
+/// chosen in Settings: this is the one place to switch to it (and `synced` says when it is in OneDrive).
 pub fn recordings_dir(paths: &Paths) -> PathBuf {
     if std::env::var_os("DAWWIN_HOME").is_some_and(|h| !h.is_empty()) {
         // everything in one folder, also for trying things out
         return paths.roaming.join("recordings");
     }
-    dirs::document_dir().unwrap_or_else(|| paths.roaming.clone()).join("Dawwin")
+    let roots = onedrive_roots();
+    match dirs::document_dir() {
+        Some(d) if !synced(&d, &roots) => d.join("Dawwin"),
+        _ => dirs::home_dir().unwrap_or_else(|| paths.roaming.clone()).join("Dawwin"),
+    }
+}
+
+/// The folders OneDrive keeps in step with the internet, as it tells programs.
+fn onedrive_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = ["OneDrive", "OneDriveConsumer", "OneDriveCommercial"]
+        .iter()
+        .filter_map(|v| std::env::var_os(v))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    if cfg!(debug_assertions) {
+        // for trying the warning on a computer without OneDrive
+        if let Some(v) = std::env::var_os("DAWWIN_TEST_ONEDRIVE") {
+            roots.push(PathBuf::from(v));
+        }
+    }
+    roots
+}
+
+/// Whether `dir` is inside a folder OneDrive syncs: under one of its roots, or in a folder named
+/// like one ("OneDrive", "OneDrive - Company").
+pub fn synced(dir: &Path, roots: &[PathBuf]) -> bool {
+    let low = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
+    let d = low(dir);
+    roots.iter().any(|r| {
+        let r = low(r);
+        let r = r.trim_end_matches('\\');
+        !r.is_empty() && (d == r || d.starts_with(&format!("{r}\\")))
+    }) || dir.components().any(|c| {
+        let c = c.as_os_str().to_string_lossy().to_lowercase();
+        c == "onedrive" || c.starts_with("onedrive - ")
+    })
+}
+
+/// Whether recordings would go to a folder OneDrive uploads.
+pub fn recordings_synced(paths: &Paths) -> bool {
+    synced(&recordings_dir(paths), &onedrive_roots())
 }
 
 /// How recording is set up, in a file of its own beside the settings.
@@ -104,13 +147,15 @@ pub fn is_recording() -> bool {
     recording_now().is_some()
 }
 
-/// Stop the recording `id` (the job's stop button).
-pub(super) fn stop_if_recording(id: &str) {
+/// Stop the recording `id` (the job's stop button): true when it was recording.
+pub(super) fn stop_if_recording(id: &str) -> bool {
     if let Some(s) = session(id) {
         if let Some(r) = s.recorder.lock().unwrap().as_ref() {
             r.stop();
+            return true;
         }
     }
+    false
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -327,15 +372,15 @@ impl Core {
         journal::interrupted(&recordings_dir(&self.paths))
             .into_iter()
             .filter(|(_, j)| !busy.contains(&j.id))
-            .map(|(p, j)| {
-                let wav = j.wav_path(&p);
+            .filter_map(|(p, j)| {
+                let wav = j.wav_path(&p)?;
                 let c = record::wav::check(&wav).ok();
-                Interrupted {
+                Some(Interrupted {
                     journal: p.display().to_string(),
                     title: j.title.clone(),
                     started_ms: j.started_ms,
                     seconds: c.map_or(0.0, |c| c.file_frames as f64 / SR as f64),
-                }
+                })
             })
             .collect()
     }
@@ -348,7 +393,7 @@ impl Core {
             return Err(anyhow!("not a recording of Dawwin's"));
         }
         let j = Journal::load(&path)?;
-        let wav = j.wav_path(&path);
+        let wav = j.wav_path(&path).ok_or_else(|| anyhow!("not a recording of Dawwin's"))?;
         if !keep {
             let _ = std::fs::remove_file(&wav);
             std::fs::remove_file(&path)?;
@@ -357,6 +402,8 @@ impl Core {
             let _ = self.app.emit("history-changed", &j.id);
             return Ok(None);
         }
+        // only a file laid out the way the recorder writes it is repaired
+        record::wav::check(&wav)?;
         record::wav::repair(&wav)?;
         let mut j = j;
         j.state = "stopped".into();
@@ -556,32 +603,24 @@ pub(super) fn run(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str
     let Some(sess) = session(id) else { return Ok(()) };
     let result = run_session(core, engine, &sess);
     SESSIONS.lock().unwrap().retain(|s| s.id != sess.id);
-    if let Err(e) = &result {
-        // the recording itself is safe: the journal stays, and it is offered again
+    if result.is_err() {
+        // the recording does not depend on the engine: one still running goes on until Stop, and
+        // its journal stays, so that it is offered again
         if let Some(r) = sess.recorder.lock().unwrap().take() {
-            r.stop();
             let _ = r.wait();
         }
         core.live.lock().unwrap().remove(id);
         let _ = core.app.emit("history-changed", id);
-        let _ = e;
     }
     core.cancels.lock().unwrap().remove(id);
     result
 }
 
-fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<Session>) -> Result<()> {
-    let id = sess.id.as_str();
-    let started = Instant::now();
-    let j = sess.journal.lock().unwrap().clone();
-    let language = j.language.clone();
-    let Some((family, model)) = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &language) else {
+/// The model for `language`, loaded: its file, where it runs, and its name.
+fn prepare(core: &Arc<Core>, engine: &mut Option<EngineProcess>, language: &str) -> Result<(String, String, String)> {
+    let Some((family, model)) = setup::model_for(&core.paths, &core.settings.lock().unwrap(), language) else {
         return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
     };
-    let live_now = sess.recorder.lock().unwrap().is_some();
-    core.update_job(id, |x| {
-        x.status = if live_now { "recording".into() } else { "loading".into() };
-    });
     let w = ensure_engine(core, engine, Some(&model.path))?;
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
@@ -589,6 +628,45 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         Some(g) if info.device == "gpu" => format!("GPU · {g}"),
         _ => "CPU".into(),
     };
+    let label = models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string();
+    Ok((model.path.clone(), device, label))
+}
+
+/// The places where the recorder stopped giving pieces, added to where the file is to be heard from.
+fn take_overflow(o: &Option<record::Overflow>, resume: &mut [Option<usize>; 2]) -> bool {
+    let Some(o) = o else { return false };
+    let points = *o.lock().unwrap();
+    for (r, p) in resume.iter_mut().zip(points) {
+        if let Some(p) = p {
+            *r = Some(r.map_or(p, |x| x.min(p)));
+        }
+    }
+    points.iter().any(Option::is_some)
+}
+
+fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<Session>) -> Result<()> {
+    let id = sess.id.as_str();
+    let started = Instant::now();
+    let j = sess.journal.lock().unwrap().clone();
+    let language = j.language.clone();
+    let cancelled = || core.cancels.lock().unwrap().get(id).is_some_and(|c| c.load(Ordering::SeqCst));
+    let live_now = sess.recorder.lock().unwrap().is_some();
+    // a recording found after a crash and stopped while it waited: it is offered again
+    if !live_now && cancelled() {
+        core.update_job(id, |x| x.status = "cancelled".into());
+        return Ok(());
+    }
+    core.update_job(id, |x| {
+        x.status = if live_now { "recording".into() } else { "loading".into() };
+    });
+    let overflow = sess.recorder.lock().unwrap().as_ref().map(|r| r.overflow());
+    // an engine that does not start (a damaged model, the antivirus, the GPU) never stops the
+    // recording: the text then comes from the file after Stop
+    let mut ready = prepare(core, engine, &language);
+    if ready.is_err() {
+        sess.behind.store(true, Ordering::SeqCst);
+    }
+    let (device, model_label) = ready.as_ref().map(|(_, d, m)| (d.clone(), m.clone())).unwrap_or_default();
     let mut t = Transcript {
         id: id.to_string(),
         title: j.title.clone(),
@@ -598,7 +676,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         language: language.clone(),
         elapsed_s: 0.0,
         device,
-        model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
+        model: model_label,
         partial: true,
         segments: Vec::new(),
         translations: Vec::new(),
@@ -629,6 +707,9 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 pending.push(p);
             }
             let now_s = sess.status.lock().unwrap().seconds;
+            if take_overflow(&overflow, &mut resume) {
+                sess.behind.store(true, Ordering::SeqCst);
+            }
             if !sess.behind.load(Ordering::SeqCst) {
                 let oldest = pending.iter().map(|p| p.start).min();
                 if oldest.is_some_and(|o| now_s - o as f64 / SR as f64 > behind_limit()) {
@@ -647,11 +728,12 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 }
                 continue;
             }
+            let model_path = ready.as_ref().map(|r| r.0.clone()).unwrap_or_default();
             if let Some(p) = next_piece(&mut pending) {
                 if let Some(d) = delay {
                     std::thread::sleep(d);
                 }
-                let got = hear(core, engine, &model.path, id, &p, &language, &mut gates);
+                let got = hear(core, engine, &model_path, id, &p, &language, &mut gates);
                 match got {
                     Ok(segs) => {
                         lines.add(p.track, (p.start + p.samples.len()) as f64 / SR as f64, segs);
@@ -685,6 +767,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         if let Some(r) = sess.recorder.lock().unwrap().take() {
             let _ = r.wait();
         }
+        take_overflow(&overflow, &mut resume);
         let mut jj = sess.journal.lock().unwrap();
         jj.state = "stopped".into();
         let _ = jj.save(&sess.journal_path);
@@ -694,6 +777,26 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
             resume[idx(tr)] = Some(0);
         }
     }
+    if ready.is_err() {
+        core.update_job(id, |x| x.status = "loading".into());
+        ready = prepare(core, engine, &language);
+    }
+    let (model_path, device, model_label) = ready?;
+    t.device = device;
+    t.model = model_label;
+    let model = model_path;
+    // stopped by the user after Stop: what is written is kept, and the recording is offered again
+    let stop_here = |t: &mut Transcript| {
+        t.partial = true;
+        core.live.lock().unwrap().remove(id);
+        let saved = !t.segments.is_empty() && history::save(&core.paths.history_dir(), t).is_ok();
+        let _ = core.app.emit("history-changed", id);
+        core.update_job(id, |x| {
+            x.status = "cancelled".into();
+            x.saved = saved;
+            x.eta_s = None;
+        });
+    };
     let total = record::wav::check(&sess.wav).map(|c| c.file_frames).unwrap_or(0) as usize;
     let total_s = total as f64 / SR as f64;
     t.duration_s = total_s;
@@ -709,8 +812,12 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     };
     // what was cut but not heard yet
     while let Some(p) = next_piece(&mut pending) {
+        if cancelled() {
+            stop_here(&mut t);
+            return Ok(());
+        }
         let end = p.start + p.samples.len();
-        let segs = hear(core, engine, &model.path, id, &p, &language, &mut gates)?;
+        let segs = hear(core, engine, &model, id, &p, &language, &mut gates)?;
         lines.add(p.track, end as f64 / SR as f64, segs);
         for s in lines.release(false) {
             show(core, &mut t, id, s);
@@ -743,8 +850,12 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 }
             }
             while let Some(p) = next_piece(&mut queue) {
+                if cancelled() {
+                    stop_here(&mut t);
+                    return Ok(());
+                }
                 let end = p.start + p.samples.len();
-                let segs = hear(core, engine, &model.path, id, &p, &language, &mut gates)?;
+                let segs = hear(core, engine, &model, id, &p, &language, &mut gates)?;
                 lines.add(p.track, end as f64 / SR as f64, segs);
                 for s in lines.release(false) {
                     show(core, &mut t, id, s);
@@ -870,13 +981,15 @@ pub struct RecordSetup {
     pub settings: RecordSettings,
     pub microphones: Vec<Microphone>,
     pub folder: String,
+    /// The folder is inside OneDrive: recordings saved there are uploaded
+    pub synced: bool,
 }
 
 #[tauri::command]
 pub async fn record_setup(app: AppHandle) -> RecordSetup {
     let core = core_of(&app);
     let microphones = tauri::async_runtime::spawn_blocking(microphones).await.unwrap_or_default();
-    RecordSetup { settings: core.record_settings(), microphones, folder: recordings_dir(&core.paths).display().to_string() }
+    RecordSetup { settings: core.record_settings(), microphones, folder: recordings_dir(&core.paths).display().to_string(), synced: recordings_synced(&core.paths) }
 }
 
 #[tauri::command]
@@ -894,12 +1007,22 @@ pub fn choose_microphone(app: AppHandle, id: Option<String>) -> R<RecordSettings
 pub async fn recording_notice(app: AppHandle) -> bool {
     use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
     let core = core_of(&app);
-    if core.record_settings().notice_shown {
+    let synced = recordings_synced(&core.paths);
+    // shown once; again whenever the recordings would go to OneDrive, so that it is never untrue
+    if core.record_settings().notice_shown && !synced {
         return true;
     }
+    let text = if synced {
+        crate::tr!(
+            "Recording a call may need the consent of everyone on it. Tell the others before you start. The recordings folder, {}, is in OneDrive, so OneDrive will upload the recording.",
+            recordings_dir(&core.paths).display()
+        )
+    } else {
+        crate::tr!("Recording a call may need the consent of everyone on it. Tell the others before you start. The recording stays on this computer.")
+    };
     let ok = app
         .dialog()
-        .message(crate::tr!("Recording a call may need the consent of everyone on it. Tell the others before you start. The recording stays on this computer."))
+        .message(text)
         .title(crate::tr!("Before you record"))
         .kind(MessageDialogKind::Info)
         .buttons(MessageDialogButtons::OkCancelCustom(crate::tr!("Record"), crate::tr!("Cancel")))
@@ -986,6 +1109,17 @@ mod tests {
     }
 
     #[test]
+    fn pieces_the_recorder_could_not_keep_are_heard_from_the_file() {
+        let o: record::Overflow = Arc::new(Mutex::new([None, Some(800)]));
+        let mut resume = [Some(400), Some(1200)];
+        assert!(take_overflow(&Some(o.clone()), &mut resume));
+        assert_eq!(resume, [Some(400), Some(800)], "the earliest place of each track");
+        *o.lock().unwrap() = [None, None];
+        assert!(!take_overflow(&Some(o), &mut resume));
+        assert!(!take_overflow(&None, &mut resume));
+    }
+
+    #[test]
     fn them_goes_first_on_a_tie() {
         let mut pending = vec![
             Piece { track: Track::Me, start: 0, samples: vec![] },
@@ -995,5 +1129,21 @@ mod tests {
         assert_eq!(next_piece(&mut pending).unwrap().track, Track::Them);
         assert_eq!(next_piece(&mut pending).unwrap().track, Track::Me);
         assert_eq!(next_piece(&mut pending).unwrap().start, 5);
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use super::*;
+
+    #[test]
+    fn a_folder_inside_onedrive_is_known() {
+        let roots = [PathBuf::from(r"C:\Users\x\OneDrive")];
+        assert!(synced(Path::new(r"C:\Users\x\OneDrive\Documents\Dawwin"), &roots));
+        assert!(synced(Path::new(r"c:\users\x\onedrive\Dawwin"), &roots));
+        assert!(synced(Path::new(r"D:\OneDrive - Contoso\Dawwin"), &[]));
+        assert!(!synced(Path::new(r"C:\Users\x\Dawwin"), &roots));
+        assert!(!synced(Path::new(r"C:\Users\x\OneDriveBackup\Dawwin"), &roots));
+        assert!(!synced(Path::new(r"C:\Users\x\Documents\Dawwin"), &roots));
     }
 }

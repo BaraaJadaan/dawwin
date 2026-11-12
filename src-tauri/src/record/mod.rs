@@ -16,7 +16,7 @@ pub mod windows;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,10 @@ pub static AR: &[(&str, &str)] = &[
         "هناك تسجيل جارٍ. أتوقفه وتغلق دَوِّن؟ يُحفظ التسجيل، ويُكتب نصّه عند التشغيل التالي.",
     ),
     ("Stop and quit", "أوقفه وأغلق"),
+    (
+        "Recording a call may need the consent of everyone on it. Tell the others before you start. The recordings folder, {}, is in OneDrive, so OneDrive will upload the recording.",
+        "قد يتطلب تسجيل المكالمة موافقة جميع المشاركين فيها. أخبرهم قبل أن تبدأ. مجلد التسجيلات، {}، داخل OneDrive، فسيرفع OneDrive التسجيل إلى الإنترنت.",
+    ),
     ("Keep recording", "تابع التسجيل"),
 ];
 /// Pieces for the engine: at most this long, cut in their last `SEARCH_S`.
@@ -135,6 +139,8 @@ pub struct Status {
     /// Stopped because under 500 MB were left
     pub disk_stopped: bool,
     pub ended: bool,
+    /// It stopped because the file could not be written
+    pub error: Option<String>,
 }
 
 pub struct Config {
@@ -146,11 +152,20 @@ pub struct Config {
     pub on_status: Box<dyn Fn(&Status) + Send>,
 }
 
+/// Pieces waiting for the engine: about seven minutes of both tracks. Past that the recorder keeps
+/// no more of them in memory, and says from where the engine is to take the sound from the file.
+const PIECES_WAITING: usize = 16;
+
 pub struct Recorder {
     stop: Arc<AtomicBool>,
     mic: Sender<Option<String>>,
+    overflow: Overflow,
     thread: Option<std::thread::JoinHandle<Result<u64>>>,
 }
+
+/// For each track, where its pieces stopped going to the engine because none were taken: from
+/// there on it is to be heard from the file.
+pub type Overflow = Arc<Mutex<[Option<usize>; 2]>>;
 
 /// Free bytes on the drive of `dir`.
 #[cfg(windows)]
@@ -188,11 +203,12 @@ impl Recorder {
         let writer = wav::Writer::create(&cfg.wav)?;
         let stop = Arc::new(AtomicBool::new(false));
         let (mic_tx, mic_rx) = mpsc::channel();
-        let (pieces_tx, pieces_rx) = mpsc::channel();
+        let (pieces_tx, pieces_rx) = mpsc::sync_channel(PIECES_WAITING);
+        let overflow: Overflow = Arc::new(Mutex::new([None, None]));
         let status = Arc::new(Mutex::new(Status::default()));
-        let s = stop.clone();
-        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, s, mic_rx, status, pieces_tx))?;
-        Ok((Recorder { stop, mic: mic_tx, thread: Some(thread) }, pieces_rx))
+        let (s, out) = (stop.clone(), Outbox { tx: pieces_tx, overflow: overflow.clone() });
+        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, s, mic_rx, status, out))?;
+        Ok((Recorder { stop, mic: mic_tx, overflow, thread: Some(thread) }, pieces_rx))
     }
 
     pub fn stop(&self) {
@@ -202,6 +218,10 @@ impl Recorder {
     /// Record from another microphone from now on (none: the Windows default).
     pub fn switch_mic(&self, id: Option<String>) {
         let _ = self.mic.send(id);
+    }
+
+    pub fn overflow(&self) -> Overflow {
+        self.overflow.clone()
     }
 
     /// Wait until the WAV is whole: the frames in it.
@@ -216,6 +236,26 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Where the pieces go: to the engine while it takes them; once a track's piece finds no room,
+/// that track's pieces stop and the place is kept, so that memory never grows with the wait.
+struct Outbox {
+    tx: SyncSender<Piece>,
+    overflow: Overflow,
+}
+
+impl Outbox {
+    fn send(&self, p: Piece) {
+        let k = p.track.index();
+        if self.overflow.lock().unwrap()[k].is_some() {
+            return;
+        }
+        let start = p.start;
+        if let Err(TrySendError::Full(_)) = self.tx.try_send(p) {
+            self.overflow.lock().unwrap()[k] = Some(start);
+        }
     }
 }
 
@@ -234,7 +274,7 @@ fn run(
     stop: Arc<AtomicBool>,
     mic_rx: Receiver<Option<String>>,
     status: Arc<Mutex<Status>>,
-    pieces: Sender<Piece>,
+    pieces: Outbox,
 ) -> Result<u64> {
     let _awake = crate::setup::KeepAwake::new();
     let t0 = source::now();
@@ -256,8 +296,11 @@ fn run(
     let mut last_flush = Instant::now();
     let mut last_checkpoint = Instant::now();
     let mut last_disk: Option<Instant> = None;
+    // the streams that are open: their sound is waited for, however late, up to two seconds
+    let mut open = [false; 2];
     let mut mic_open = false;
     let mut quiet_since: Option<f64> = None;
+    let mut failure: Option<anyhow::Error> = None;
     let dir = cfg.wav.parent().map(Path::to_path_buf).unwrap_or_default();
 
     let mut write = |me: &mut Vec<f32>, them: &mut Vec<f32>, writer: &mut wav::Writer, cutters: &mut [cutter::Cutter; 2], last: bool| -> Result<()> {
@@ -268,14 +311,14 @@ fn run(
         for t in cfg.sources.tracks() {
             let samples = if t == Track::Me { &*me } else { &*them };
             for (start, s) in cutters[t.index()].push(samples) {
-                let _ = pieces.send(Piece { track: t, start, samples: s });
+                pieces.send(Piece { track: t, start, samples: s });
             }
         }
         if last {
             for t in cfg.sources.tracks() {
                 let c = std::mem::replace(&mut cutters[t.index()], cutter::Cutter::new(PIECE_S, SEARCH_S, 0));
                 for (start, s) in c.finish() {
-                    let _ = pieces.send(Piece { track: t, start, samples: s });
+                    pieces.send(Piece { track: t, start, samples: s });
                 }
             }
         }
@@ -284,37 +327,43 @@ fn run(
 
     loop {
         let stopping = stop.load(Ordering::SeqCst);
-        match rx.recv_timeout(Duration::from_millis(20)) {
-            Ok(Event::Packet { track, ts, data }) => {
-                tracks[track.index()].place(timeline::index_of(ts, t0), &data);
-            }
-            Ok(Event::Opened { track, name, mode }) => {
-                let mut st = status.lock().unwrap();
-                match track {
-                    Track::Me => {
-                        st.mic = Some(name);
-                        st.me_problem = None;
-                        mic_open = true;
-                        quiet_since = None;
+        // everything that came, before working out what to write: after a stall (the disk, a busy
+        // processor) what waits here is sound to place, not sound that is late
+        let first = rx.recv_timeout(Duration::from_millis(20)).ok();
+        for ev in first.into_iter().chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+            match ev {
+                Event::Packet { track, ts, data } => {
+                    tracks[track.index()].place(timeline::index_of(ts, t0), &data);
+                }
+                Event::Opened { track, name, mode } => {
+                    open[track.index()] = true;
+                    let mut st = status.lock().unwrap();
+                    match track {
+                        Track::Me => {
+                            st.mic = Some(name);
+                            st.me_problem = None;
+                            mic_open = true;
+                            quiet_since = None;
+                        }
+                        Track::Them => {
+                            st.them_mode = mode;
+                            st.them_problem = None;
+                        }
                     }
-                    Track::Them => {
-                        st.them_mode = mode;
-                        st.them_problem = None;
+                }
+                Event::Problem { track, code, detail } => {
+                    open[track.index()] = false;
+                    let mut st = status.lock().unwrap();
+                    st.problem_detail = Some(detail);
+                    match track {
+                        Track::Me => {
+                            st.me_problem = Some(code);
+                            mic_open = false;
+                        }
+                        Track::Them => st.them_problem = Some(code),
                     }
                 }
             }
-            Ok(Event::Problem { track, code, detail }) => {
-                let mut st = status.lock().unwrap();
-                st.problem_detail = Some(detail);
-                match track {
-                    Track::Me => {
-                        st.me_problem = Some(code);
-                        mic_open = false;
-                    }
-                    Track::Them => st.them_problem = Some(code),
-                }
-            }
-            Err(RecvTimeoutError::Timeout) | Err(RecvTimeoutError::Disconnected) => {}
         }
         // another microphone: the stream changes, the track carries on
         while let Ok(device) = mic_rx.try_recv() {
@@ -332,7 +381,15 @@ fn run(
         if last_flush.elapsed() >= Duration::from_millis(100) {
             last_flush = Instant::now();
             let now = timeline::index_of(source::now(), t0).max(0) as usize;
-            let horizon = now.saturating_sub(MARGIN) / echo::BLOCK * echo::BLOCK;
+            let mut horizon = now.saturating_sub(MARGIN);
+            // a capture thread held up for a moment (a busy processor) is waited for, up to two
+            // seconds: what it sends late is still placed
+            for t in cfg.sources.tracks() {
+                if open[t.index()] {
+                    horizon = horizon.min(tracks[t.index()].end() as usize);
+                }
+            }
+            let horizon = horizon.max(now.saturating_sub(2 * SR)) / echo::BLOCK * echo::BLOCK;
             if horizon > written {
                 let mut me = tracks[0].take(horizon as u64);
                 let mut them = tracks[1].take(horizon as u64);
@@ -355,14 +412,20 @@ fn run(
                         st.mic_silent = false;
                     }
                 }
-                write(&mut me, &mut them, &mut writer, &mut cutters, false)?;
+                if let Err(e) = write(&mut me, &mut them, &mut writer, &mut cutters, false) {
+                    failure = Some(e);
+                    break;
+                }
                 written = horizon;
                 (cfg.on_status)(&status.lock().unwrap());
             }
         }
         if last_checkpoint.elapsed() >= Duration::from_secs(1) {
             last_checkpoint = Instant::now();
-            writer.checkpoint()?;
+            if let Err(e) = writer.checkpoint() {
+                failure = Some(e.into());
+                break;
+            }
         }
         if last_disk.is_none_or(|t| t.elapsed() >= Duration::from_secs(5)) {
             last_disk = Some(Instant::now());
@@ -376,7 +439,8 @@ fn run(
             }
         }
     }
-    // the end: every source closed, then what they sent, then the rest of the file, up to Stop
+    // the end, however it came: every source closed, then what they sent, then the rest of the
+    // file up to Stop (unless writing is what failed), and the interface told
     let stopped_at = timeline::index_of(source::now(), t0).max(0) as u64;
     for s in stops.iter().flatten() {
         s.store(true, Ordering::SeqCst);
@@ -385,24 +449,36 @@ fn run(
     for t in threads {
         let _ = t.join();
     }
-    while let Ok(ev) = rx.try_recv() {
-        if let Event::Packet { track, ts, data } = ev {
-            tracks[track.index()].place(timeline::index_of(ts, t0), &data);
+    if failure.is_none() {
+        while let Ok(ev) = rx.try_recv() {
+            if let Event::Packet { track, ts, data } = ev {
+                tracks[track.index()].place(timeline::index_of(ts, t0), &data);
+            }
         }
+        let end = tracks[0].end().max(tracks[1].end()).max(written as u64).max(stopped_at) as usize;
+        let end = end.div_ceil(echo::BLOCK) * echo::BLOCK;
+        let mut me = tracks[0].take(end as u64);
+        let mut them = tracks[1].take(end as u64);
+        let last = write(&mut me, &mut them, &mut writer, &mut cutters, true).and_then(|_| Ok(writer.checkpoint()?));
+        match last {
+            Ok(()) => written = end,
+            Err(e) => failure = Some(e),
+        }
+    } else {
+        // what is on the disk is kept readable
+        let _ = writer.checkpoint();
     }
-    let end = tracks[0].end().max(tracks[1].end()).max(written as u64).max(stopped_at) as usize;
-    let end = end.div_ceil(echo::BLOCK) * echo::BLOCK;
-    let mut me = tracks[0].take(end as u64);
-    let mut them = tracks[1].take(end as u64);
-    write(&mut me, &mut them, &mut writer, &mut cutters, true)?;
-    writer.checkpoint()?;
     {
         let mut st = status.lock().unwrap();
-        st.seconds = end as f64 / SR as f64;
+        st.seconds = written as f64 / SR as f64;
         st.ended = true;
+        st.error = failure.as_ref().map(|e| format!("{e:#}"));
     }
     (cfg.on_status)(&status.lock().unwrap());
-    Ok(writer.frames)
+    match failure {
+        Some(e) => Err(e),
+        None => Ok(writer.frames),
+    }
 }
 
 /// Tests that play sound at clock speed run alone: next to the heavy ones, the made-up source can
@@ -449,6 +525,63 @@ mod tests {
         assert!(got.iter().all(|p| p.track == Track::Me));
         assert_eq!(got.iter().map(|p| p.samples.len()).sum::<usize>() as u64, frames);
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The writer held up for most of a second (a slow disk, a busy processor): the packets that
+    /// waited meanwhile are placed, not cut as late.
+    #[test]
+    fn a_stall_in_the_writer_loses_no_sound() {
+        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let d = dir("stall");
+        let wav = d.join("r.wav");
+        let n = SR * 3;
+        let them: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.05).sin() * 0.3 + 0.01).collect();
+        let files = source::Files { me: None, them: Some(Arc::new(them)), t0: source::now(), silent_default: false };
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = calls.clone();
+        let cfg = Config {
+            sources: Sources::Pc,
+            mic: None,
+            wav: wav.clone(),
+            on_status: Box::new(move |_| {
+                if c.fetch_add(1, Ordering::SeqCst) == 5 {
+                    std::thread::sleep(Duration::from_millis(900));
+                }
+            }),
+        };
+        let (rec, _pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
+        std::thread::sleep(Duration::from_millis(3300));
+        rec.stop();
+        let frames = rec.wait().unwrap();
+        let (_, right) = wav::Reader::open(&wav, 0).unwrap().next(frames as usize).unwrap();
+        // from the first packet to the end of the made-up track, never 20 ms of nothing
+        let (from, to) = (SR / 5, n - SR / 5);
+        let mut run = 0;
+        let mut longest = 0;
+        for x in &right[from..to] {
+            run = if *x == 0.0 { run + 1 } else { 0 };
+            longest = longest.max(run);
+        }
+        assert!(longest < SR / 50, "a hole of {} ms", longest * 1000 / SR);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn pieces_nobody_takes_stop_at_a_place_to_take_up_from_the_file() {
+        let (tx, rx) = mpsc::sync_channel(2);
+        let overflow: Overflow = Arc::new(Mutex::new([None, None]));
+        let out = Outbox { tx, overflow: overflow.clone() };
+        let piece = |track, start| Piece { track, start, samples: vec![0.0; 10] };
+        out.send(piece(Track::Them, 0));
+        out.send(piece(Track::Me, 0));
+        out.send(piece(Track::Them, 400));
+        out.send(piece(Track::Them, 800));
+        assert_eq!(*overflow.lock().unwrap(), [None, Some(400)], "them: from 400 on, the file");
+        let _ = rx.recv();
+        out.send(piece(Track::Them, 800));
+        out.send(piece(Track::Me, 400));
+        let got: Vec<(Track, usize)> = rx.try_iter().map(|p| (p.track, p.start)).collect();
+        assert_eq!(got, [(Track::Me, 0), (Track::Me, 400)], "no more of them, even with room again");
     }
 
     #[test]

@@ -662,7 +662,10 @@ impl Core {
     }
 
     pub fn cancel(&self, id: &str) {
-        meeting::stop_if_recording(id);
+        // a meeting being recorded stops, and its text is still written
+        if meeting::stop_if_recording(id) {
+            return;
+        }
         if let Some(c) = self.cancels.lock().unwrap().get(id) {
             c.store(true, Ordering::SeqCst);
         }

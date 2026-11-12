@@ -31,6 +31,8 @@ Object.assign(I18N.en.s, {
   "rec.recover": "Transcribe it",
   "rec.discard": "Delete it",
   "rec.discardSure": "Delete it for good?",
+  "rec.synced": "Recordings are saved in {folder}, which is in OneDrive: OneDrive uploads them to the internet.",
+  "rec.failed": "The recording stopped: it could not be written to the disk ({err}).",
   "rec.needFfmpeg": "The recording is kept as a WAV, five times larger than an M4A. Download ffmpeg ({size}) to keep recordings small.",
   "job.recording": "Recording · {dur}",
   "job.waitRecording": "Waiting for the recording to end",
@@ -66,6 +68,8 @@ Object.assign(I18N.ar.s, {
   "rec.recover": "فرّغه",
   "rec.discard": "احذفه",
   "rec.discardSure": "أتحذفه نهائيًا؟",
+  "rec.synced": "تُحفظ التسجيلات في {folder}، وهو داخل OneDrive، فيرفعها OneDrive إلى الإنترنت.",
+  "rec.failed": "توقف التسجيل: تعذّرت كتابته على القرص ({err}).",
   "rec.needFfmpeg": "حُفظ التسجيل بصيغة WAV، وهي أكبر بخمس مرات من M4A. نزّل ffmpeg ‏({size}) لتبقى التسجيلات صغيرة.",
   "job.recording": "جارٍ التسجيل · {dur}",
   "job.waitRecording": "في انتظار انتهاء التسجيل",
@@ -139,6 +143,7 @@ function recordProblems(st) {
       <select class="input select select-sm" data-rec="mic-now" title="${esc(t("rec.micTip"))}">${micOptions(REC.setup?.settings.mic || "")}</select></p>`);
   }
   if (st.them_problem) out.push(`<p class="rec-warn">${esc(t("rec.pcFailed"))}</p>`);
+  if (st.error) out.push(`<p class="rec-warn">${esc(t("rec.failed", { err: st.error }))}</p>`);
   if (st.disk_stopped) out.push(`<p class="rec-warn">${esc(t("rec.diskStopped"))}</p>`);
   else if (st.disk_low) out.push(`<p class="rec-warn">${esc(t("rec.diskLow"))}</p>`);
   if (REC.live?.behind) out.push(`<p class="rec-note">${esc(t("rec.behind"))}</p>`);
@@ -183,6 +188,9 @@ function renderRecordBar() {
     </div>`;
     // why the last recording stopped by itself, until the next one
     if (REC.diskStopped) html += `<p class="rec-warn">${esc(t("rec.diskStopped"))}</p>`;
+    if (REC.failed) html += `<p class="rec-warn">${esc(t("rec.failed", { err: REC.failed }))}</p>`;
+    // a folder OneDrive uploads: said where Record is
+    if (REC.setup?.synced) html += `<p class="rec-warn" dir="auto">${tHtml("rec.synced", { folder: ltr(REC.setup.folder) })}</p>`;
   }
   for (const c of REC.cutOff) {
     const sure = REC.armed === c.journal;
@@ -212,6 +220,7 @@ async function startRecording() {
   if (!(await invoke("recording_notice"))) return;
   try {
     REC.diskStopped = null;
+    REC.failed = null;
     const id = await invoke("start_recording", { language: S.spoken, steps });
     onState(await invoke("get_state"));
     openTranscript(id);
@@ -274,6 +283,7 @@ async function recordWire() {
     REC.live = { ...(REC.live?.id === id ? REC.live : {}), id, status, sources: REC.live?.sources };
     // it stopped by itself: said once, whatever page is on screen
     if (status.ended && status.disk_stopped && !REC.diskStopped) { REC.diskStopped = id; toast(t("rec.diskStopped")); }
+    if (status.ended && status.error && !REC.failed) { REC.failed = status.error; toast(t("rec.failed", { err: status.error })); }
     paintRecording();
   });
   await loadRecordSetup();
@@ -305,6 +315,12 @@ function recordOnState(snap) {
     invoke("recording_state").then((v) => { if (v?.id === j.id) { REC.live.behind = v.behind; REC.live.sources = v.sources; } }).catch(() => {});
   }
   if (S.view === "home") renderRecordBar();
+  // a recording whose text was not written (the engine failed, or it was stopped): offered again
+  const ended = (snap.queue || []).filter((x) => x.kind === "record" && ["failed", "cancelled"].includes(x.status) && !(REC.offered ||= new Set()).has(x.id));
+  if (ended.length) {
+    for (const x of ended) REC.offered.add(x.id);
+    invoke("interrupted_recordings").then((list) => { REC.cutOff = list; if (S.view === "home") renderRecordBar(); }).catch(() => {});
+  }
   // a recording kept as a WAV: ffmpeg would keep it five times smaller
   for (const x of snap.queue) {
     if (x.kind === "record" && x.status === "done" && x.outputs?.some((o) => o.toLowerCase().endsWith(".wav")) && !snap.setup.ffmpeg && !REC.told?.has(x.id)) {

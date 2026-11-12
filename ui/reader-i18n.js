@@ -40,6 +40,8 @@ Object.assign(I18N.en.s, {
   "read.about.voxcpm2": "The most natural voice, in Arabic and English. Wants a graphics card.",
   "read.about.supertonic3": "Arabic and English, ten voices. Fast on any processor.",
   "read.about.phonon": "English only, five voices. The smallest.",
+  "guide.readTitle": "Have any text read aloud",
+  "guide.readText": "Open Read aloud and drop a text file, a Markdown file, a web page, a Word document or subtitles, or paste text, and press play. Dawwin reads it a sentence at a time and marks the one it is reading: click any sentence to read from there, and it remembers where you stopped. On a transcript, Listen reads it, or its translation when one is shown. Arabic and English each have their own voice: VoxCPM 2 sounds the most natural and wants a graphics card, Supertonic 3 reads both on any processor, and Phonon reads English and is the smallest. Download them in Settings, where you can hear each one first.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -81,4 +83,6 @@ Object.assign(I18N.ar.s, {
   "read.about.voxcpm2": "الصوت الأقرب إلى الطبيعي، بالعربية والإنجليزية. يحتاج بطاقة رسوميات.",
   "read.about.supertonic3": "العربية والإنجليزية، عشرة أصوات. سريع على أي معالج.",
   "read.about.phonon": "الإنجليزية فقط، خمسة أصوات. الأصغر حجمًا.",
+  "guide.readTitle": "اسمع أي نص مقروءًا",
+  "guide.readText": "افتح «القراءة بصوت عالٍ» وأفلِت ملفًا نصيًا أو Markdown أو صفحة ويب أو مستند Word أو ملف ترجمة، أو الصق نصًا، ثم اضغط تشغيل. يقرؤه دَوِّن جملةً جملة ويُبرز الجملة التي يقرؤها: انقر أي جملة ليقرأ منها، ويتذكّر أين توقفت. وفي التفريغ يقرؤه زر «استمع»، أو ترجمته إن كانت ظاهرة. للعربية صوتها وللإنجليزية صوتها: VoxCPM 2 أقربها إلى الطبيعي ويحتاج بطاقة رسوميات، وSupertonic 3 يقرأ اللغتين على أي معالج، وPhonon يقرأ الإنجليزية وهو الأصغر. نزّلها من الإعدادات، وتستطيع أن تسمع كلًا منها قبل تنزيله.",
 });

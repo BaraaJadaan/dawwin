@@ -166,7 +166,9 @@ function renderReadDoc() {
       block = s.block;
       el = document.createElement(s.kind === "heading" ? "h2" : s.kind === "item" ? "li" : "p");
       el.className = "read-block read-" + s.kind;
-      el.dir = "auto";
+      // the paragraph's own direction: its sentences are isolated, so "auto" would see none of them
+      const ar = (s.text.match(/[؀-ۿ]/g) || []).length, en = (s.text.match(/[A-Za-z]/g) || []).length;
+      el.dir = ar || en ? (ar >= en ? "rtl" : "ltr") : d.lang === "ar" ? "rtl" : "ltr";
       frag.append(el);
     } else el.append(" ");
     const span = document.createElement("span");

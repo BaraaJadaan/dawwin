@@ -83,9 +83,9 @@ pub const FFMPEG_VIDEO: Tool = Tool {
 pub const VOICE: Tool = Tool {
     id: "voice",
     file: "dawwin-voice-audio.cpp-v0.9.4.tar.xz",
-    // from Tools run 43178594170, whose packs a release can upload with from_run
-    size: 8_652_532,
-    sha256: "aa6ae390bce0762f4d814deb6b6d5a883bee9bcc5ad716c99b920ddd6fd33a52",
+    // from Tools run 43313712037, whose packs a release can upload with from_run
+    size: 10_801_324,
+    sha256: "9be32aaba02c5dd9cd2e61ab76e2330643f084dc8a248048e51040cf5e3368cd",
     folder: "voice",
     exe: "dawwin-voice.exe",
     files: &[
@@ -103,8 +103,9 @@ pub const VOICE: Tool = Tool {
 pub const VOICE_GPU: Tool = Tool {
     id: "voice-gpu",
     file: "dawwin-voice-gpu-audio.cpp-v0.9.4.tar.xz",
-    size: 0,
-    sha256: "",
+    // from Tools run 43313712037
+    size: 13_400_504,
+    sha256: "0f8edd8b8a5f10ed391afe593ec6cf7febdaa20fa08245773ab63e5594a0b78e",
     folder: "voice-gpu",
     exe: "audiocpp.dll",
     files: &[

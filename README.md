@@ -5,7 +5,8 @@
 **Turn recordings, videos and meetings into text, translate it, and subtitle them, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
 languages. Translation into 46 languages. Record a Zoom, Meet or Teams call and read it as it is
-said. Nothing leaves your computer: no account, no upload, no subscription, no limit on hours.
+said. And the other way round: any text, file or transcript read aloud in a natural voice, in Arabic and
+English. Nothing leaves your computer: no account, no upload, no subscription, no limit on hours.
 
 **[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)** · free and open source (MIT)
 
@@ -13,7 +14,8 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 
 **دَوِّن** يفرّغ التسجيلات والفيديوهات إلى نص على حاسوبك، ويترجمها، ويضيف إليها نصًّا على الشاشة.
 العربية أولًا، بلهجاتها والكلمات الإنجليزية التي تتخللها، ونحو 100 لغة أخرى، والترجمة إلى 46 لغة.
-ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام.
+ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام. ويقرأ لك أي نص أو ملف أو تفريغ بصوت طبيعي،
+بالعربية والإنجليزية.
 لاجتماعات العمل، والمحاضرات والدروس والخطب، والمقابلات والأبحاث، والفيديوهات والأفلام، والرسائل
 الصوتية. لا شيء يغادر جهازك: لا حساب ولا رفع ولا اشتراك.
 
@@ -43,7 +45,10 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 - **Podcasts.** Transcripts and show notes for listeners and for search engines, and the long silences
   cut out of the sound.
 - **Voice notes.** WhatsApp voice notes to text.
-- **Accessibility.** Captions for people who are deaf or hard of hearing.
+- **Accessibility.** Captions for people who are deaf or hard of hearing, and any text read aloud for
+  people who find reading hard.
+- **Listening instead of reading.** An article, a report or a long document read aloud while you do
+  something else; a meeting's translation heard in the language you follow best.
 - **Learning a language.** Read along with **Follow words**, with the translation under each line.
 - **Confidential recordings.** Legal, medical, HR and other private calls are transcribed on your
   own machine, never on someone else's server.
@@ -179,6 +184,25 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 - Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.2 MB
   for burning in. Both are in **Settings**, to download or delete by hand.
 
+**Read aloud** (new in 1.7)
+
+- Drop a text file, Markdown, a web page saved as HTML, a Word document or subtitles (SRT, VTT) on
+  **Read aloud**, or paste text, and press play. Code blocks, link addresses, image paths and subtitle
+  times are left out; old Arabic text files in Windows-1256 read right.
+- **Listen** on any transcript reads it, or its translation when one is shown.
+- Sentence by sentence, the one being read marked and the page following it: pause, back and forward a
+  sentence, click any sentence to read from there, and choose the speed. Dawwin remembers where you
+  stopped in each file, and breathes a little at the end of a paragraph and after a heading.
+- Arabic and English each have their own voice, a man's or a woman's. An English sentence inside Arabic
+  is read by the English voice; a single English word stays with the Arabic one. Numbers, dates, times,
+  percentages and money are read as words, in the language around them.
+- Three voices, chosen by ear in a blind listening test (below): **VoxCPM 2**, the most natural, wants
+  a graphics card; **Supertonic 3** reads Arabic and English on any processor; **Phonon 31M** reads
+  English and is the smallest. Hear each one in **Settings** before you download it. The voices run on
+  your PC like everything else: the text never leaves it.
+
+![Read aloud: an article with the sentence being read marked, the Arabic and English voices chosen at the top, and the player at the bottom.](docs/screenshots/read.png)
+
 **Sound** (new in 1.3)
 
 - **Remove silences**: every pause longer than 0.7 seconds is shortened, and the silence before and
@@ -251,14 +275,24 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
    | **Translation, smaller** (MiLMMT-46 4B) | 2.5 GB | As good as the best one from and into Arabic, a little less in other languages. Faster without a GPU. |
    | **Translation, smallest** (MiLMMT-46 1B) | 0.8 GB | For slow connections and older computers: fast on any of them, a little less accurate. |
 
+5. To have something read aloud, open **Read aloud** and download a voice in **Settings → Read aloud**,
+   after hearing it. The voice program (11 MB) comes with the first one, and the graphics card's part of
+   it (13 MB) with VoxCPM 2:
+
+   | Voice | Reads | Download | |
+   | --- | --- | --- | --- |
+   | **VoxCPM 2** (OpenBMB) | Arabic and English, a man and a woman in each | 3.0 GB | The most natural. Wants a graphics card; while Dawwin transcribes or translates on it, it waits. |
+   | **Supertonic 3** (Supertone) | Arabic and English, five men and five women | 0.3 GB | Fast on any processor: it reads faster than it speaks without a GPU. |
+   | **Phonon 31M** (Gradium) | English, two men and three women | 87 MB | The smallest, and the fastest. |
+
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
 laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary
 ran about 7 times faster than real time, and Whisper about as fast as real time. The smaller
 translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation model without a
-GPU), and room for the models. The installer is small (about 10 MB): the translator and ffmpeg download
-only for those who use them.
+GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg and the voice
+program download only for those who use them.
 
 ## How the translation models were chosen
 
@@ -279,6 +313,28 @@ to how people talk in a meeting.
 
 The seven directions are Arabic, Danish and Turkish to and from English, and English to French. All the
 numbers, and the test itself, are in [tools/bench-translate](tools/bench-translate).
+
+## How the voices were chosen
+
+Seven open voice models that run on a PC read the same Arabic and English passages, each sentence on its
+own as Dawwin reads: plain Arabic, the same with tashkeel, Gulf, Egyptian and Levantine sentences,
+Arabic with English inside, numbers and dates, and long passages. Their names were hidden behind letters,
+and the voices were chosen by ear. On GitHub's processors (4 threads, no GPU), the time each took for a
+second of speech:
+
+| Model | Size | Seconds per second of speech | Memory |
+| --- | --- | --- | --- |
+| **Phonon 31M** (English only) | 85 MB | **0.38** | 0.7 GB |
+| **Supertonic 3** | 0.3 GB | **0.70** | 0.5 GB |
+| LFM3-Audio 2B | 2.1 GB | 1.46 | 3.9 GB |
+| **VoxCPM 2** | 3.0 GB | 7.4 | 7.0 GB |
+| Chatterbox Multilingual V3 | 2.1 GB | 9.6 | 3.7 GB |
+| Magpie TTS 357M | 1.6 GB | 14.4 | 2.1 GB |
+
+Under 1 reads faster than it speaks. Open models are still behind the best paid services in Arabic (on
+the public [Arabic TTS Arena](https://huggingface.co/spaces/Navid-AI/Arabic-TTS-Arena) all open ones
+score alike, well under the best closed one), so these are the most natural that may be offered freely,
+not the most natural there are. The test and its texts are in [tools/bench-voice](tools/bench-voice).
 
 ## Building from source
 
@@ -328,7 +384,7 @@ the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). Six things are not part of this repository and have their own terms:
+[MIT](LICENSE). These are not part of this repository and have their own terms:
 
 - **The speech models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC
   BY 4.0, and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
@@ -351,8 +407,19 @@ the model folder, if you chose another place for it).
   [the speaker model](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf) and
   [the language model](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf) made by
   transcribe.cpp, from their pages, which carry both licenses.
+- **The voices**: OpenBMB publishes [VoxCPM 2](https://huggingface.co/openbmb/VoxCPM2) under Apache-2.0;
+  its ready-made voices in Dawwin were made by VoxCPM 2 itself from a written description, not from a
+  real person. Supertone publishes [Supertonic 3](https://huggingface.co/Supertone/supertonic-3) under the
+  [BigScience OpenRAIL-M](https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE) license: free to
+  use, except for the uses its Attachment A forbids, and whoever passes it on passes those restrictions
+  on; Dawwin shows the license before the download. Gradium publishes
+  [Phonon 31M](https://huggingface.co/gradium/phonon-31m-en-audiocpp) and its
+  [voices](https://huggingface.co/gradium/phonon-voices) under Apache-2.0. Dawwin downloads the GGUF
+  conversions of VoxCPM 2 and Supertonic 3 made by the [audio.cpp](https://huggingface.co/audio-cpp/audio.cpp-gguf) project.
 - **The engines**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and
-  [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license.
+  [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license, and for the voices
+  [audio.cpp](https://github.com/0xShug0/audio.cpp)'s official library, under Apache-2.0, around which
+  Dawwin's own voice program ([voice](voice)) is built.
 - **ffmpeg**: Dawwin's own builds of [FFmpeg](https://ffmpeg.org), under the LGPL 2.1, made by
   [tools/ffmpeg/build.sh](tools/ffmpeg/build.sh) from FFmpeg's source. The one for video also holds
   [libass](https://github.com/libass/libass), [FreeType](https://freetype.org),

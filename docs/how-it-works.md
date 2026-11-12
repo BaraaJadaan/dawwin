@@ -32,6 +32,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/queue/meeting.rs` | The recording as a job: live text, "me" and "them", the rest after Stop, recovery, the M4A. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
 | `src-tauri/src/instance.rs` | One Dawwin per data folder: started again, it brings the open window forward and quits. |
+| `src-tauri/src/reading/` | Read aloud: files into text (`formats.rs`), sentences and runs of one language by script (`text.rs`), numbers in words (`numbers.rs`), the voices (`voices.rs`), the voice program (`voice.rs`), and the reader that makes each sentence and the next ones ahead (`mod.rs`). |
+| `voice/` | `dawwin-voice.exe`: the voice, around [audio.cpp](https://github.com/0xShug0/audio.cpp)'s official library, loaded at run time; JSON lines on stdin/stdout, no port. Downloaded with the first voice, with VoxCPM 2's ready-made voices (`voice/refs`). |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
 | `src-tauri/src/speakers.rs` | Who said what: the speaker model's turns given to the lines, a line split where the speaker changes, rename, merge, a line given to someone else. |
 | `src-tauri/src/language.rs` | Detect the language: the first half minute of speech heard in pieces, and the decision among the languages with a model. |

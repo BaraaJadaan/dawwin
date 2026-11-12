@@ -106,7 +106,7 @@ fn lines_to_blocks<'a>(lines: impl Iterator<Item = (f64, f64, &'a str)>) -> Vec<
 
 /// Pasted text is named by its first line, cut at a word when it is long.
 fn title_of(text: &str) -> String {
-    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("").trim_start_matches('#').trim();
     let first = text::sentences(line).into_iter().next().unwrap_or_default();
     if first.chars().count() <= 60 {
         return first;
@@ -683,7 +683,9 @@ pub async fn reading_open(app: AppHandle, path: Option<String>, text: Option<Str
             r.open(format!("file:{}", p.to_lowercase()), read.title, read.blocks)
         } else if let Some(t) = text {
             let title = title_of(&t);
-            r.open(format!("text:{}", short_hash(&t)), title, formats::from_text(&t))
+            // text copied from a chat or a page is often Markdown
+            let blocks = if formats::looks_like_markdown(&t) { formats::from_markdown(&t) } else { formats::from_text(&t) };
+            r.open(format!("text:{}", short_hash(&t)), title, blocks)
         } else if let Some(id) = transcript {
             let core = app.state::<Arc<Core>>();
             let t = core.transcript(&id).map_err(|e| format!("{e:#}"))?;
@@ -854,6 +856,9 @@ mod tests {
     fn pasted_text_is_named_by_its_first_sentence() {
         assert_eq!(title_of("
   رفعنا النسخة على GitHub أمس. وفي نهاية الاجتماع قال المدير"), "رفعنا النسخة على GitHub أمس.");
+        assert_eq!(title_of("# Working from home
+
+Text."), "Working from home");
         let long = title_of(&"word ".repeat(40));
         assert!(long.ends_with('…') && long.chars().count() <= 61, "{long}");
     }

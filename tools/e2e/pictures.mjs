@@ -2,11 +2,12 @@
 // (docs/screenshots/home.png) and speakers (docs/screenshots/speakers.png), from the real app, in
 // English and Arabic. Made-up data only. Writes into the repository: look at what it made before
 // committing.
-//   node tools/e2e/pictures.mjs [part …]     (parts: steps sound home speakers settings; all by default)
+//   node tools/e2e/pictures.mjs [part …]     (parts: steps sound home speakers settings read; all by default)
 // "settings" (the subtitle look with its preview) needs DAWWIN_E2E_TOOLS, and a full ffmpeg for its video.
+import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { ffmpeg, finish, makeHome, MODEL, need, open, OUT, PORT, REPO, sleep, slash, TOOLS } from "./lib.mjs";
+import { dirname, join } from "node:path";
+import { APP, ffmpeg, finish, makeHome, MODEL, need, open, OUT, PORT, REPO, sleep, slash, TOOLS } from "./lib.mjs";
 
 need("DAWWIN_E2E_MODEL", MODEL); // so that the app shows itself ready, as a user's does
 const want = process.argv.slice(2);
@@ -48,7 +49,15 @@ if (wanted("settings") && TOOLS) {
     segments: [{ start: 0.5, end: 4, text: "هذه هي الشاشة الرئيسية الجديدة، والـ dashboard أولًا.", edited: false }],
   }));
 }
-const a = await open(home, PORT + 12);
+if (wanted("read")) {
+  // VoxCPM 2 shown as downloaded (a file of its size, of nothing), so that the page names it; the
+  // stand-in voice reads, should anything be played
+  const dir = join(home, "models", "voices", "voxcpm2");
+  mkdirSync(dir, { recursive: true });
+  execFileSync("fsutil", ["file", "createnew", join(dir, "voxcpm2-q8_0.gguf"), "2955007488"], { stdio: "ignore" });
+  writeFileSync(join(home, "reading.json"), JSON.stringify({ voices: { ar: "voxcpm2/ar-f/ar", en: "voxcpm2/en-f/en" } }));
+}
+const a = await open(home, PORT + 12, { DAWWIN_TEST_VOICE: join(dirname(APP), "examples", "fake_voice.exe") });
 await a.call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 820, deviceScaleFactor: 1, mobile: false });
 await sleep(800);
 
@@ -99,6 +108,29 @@ for (const lang of ["en", "ar"]) {
     await sleep(300);
     const r = await a.ev(`(()=>{const b=document.getElementById('look-size').closest('section').getBoundingClientRect();const y=Math.max(0,b.top-14);return {x:b.left-14,y,width:b.width+28,height:Math.min(b.height+28,820-y)}})()`);
     await picture(join(dir, "settings.webp"), r);
+  }
+  if (wanted("read")) {
+    // a made-up article, read from its second paragraph
+    const text = lang === "ar"
+      ? `# العمل من المنزل
+
+صار العمل من المنزل جزءًا من حياة كثير من الناس. ويقول بعضهم إنه يمنحهم وقتًا أطول مع العائلة، بينما يشعر آخرون بالعزلة.
+
+وتنصح الدراسات بتخصيص مكان ثابت للعمل، وبأخذ استراحة قصيرة كل ساعة. وكما قال أحد المديرين: the best office is the one you can leave at five. ويبقى الأهم أن تجد التوازن الذي يناسبك.
+
+وفي استطلاع شمل 1200 موظف، قال 64% إنهم يفضّلون يومين على الأقل في المنزل كل أسبوع.`
+      : `# Working from home
+
+Working from home has become part of life for many people. Some say it gives them more time with their family, while others feel cut off.
+
+Studies suggest keeping one fixed place to work, and taking a short break every hour. As one manager put it: the best office is the one you can leave at five. What matters most is finding the balance that suits you.
+
+In a survey of 1,200 employees, 64% said they would like at least two days a week at home.`;
+    await a.ev(`openReading({ text: ${JSON.stringify(text)} }).then(() => { READ.i = 3; markSentence(false); paintReadPlayer(); })`);
+    await sleep(800);
+    await picture(join(dir, "read.webp"), await box(["#read-doc"], 0));
+    if (lang === "en") await picture(join(REPO, "docs", "screenshots", "read.png"), { x: 0, y: 0, width: 1200, height: 820 }, "png");
+    await a.ev(`closeReading(); showView('home')`);
   }
   if (wanted("home") && lang === "en") {
     await steps({ transcribe: true });

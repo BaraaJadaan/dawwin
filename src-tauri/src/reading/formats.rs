@@ -309,6 +309,14 @@ fn strip_urls(s: &str) -> String {
         .join(" ")
 }
 
+/// Pasted text written in Markdown: a heading, a fence, a link, or a list of several items.
+pub fn looks_like_markdown(text: &str) -> bool {
+    let lines: Vec<&str> = text.lines().map(str::trim_start).collect();
+    lines.iter().any(|l| (l.starts_with('#') && l.trim_start_matches('#').starts_with(' ')) || l.starts_with("```"))
+        || (text.contains("](") && text.contains('['))
+        || lines.iter().filter(|l| l.starts_with("- ") || l.starts_with("* ")).count() >= 2
+}
+
 pub fn from_markdown(text: &str) -> Vec<Block> {
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
     let mut lines: Vec<&str> = text.lines().collect();
@@ -759,6 +767,18 @@ mod tests {
             (Kind::Heading, "Subtitle"),
             (Kind::Paragraph, "snake_case and emphasis."),
         ]);
+    }
+
+    #[test]
+    fn pasted_markdown_is_told_from_plain_text() {
+        assert!(looks_like_markdown("# Title
+
+Text."));
+        assert!(looks_like_markdown("See [this](https://x.org)."));
+        assert!(looks_like_markdown("- one
+- two"));
+        assert!(!looks_like_markdown("Just a sentence. And #hashtags, and 5 - 3."));
+        assert!(!looks_like_markdown("- only one dash line"));
     }
 
     #[test]

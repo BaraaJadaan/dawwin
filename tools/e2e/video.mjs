@@ -125,7 +125,7 @@ check("a 90 s test video and a 40 s one in 720p are made", existsSync(meeting) &
   const a = await open(home, PORT + 23, { DAWWIN_TEST_NO_FFMPEG: "1" });
   const st = (await a.state()).setup;
   check("no ffmpeg and no translator here", !st.ffmpeg && !st.burner && !st.translator_found, { ffmpeg: st.ffmpeg, burner: st.burner });
-  check("three tools to download, none on the disk", st.tools.map((x) => x.id).join() === "translator,ffmpeg-audio,ffmpeg-video" && st.tools.every((x) => !x.on_disk), st.tools.map((x) => [x.id, x.on_disk]));
+  check("the tools to download, none on the disk (with 1.7, the voice program and its GPU library)", st.tools.map((x) => x.id).join() === "translator,ffmpeg-audio,ffmpeg-video,voice,voice-gpu" && st.tools.every((x) => !x.on_disk), st.tools.map((x) => [x.id, x.on_disk]));
 
   await a.ev(`showView('settings')`);
   await sleep(400);

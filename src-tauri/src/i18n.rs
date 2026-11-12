@@ -177,7 +177,7 @@ static AR: &[(&str, &str)] = &[
     ("The voice program is not published yet.", "لم يُنشر برنامج الصوت بعد."),
     ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
     ("This transcript has no minutes yet.", "لا محضر لهذا التفريغ بعد."),
-    ("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يفرّغ أو يترجم. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
+    ("{} waits for the graphics card while Dawwin records, transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يسجّل أو يفرّغ أو يترجم أو يكتب محضرًا. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
 ];
 
 #[cfg(test)]

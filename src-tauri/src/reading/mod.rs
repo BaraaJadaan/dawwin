@@ -447,7 +447,7 @@ impl Reader {
                 if procs.get(m.id).is_some_and(|p| p.on_gpu()) {
                     procs.remove(m.id);
                 }
-                return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", m.name)));
+                return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin records, transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", m.name)));
             }
             let model_dir = voices::dir(&self.paths, &m);
             let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: m.session.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };

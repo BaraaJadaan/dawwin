@@ -314,7 +314,7 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 
    | Voice | Reads | Download | |
    | --- | --- | --- | --- |
-   | **VoxCPM 2** (OpenBMB) | Arabic and English, a man and a woman in each | 3.0 GB | The most natural. Wants a graphics card; while Dawwin transcribes or translates on it, it waits. |
+   | **VoxCPM 2** (OpenBMB) | Arabic and English, a man and a woman in each | 3.0 GB | The most natural. Wants a graphics card; while Dawwin records, transcribes, translates or writes minutes on it, it waits. |
    | **Supertonic 3** (Supertone) | Arabic and English, five men and five women | 0.3 GB | Fast on any processor: it reads faster than it speaks without a GPU. |
    | **Phonon 31M** (Gradium) | English, two men and three women | 87 MB | The smallest, and the fastest. |
 

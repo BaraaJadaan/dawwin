@@ -891,6 +891,16 @@ mod tests {
         let mut en = spoken_by_two();
         en.segments[0].text = "Okay, shall we start?".into();
         assert!(to_srt(&en).contains("\nSami: Okay, shall we start?"), "no marks before an English line");
+        // Chinese and Japanese, cut to their own line lengths: the name still in front, once a turn
+        let mut zh = spoken_by_two();
+        zh.language = "zh".into();
+        zh.segments[0].text = "大家好，我们开始吧。今天有三个问题要讨论，第一个是登录页面的设计。".into();
+        zh.segments[1].text = "第二个是首页，客户希望登录后首先看到仪表板。".into();
+        zh.segments[2].text = "好的，没问题。".into();
+        let srt = to_srt(&zh);
+        assert!(srt.contains("\nSami: 大家好"), "{srt}");
+        assert_eq!(srt.matches("Sami:").count(), 1, "{srt}");
+        assert!(srt.contains(&format!("{}: 好的", zh.speaker_name(2))) && !srt.contains('\u{200F}'), "{srt}");
         assert!(!to_vtt(&t).contains("<v "));
         crate::speakers::set_subtitle_names(false, true);
     }

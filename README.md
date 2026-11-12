@@ -191,9 +191,11 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 **Minutes** (new in 1.6)
 
 - **Write the minutes** on a transcript's Minutes tab: a summary of a few sentences, the decisions, the
-  action items (who, what, by when, with the speakers' names when the transcript has them), the topics
-  in order with their start times, and the questions left open. A lecture or an interview gets a summary
-  and its topics, without empty decisions and actions.
+  action items (who, what, by when), the topics in order with their start times, and the questions left
+  open. A lecture or an interview gets a summary and its topics, without empty decisions and actions.
+- Tasks go to people by the names the transcript gives them: those you gave with **Tell speakers
+  apart**, or Speaker 2. In a meeting you recorded, Dawwin tells the model that Me is you and Them the
+  other side of the call.
 - Every decision and action shows its time: press it to see the lines it came from in the transcript.
 - In the language of the meeting, with its English terms as they were said, or in another language:
   the minutes of an Arabic meeting in English, without translating the transcript first.
@@ -202,7 +204,8 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 - A meeting of three hours is written in parts, with the progress shown; stop it and it carries on where
   it stopped, and the minutes cover the whole meeting.
 - Export the minutes alone, or followed by the transcript, to Word, Markdown or text. A step on the start
-  page writes them after the transcript, and a folder run saves them next to each recording.
+  page writes them after the transcript, and a folder run saves them next to each recording. While you
+  record a meeting they wait, so the recording keeps the engine and the GPU, and carry on after it.
 - Written on your computer by a model you download once in Settings, chosen by measuring (see below).
   The panel offers the models with their sizes and says which fits your computer.
 

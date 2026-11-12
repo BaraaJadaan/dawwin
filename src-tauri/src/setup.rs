@@ -37,6 +37,17 @@ pub fn kill_tree(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
+/// Delete a half-written file that a process just killed may still hold for a moment (a killed
+/// tree ends one process at a time). Gives up after two seconds.
+pub fn remove_when_free(path: &Path) {
+    for _ in 0..40 {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => return,
+        }
+    }
+}
+
 /// Run `work`, and kill `children` (with all they started) the moment `cancel` is set, even while
 /// `work` is blocked on one of their pipes: a stop must not wait for ffmpeg's next bytes, which on a
 /// slow machine can take seconds. A killed child closes its pipes, so `work` then ends too.

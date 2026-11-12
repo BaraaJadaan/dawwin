@@ -5,10 +5,12 @@ mod captions;
 mod cmds;
 mod engine;
 mod folder;
+mod fonts;
 mod history;
 pub mod i18n;
 mod instance;
 mod language;
+mod look;
 mod models;
 mod queue;
 mod setup;
@@ -745,6 +747,9 @@ pub fn run() {
             cmds::save_words,
             cmds::load_words,
             cmds::set_subtitle_names,
+            cmds::set_look,
+            cmds::preview_look,
+            cmds::subtitle_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

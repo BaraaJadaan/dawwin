@@ -249,6 +249,9 @@ pub struct Settings {
     /// The speaker in WebVTT's voice tag; unset means yes
     #[serde(default)]
     pub names_in_vtt: Option<bool>,
+    /// How burned-in subtitles look
+    #[serde(default)]
+    pub look: crate::look::Look,
 }
 
 impl Settings {
@@ -298,9 +301,10 @@ impl Settings {
         }
     }
 
-    /// Tell the exports whether subtitles name the speaker.
-    pub fn apply_subtitle_names(&self) {
+    /// Tell the exports whether subtitles name the speaker, and how burned-in ones look.
+    pub fn apply_to_subtitles(&self) {
         crate::speakers::set_subtitle_names(self.names_in_srt, self.names_in_vtt.unwrap_or(true));
+        crate::look::set(self.look.clone());
     }
 
     pub fn folder_formats(&self) -> Vec<String> {

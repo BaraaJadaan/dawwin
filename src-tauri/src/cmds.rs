@@ -7,6 +7,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
 use crate::history;
+use crate::look::Look;
 use crate::queue::{Core, Snapshot};
 use crate::transcript::Transcript;
 use crate::words::{self, Entry};
@@ -63,12 +64,13 @@ pub struct Extras {
     names_in_vtt: bool,
     /// How many speakers the model tells apart
     max_speakers: usize,
+    look: Look,
 }
 
 #[tauri::command]
 pub fn get_extras(core: C) -> Extras {
     let st = core.settings.lock().unwrap();
-    Extras { words: st.words.clone(), names_in_srt: st.names_in_srt, names_in_vtt: st.names_in_vtt.unwrap_or(true), max_speakers: crate::speakers::MAX_SPEAKERS }
+    Extras { words: st.words.clone(), names_in_srt: st.names_in_srt, names_in_vtt: st.names_in_vtt.unwrap_or(true), max_speakers: crate::speakers::MAX_SPEAKERS, look: st.look.clone() }
 }
 
 /// The whole list, as the settings page edits it.
@@ -160,4 +162,60 @@ pub fn set_subtitle_names(core: C, srt: bool, vtt: bool) -> R<Snapshot> {
     })
     .map_err(e)?;
     Ok(core.snapshot())
+}
+
+// ---------------------------------------------------------------- subtitle look
+
+#[tauri::command]
+pub fn set_look(core: C, look: Look) -> R<Extras> {
+    core.change_settings(|s| s.look = look).map_err(e)?;
+    Ok(get_extras(core))
+}
+
+/// One second of a video of the user's with a line of its subtitles drawn in `look`, burned by
+/// Dawwin's own ffmpeg: the file, for the page to show. The video is the transcript's `id`, or
+/// the newest transcript of a video that is still there.
+#[tauri::command]
+pub async fn preview_look(app: AppHandle, id: Option<String>, look: Look) -> R<String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let ffmpeg = crate::setup::burner(&core.paths).ok_or_else(|| crate::tr!("Burning subtitles in needs the video ffmpeg. Download it in Settings."))?;
+    let is_there = |p: &str| crate::video::is_video(std::path::Path::new(p)) && std::path::Path::new(p).is_file();
+    let id = id
+        .filter(|i| core.transcript(i).is_ok_and(|t| is_there(&t.source_path)))
+        .or_else(|| history::list(&core.paths.history_dir()).into_iter().filter(|h| is_there(&h.source_path)).max_by_key(|h| h.created_ms).map(|h| h.id))
+        .ok_or_else(|| crate::tr!("The preview shows a video of yours: transcribe one first."))?;
+    let t = core.transcript(&id).map_err(e)?;
+    // the first subtitle of the transcript, at its own moment
+    let cue = crate::captions::cues(&t).into_iter().find(|c| !c.text().trim().is_empty());
+    let (at, text) = match cue {
+        Some(c) => (c.start, c.text()),
+        None => ((t.duration_s / 2.0).min(5.0), t.title.clone()),
+    };
+    let srt = format!("1
+00:00:00,000 --> 00:00:01,000
+{text}
+
+");
+    let scratch = core.paths.cache_dir();
+    // a new name each time, so the page does not show the one before
+    for old in std::fs::read_dir(&scratch).into_iter().flatten().flatten() {
+        if old.file_name().to_string_lossy().starts_with("look-preview-") {
+            let _ = std::fs::remove_file(old.path());
+        }
+    }
+    let dest = scratch.join(format!("look-preview-{}.mp4", crate::queue::now_ms()));
+    let video = std::path::PathBuf::from(&t.source_path);
+    let out = dest.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::video::burn_clip(&ffmpeg, &video, &srt, at, &look, &out, &scratch))
+        .await
+        .map_err(|x| x.to_string())?
+        .map_err(e)?;
+    app.asset_protocol_scope().allow_file(&dest).map_err(|x| x.to_string())?;
+    Ok(dest.display().to_string())
+}
+
+/// The fonts subtitles can be burned in on this PC (see `fonts`).
+#[tauri::command]
+pub async fn subtitle_fonts() -> Vec<String> {
+    tauri::async_runtime::spawn_blocking(crate::fonts::for_subtitles).await.unwrap_or_default()
 }

@@ -157,6 +157,8 @@ pub struct ToolView {
     pub partial: u64,
     /// The one the app uses
     pub active: bool,
+    /// An older build of it is installed than the one the app pins: download it again to update
+    pub outdated: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -237,7 +239,7 @@ impl Core {
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
         crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));
-        settings.apply_subtitle_names();
+        settings.apply_to_subtitles();
         let core = Arc::new(Core {
             app,
             paths,
@@ -307,6 +309,7 @@ impl Core {
                     on_disk: exe.is_some(),
                     partial: tools::partial(&self.paths, t),
                     active: exe.is_some() && (t.id == tools::TRANSLATOR.id || exe == ffmpeg),
+                    outdated: tools::outdated(&self.paths, t),
                 }
             })
             .collect();
@@ -368,7 +371,7 @@ impl Core {
         {
             let mut st = self.settings.lock().unwrap();
             f(&mut *st);
-            st.apply_subtitle_names();
+            st.apply_to_subtitles();
             st.save(&self.paths)?;
         }
         self.refresh_setup();

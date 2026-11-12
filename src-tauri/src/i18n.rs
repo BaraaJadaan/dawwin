@@ -66,6 +66,8 @@ static AR: &[(&str, &str)] = &[
     ("Save the words and names", "حفظ الكلمات والأسماء"),
     ("Dawwin words", "كلمات دَوِّن"),
     ("Load words and names", "تحميل الكلمات والأسماء"),
+    ("The preview shows a video of yours: transcribe one first.", "تعرض المعاينة فيديو من فيديوهاتك: فرّغ واحدًا أولًا."),
+    ("This video is AV1, which this ffmpeg cannot read. Update the video ffmpeg in Settings.", "هذا الفيديو بترميز AV1 الذي لا يقرؤه ffmpeg هذا. حدّث ffmpeg الفيديو من الإعدادات."),
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),
     ("Audio and video", "صوت وفيديو"),

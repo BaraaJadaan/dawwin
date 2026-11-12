@@ -175,6 +175,8 @@ function renderRecordBar() {
       </select>
       ${s.sources !== "pc" ? `<select class="input select" data-rec="mic" aria-label="${esc(t("rec.micTip"))}" title="${esc(t("rec.micTip"))}">${micOptions(s.mic || "")}</select>` : ""}
     </div>`;
+    // why the last recording stopped by itself, until the next one
+    if (REC.diskStopped) html += `<p class="rec-warn">${esc(t("rec.diskStopped"))}</p>`;
   }
   for (const c of REC.cutOff) {
     const sure = REC.armed === c.journal;
@@ -203,6 +205,7 @@ async function startRecording() {
   // once, before the first recording: consent
   if (!(await invoke("recording_notice"))) return;
   try {
+    REC.diskStopped = null;
     const id = await invoke("start_recording", { language: S.spoken, steps });
     onState(await invoke("get_state"));
     openTranscript(id);
@@ -262,6 +265,8 @@ async function recordWire() {
   listen("recording", (e) => {
     const { id, status } = e.payload;
     REC.live = { ...(REC.live?.id === id ? REC.live : {}), id, status, sources: REC.live?.sources };
+    // it stopped by itself: said once, whatever page is on screen
+    if (status.ended && status.disk_stopped && !REC.diskStopped) { REC.diskStopped = id; toast(t("rec.diskStopped")); }
     paintRecording();
   });
   await loadRecordSetup();

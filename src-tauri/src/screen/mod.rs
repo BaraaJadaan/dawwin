@@ -14,6 +14,9 @@ pub mod ocr;
 pub mod pdf;
 pub mod say;
 pub mod shortcut;
+// saving a reading needs the voice of 1.7.0 to make its sound: wired with it
+#[allow(dead_code)]
+pub mod sound;
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

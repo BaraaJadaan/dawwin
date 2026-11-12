@@ -20,7 +20,9 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/models.rs` | The models, their pinned revisions and checksums, which model each language goes to, and the download. |
 | `src-tauri/src/setup.rs` | Where things live, the settings, and which model file a language uses. |
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
-| `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time. |
+| `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time, or for JSON held to a schema, streamed. |
+| `src-tauri/src/minutes.rs` | Minutes: what is kept in the transcript's file, the lines as the model reads them, the parts of a long recording, the answer checked against the transcript, the exports. The prompts and the schema are in `src-tauri/prompts`. |
+| `src-tauri/src/queue/minutes_job.rs` | Writing the minutes as a job in the queue: parts, notes saved as they come, the last pass over the notes. |
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
 | `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
@@ -64,6 +66,18 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   however the app ends. It runs on the GPU the speech engine found best (a dedicated one before one in
   the processor), never spread over several. Why MiLMMT-46: we measured ten open translation models
   on WMT24++, see `tools/bench-translate` and the **Translation bench** workflow.
+- **Minutes.** The translator's server runs a minutes model too (Qwen3.5 or Gemma 4, see **Minutes bench**),
+  with room for 16,384 tokens, taking its turn with the speech engine and the translator. It is asked
+  through `/v1/chat/completions`, greedily and without thinking, for JSON held to the schema in
+  `src-tauri/prompts/minutes-schema.json` (line numbers limited to the transcript's), never for free text.
+  A recording up to about 12 minutes goes in one pass. A longer one is cut into parts of at most ten
+  minutes, where the speaker changes or pauses longest in a part's last quarter; each part becomes notes,
+  saved in the transcript's file as they come so that a stopped run continues, and the notes become the
+  minutes in one more pass (a few parts at a time when there are many). The answer is checked: line
+  numbers that are not lines go, an owner who is neither a speaker nor said in the transcript goes, and
+  only a meeting keeps decisions and actions. Speakers' names are read from the transcript's file
+  loosely, so transcripts with and without speakers both work. The benchmark (`tools/bench-minutes`)
+  reads the same prompts, and a test checks that the app asks exactly what was measured.
 - **Subtitles.** `captions.rs` follows the rules Netflix and the BBC give their subtitlers: two lines
   of 42 characters at most, between 5/6 of a second and 7 seconds on screen, 17 characters a second
   (20 for English), two frames between subtitles, gaps under half a second closed, and breaks where a

@@ -2,8 +2,9 @@
 
     score.py <artifacts dir> <results.md>
 
-An item the model gives (a decision, an action, an open question) is the answer's item when the
-lines it names fall within two lines of the answer's: the app links every item to its lines, so an
+An item the model gives (a decision, an action, an open question) is the answer's item when one of
+the lines it names is within two lines of one of the answer's (of several such, the one with the same
+owner and the most words in common): the app links every item to its lines, so an
 item that names the wrong lines is wrong there too. Each answer item counts once. Of a found action,
 the owner is right when one of the person's spellings is in it, and the deadline when one of its
 spellings is (or both are empty). A topic is found when it starts within three lines of the
@@ -37,20 +38,46 @@ def has_any(text, alternatives):
     return any(norm(a) and norm(a) in t for a in alternatives)
 
 
-def near(pred_lines, gold_lines, slack):
-    lo, hi = min(gold_lines) - slack, max(gold_lines) + slack
-    return any(isinstance(p, int) and lo <= p <= hi for p in pred_lines or [])
+def lines_of(item, key):
+    v = item.get(key)
+    return [x for x in (v if isinstance(v, list) else [v]) if isinstance(x, int)]
 
 
-def pair(pred, gold, key, slack):
-    """One-to-one: each gold item takes the first unused predicted item near it."""
-    used, pairs = set(), []
-    for g in gold:
-        for i, p in enumerate(pred):
-            if i not in used and near(p.get(key) if isinstance(p.get(key), list) else [p.get(key)], g[key] if isinstance(g[key], list) else [g[key]], slack):
-                used.add(i)
-                pairs.append((g, p))
-                break
+def distance(pred_lines, gold_lines):
+    """How far the nearest of the lines given is from one of the answer's lines."""
+    return min((abs(p - g) for p in pred_lines for g in gold_lines), default=10**9)
+
+
+def words(s):
+    return {w for w in norm(s).split() if len(w) > 2}
+
+
+def overlap(a, b):
+    a, b = words(a), words(b)
+    return len(a & b) / len(a | b) if a and b else 0.0
+
+
+def pair(pred, gold, key, slack, text=None, who=False):
+    """One to one: an item given and one of the answer's are a pair when one of the lines given is
+    within `slack` of one of the answer's. Of several such pairs, the ones with the same owner and
+    the most words in common go first, then the nearest."""
+    candidates = []
+    for gi, g in enumerate(gold):
+        for pi, p in enumerate(pred):
+            d = distance(lines_of(p, key), lines_of(g, key))
+            if d > slack:
+                continue
+            same_who = who and bool(g["who"]) and has_any(p.get("who") or "", g["who"])
+            words_in_common = overlap(p.get(text) or "", g.get(text) or "") if text else 0.0
+            candidates.append((same_who, words_in_common, -d, gi, pi))
+    candidates.sort(reverse=True)
+    used_g, used_p, pairs = set(), set(), []
+    for _, _, _, gi, pi in candidates:
+        if gi in used_g or pi in used_p:
+            continue
+        used_g.add(gi)
+        used_p.add(pi)
+        pairs.append((gold[gi], pred[pi]))
     return pairs
 
 
@@ -75,8 +102,8 @@ def score_one(answer, gold, target):
     dec, act, oq, top = (answer.get(k) or [] for k in ("decisions", "actions", "open_questions", "topics"))
     s["kind"] = answer.get("kind") == gold["kind"]
     if gold["kind"] == "meeting":
-        dp = pair(dec, gold["decisions"], "lines", 2)
-        ap = pair(act, gold["actions"], "lines", 2)
+        dp = pair(dec, gold["decisions"], "lines", 2, text="text")
+        ap = pair(act, gold["actions"], "lines", 2, text="what", who=True)
         s["dec_f1"] = f1(len(dp), len(dec), len(gold["decisions"]))
         s["dec_recall"] = len(dp) / max(len(gold["decisions"]), 1)
         s["dec_invented"] = len(dec) - len(dp)
@@ -100,9 +127,9 @@ def score_one(answer, gold, target):
         s["who_unknown"] = sum(1 for p in act if norm(p.get("who")) not in EMPTY and not any(has_any(p.get("who"), alts) for alts in people))
     else:
         s["no_meeting_items"] = not dec and not act
-    qp = pair(oq, gold["open_questions"], "lines", 2)
+    qp = pair(oq, gold["open_questions"], "lines", 2, text="text")
     s["oq_f1"] = f1(len(qp), len(oq), len(gold["open_questions"]))
-    tp = pair(top, gold["topics"], "line", 3)
+    tp = pair(top, gold["topics"], "line", 3, text="title")
     s["topic_f1"] = f1(len(tp), len(top), len(gold["topics"]))
     summary = answer.get("summary") or ""
     s["facts"] = sum(has_any(summary, alts) for alts in gold["facts"]) / max(len(gold["facts"]), 1)

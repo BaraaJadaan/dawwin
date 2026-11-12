@@ -56,6 +56,8 @@ Object.assign(I18N.en.s, {
   "toast.needMinutes": "Minutes need a minutes model.",
   "toast.getMinutes": "Choose one",
   "set.minutes": "Minutes",
+  "guide.minutesTitle": "Write the minutes",
+  "guide.minutesText": "On a transcript's Minutes tab, Write the minutes gives a short summary, the decisions, who does what by when, the topics with their times and the questions left open, in the language of the meeting or in another. Press a time to see the lines it came from, and click any line to correct it. A long meeting is written in parts, and a run you stop carries on where it stopped. The first time, download a minutes model: it runs on this computer like everything else.",
   "model.min-gemma4-12b.name": "Gemma 4 12B",
   "model.min-gemma4-12b.long": "Gemma 4 12B",
   "model.min-gemma4-12b.detail": "Google's Gemma 4, the largest that was measured. The best minutes, slower.",
@@ -123,6 +125,8 @@ Object.assign(I18N.ar.s, {
   "toast.needMinutes": "يحتاج المحضر إلى نموذج محاضر.",
   "toast.getMinutes": "اختر واحدًا",
   "set.minutes": "المحاضر",
+  "guide.minutesTitle": "اكتب المحضر",
+  "guide.minutesText": "في تبويب «المحضر» من أي تفريغ، يكتب زر «اكتب المحضر» ملخّصًا قصيرًا، والقرارات، ومن يفعل ماذا ومتى، والمواضيع بأوقاتها، والأسئلة التي بقيت بلا جواب، بلغة الاجتماع أو بلغة أخرى. اضغط على الوقت لترى الأسطر التي جاء منها، وانقر على أي سطر لتصحيحه. الاجتماع الطويل يُكتب على أجزاء، وإذا أوقفته أكمل من حيث توقّف. في المرة الأولى نزّل نموذج محاضر، وهو يعمل على هذا الحاسوب كغيره.",
   "model.min-gemma4-12b.name": "Gemma 4 12B",
   "model.min-gemma4-12b.long": "Gemma 4 12B",
   "model.min-gemma4-12b.detail": "أكبر ما قيس، من Google. أفضل المحاضر، وأبطأ.",
@@ -140,6 +144,8 @@ Object.assign(I18N.ar.s, {
 });
 
 ACTIVE.add("writing");
+// How to use gains a part, after translating
+GUIDE.splice(GUIDE.indexOf("translate") + 1, 0, "minutes");
 
 const Minutes = {
   tab: store.get("minutesTab", "lines"), // the tab last open: "lines" | "minutes"

@@ -34,6 +34,21 @@ The timing pass took 1.5 to 1.7 times as long as the transcription (8.0 s after 
 108 s lecture). The maintainer's example comes back in the lecture: until 1.3.2 the subtitle
 "meaning it's not pegged / on or subject to what" was gone before "subject to" was said.
 
+### Every model, on GitHub Actions (2026-11-12)
+
+The **Engine** workflow measures each model it downloads, on a runner without a GPU, with the English
+talks (the runner has no Arabic voice): 92 + 108 s of speech, about 485 words. The pass mark: nine words
+in ten within half a second, and at most one subtitle in twenty gone before its last word.
+
+| Model | Within 0.5 s, until 1.3.2 → timing pass | Subtitles gone before their last word | Timing pass, against the transcription |
+|---|---|---|---|
+| Cohere Q4 | 47 % → **99 %** | 18 of 44 → **1 of 41** | 0.8 times as long |
+| Cohere Q8 | 46 % → **99 %** | 18 of 43 → **2 of 42** | 0.7 times |
+| Canary | 43 % → **99 %** | 17 of 43 → **2 of 41** | 0.8 times |
+| Whisper, each stretch heard again | 46 % → 99 % | 18 of 43 → 3 of 42 | 5.5 times: Whisper reads every piece as 30 s |
+
+So Whisper is heard once a line instead, with its own phrase times (see `timing::pass`).
+
 In transcribe.cpp 0.4.1 no model Dawwin uses gives word times: Cohere and Canary give none, Whisper
 only times whole phrases. So there is no model truth to measure against; the voices of Windows are.
 Their speech is evener than a person's; a test on real speech is still owed.

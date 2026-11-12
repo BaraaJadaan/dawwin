@@ -2,7 +2,7 @@
 
     python make_pdfs.py <out folder>
 
-Writes `expected.json` (the text in reading order), `page.html`, and the PDFs this script can make
+Writes `expected.json` (the text in reading order), `page.html`, `book.epub`, and the PDFs this script can make
 itself: Chrome's "print to PDF" and a screenshot of the same page as a scan (both through headless
 Chrome in a throwaway profile), an old file stored in visual order with presentation forms (what
 generators did before shaping, through arabic_reshaper and python-bidi), and a naive one in logical
@@ -92,6 +92,21 @@ def scan_pdf(out):
     c.save()
 
 
+def epub(out):
+    """A small e-book: an EPUB 3 with a navigation page, an Arabic chapter and an English one."""
+    import zipfile
+
+    out = out / "book.epub"
+    z = zipfile.ZipFile(out, "w")
+    z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip")
+    z.writestr("META-INF/container.xml", '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+    z.writestr("OEBPS/content.opf", '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>كتاب مختلق</dc:title><dc:language>ar</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c1" href="one.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="two.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/><itemref idref="c2"/></spine></package>')
+    z.writestr("OEBPS/nav.xhtml", '<html xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="one.xhtml">الفصل الأول</a></li><li><a href="two.xhtml">Chapter two</a></li></ol></nav></body></html>')
+    z.writestr("OEBPS/one.xhtml", '<html xmlns="http://www.w3.org/1999/xhtml" dir="rtl"><body><h1>البداية</h1><p>مرحبًا، هذا فصل مختلق فيه كلمة English؛ ونهاية.</p></body></html>')
+    z.writestr("OEBPS/two.xhtml", '<html><body><p>The second chapter, made up, with عربي inside.</p></body></html>')
+    z.close()
+
+
 def main():
     out = Path(sys.argv[1]).resolve()
     out.mkdir(parents=True, exist_ok=True)
@@ -101,6 +116,7 @@ def main():
     reportlab_pdf(out / "visual-order.pdf", visual=True)
     reportlab_pdf(out / "naive-logical.pdf", visual=False)
     scan_pdf(out)
+    epub(out)
     print("made:", ", ".join(sorted(p.name for p in out.glob("*.pdf"))))
 
 

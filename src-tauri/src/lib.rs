@@ -745,6 +745,9 @@ pub fn run() {
             screen::app::screen_set_start_with_windows,
             screen::app::screen_set_say,
             screen::app::player_action,
+            screen::app::player_last,
+            #[cfg(debug_assertions)]
+            screen::app::test_player_note,
             screen::app::screen_open_file,
             screen::app::screen_install_pdfium,
             screen::app::screen_read_text,

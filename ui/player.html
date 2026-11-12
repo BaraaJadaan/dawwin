@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dawwin</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  /* the small player of read anything on the screen: a bar that never takes the keyboard */
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--panel); color: var(--text); font-family: var(--ui-font); user-select: none; }
+  body { border: 1px solid var(--line-strong); box-sizing: border-box; border-radius: var(--radius); }
+  .bar { display: flex; align-items: center; gap: 6px; height: 100%; padding: 0 10px; box-sizing: border-box; }
+  .msg { flex: 1; min-width: 0; font-size: 14px; line-height: 1.3; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; unicode-bidi: plaintext; }
+  button { flex: none; width: 40px; height: 40px; border: 0; border-radius: 8px; background: transparent; color: var(--text); font-size: 18px; cursor: pointer; display: grid; place-items: center; }
+  button:hover { background: var(--accent-soft); }
+  button[hidden] { display: none; }
+  button svg { width: 20px; height: 20px; fill: currentColor; }
+  [dir="rtl"] .flip svg { transform: scaleX(-1); }
+</style>
+</head>
+<body>
+<div class="bar" id="bar">
+  <div class="msg" id="msg"></div>
+  <button id="back" class="flip" data-action="back"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+  <button id="pause" data-action="pause"><svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg></button>
+  <button id="resume" data-action="resume" hidden><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+  <button id="forward" class="flip" data-action="forward"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zm10-12h2v12h-2z"/></svg></button>
+  <button id="close" data-action="close"><svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></button>
+</div>
+<script src="player.js"></script>
+</body>
+</html>

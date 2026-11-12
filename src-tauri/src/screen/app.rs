@@ -21,6 +21,8 @@ pub struct Screen {
     #[cfg(windows)]
     hotkey: Option<super::shortcut::Hotkey>,
     registered: Mutex<Registered>,
+    /// What the small player shows: a player opened just now asks for it once its page is loaded
+    last_note: Mutex<Option<PlayerNote>>,
 }
 
 fn settings(app: &AppHandle) -> Settings {
@@ -43,6 +45,7 @@ pub fn start(app: &AppHandle) {
         #[cfg(windows)]
         hotkey,
         registered: Mutex::new(Registered::Off),
+        last_note: Mutex::new(None),
     });
     apply(app);
     // Start with Windows follows this copy of Dawwin, wherever it is now
@@ -122,7 +125,7 @@ fn capture(_key: u16, _copy: bool) -> crate::selection::Outcome {
 
 /// What the small player shows.
 #[derive(Clone, Serialize)]
-struct PlayerNote {
+pub struct PlayerNote {
     note: Note,
     message: String,
     reading: bool,
@@ -134,6 +137,7 @@ struct PlayerNote {
 fn show_player(app: &AppHandle, note: Note) {
     let reading = app.state::<Screen>().reader.reading();
     let payload = PlayerNote { note, message: note.message(), reading, dir: if crate::i18n::lang() == "ar" { "rtl" } else { "ltr" } };
+    *app.state::<Screen>().last_note.lock().unwrap() = Some(payload.clone());
     let window = match app.get_webview_window(PLAYER) {
         Some(w) => w,
         None => {
@@ -322,6 +326,20 @@ pub fn screen_set_say(app: AppHandle, list: Vec<Say>) -> Result<ScreenState, Str
     Ok(state(&app, None))
 }
 
+/// Test builds: show the small player with a note, as a press of the shortcut does. Async: a
+/// window made on the main thread, in a command that blocks it, never loads its page.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn test_player_note(app: AppHandle, note: Note) {
+    show_player(&app, note);
+}
+
+/// What the small player shows now (its page asks once it is loaded).
+#[tauri::command]
+pub fn player_last(app: AppHandle) -> Option<PlayerNote> {
+    app.state::<Screen>().last_note.lock().unwrap().clone()
+}
+
 /// A button of the small player.
 #[tauri::command]
 pub fn player_action(app: AppHandle, action: String) {
@@ -331,8 +349,10 @@ pub fn player_action(app: AppHandle, action: String) {
         "resume" => screen.reader.pause(false),
         "back" => screen.reader.skip(-1),
         "forward" => screen.reader.skip(1),
-        "close" => {
-            screen.reader.stop();
+        "close" | "hide" => {
+            if action == "close" {
+                screen.reader.stop();
+            }
             if let Some(w) = app.get_webview_window(PLAYER) {
                 let _ = w.hide();
             }

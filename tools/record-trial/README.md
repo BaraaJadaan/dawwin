@@ -8,7 +8,7 @@ rewritten and flushed every second. `cargo build --release` from the VS 2022 pro
 Commands: `devices`, `record --out F.wav [--seconds N] [--them process|endpoint|none] [--mic NAME]
 [--keepalive] [--self-play F.wav] [--no-audio]`, `play F.wav [--gain-db G] [--delay-ms D]`,
 `check`, `repair`, `analyse` (echo of "them" in "me"), `locate F.wav --reference R.wav`,
-`aec me.f32 them.f32 out.f32` (sonora AEC3; built, not yet measured).
+`aec me.f32 them.f32 out.f32` (sonora AEC3).
 
 ## Results, 2026-11-12, Windows 11 build 26300, Realtek laptop speakers and microphone array
 
@@ -23,7 +23,9 @@ Commands: `devices`, `record --out F.wav [--seconds N] [--them process|endpoint|
 | Killed by force (`kill -9` at 8 s) | header and file agree (6.63 s), ffprobe reads it; lost: the 0.4 s margin plus up to 1 s since the last checkpoint |
 | Speakers heard by the microphone | 55-59 ms later, -18 to -25 dB under the loopback level |
 | Doubled words (made-up tracks from a Surah, real Cohere Q8 model) | an echo at -20, -12 or -6 dB is transcribed in full: 21 of 21 words doubled. Own speech over the echo gives one mixed line (13 of 21 words echo): dropping whole lines is not enough, echo cancellation is needed |
+| Echo cancellation (sonora 0.3 AEC3, "them" as the reference, 10 ms frames at 16 kHz) | the echo falls by 37-51 dB (-30/-22/-16 dB to -66/-67 dB); doubled words 0 of 21 at every level; own speech over the echo is kept (1 word of 8 in common with "them"); 0.55 % of one core |
+| What the model makes of near-silence | an invented line (a website's name): pieces without speech must not reach the model |
 | Endpoint loopback (fallback), nothing played | packets kept coming on this PC; opening took 0.4 s |
 
 Not tested (needs a person or another machine): headset plugged in or out, Bluetooth, Zoom, Teams,
-Meet, Windows 10, a microphone blocked in Windows' privacy settings, sonora's effect on the echo.
+Meet, Windows 10, a microphone blocked in Windows' privacy settings, echo cancellation on a real room.

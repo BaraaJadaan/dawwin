@@ -443,6 +443,69 @@ mod tests {
         assert!(reply_error(&json!({"ok": false, "error": "aborted", "stopped": true})).is::<Stopped>());
     }
 
+    /// The real engine with the real speaker and language models, on transcribe.cpp's own sample
+    /// recordings (the Engine workflow): DAWWIN_TEST_ENGINE (the engine), DAWWIN_TEST_SPEAKERS and
+    /// DAWWIN_TEST_LANGUAGE (the models), DAWWIN_TEST_SAMPLES (a folder of its `samples/*.wav`).
+    #[test]
+    #[ignore]
+    fn real_speakers_and_language() {
+        let var = |k: &str| PathBuf::from(std::env::var_os(k).unwrap_or_else(|| panic!("{k}")));
+        let (exe, speakers, language, samples) = (var("DAWWIN_TEST_ENGINE"), var("DAWWIN_TEST_SPEAKERS"), var("DAWWIN_TEST_LANGUAGE"), var("DAWWIN_TEST_SAMPLES"));
+        let home = std::env::temp_dir().join(format!("dawwin-real-who-{}", std::process::id()));
+        std::fs::create_dir_all(home.join("cache")).unwrap();
+        std::fs::create_dir_all(home.join("logs")).unwrap();
+        let paths = Paths { local: home.clone(), roaming: home.clone() };
+        let mut e = EngineProcess::spawn(&exe, &paths, "", true).unwrap();
+        let read = |name: &str| Audio { id: name.replace('.', "-"), samples: crate::audio::decode(&samples.join(name), None, &AtomicBool::new(false)).unwrap() };
+
+        // who speaks: two in the two-speaker mix, one in Kennedy's speech
+        for (name, want) in [("sortformer-2spk-mix.wav", 2), ("multitalker-2spk-mix.wav", 2), ("jfk.wav", 1)] {
+            let audio = read(name);
+            let started = std::time::Instant::now();
+            let turns = e.speakers(&speakers.display().to_string(), &audio, &AtomicBool::new(false)).unwrap();
+            let mut who: Vec<u32> = turns.iter().filter(|t| t.end - t.start >= 0.3).map(|t| t.speaker).collect();
+            who.sort_unstable();
+            who.dedup();
+            let secs = audio.samples.len() as f64 / crate::audio::SR as f64;
+            println!("{name}: {} turns, speakers {who:?}, {secs:.1} s of sound in {:.2} s", turns.len(), started.elapsed().as_secs_f64());
+            assert_eq!(who.len(), want, "{name}: {turns:?}");
+            e.forget(&audio.id);
+        }
+
+        // a stop ends a long run at once
+        let long = read("dots-full.wav");
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let s2 = stop.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            s2.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        let stopped = e.speakers(&speakers.display().to_string(), &long, &stop);
+        println!("stopped after {:.2} s: {:?}", started.elapsed().as_secs_f64(), stopped.as_ref().map(|t| t.len()));
+        assert!(stopped.is_err_and(|x| x.is::<Stopped>()), "a stop ends it as stopped");
+        e.forget(&long.id);
+
+        // which language: each of the samples, among every language Dawwin knows
+        let every: Vec<&str> = crate::models::languages().collect();
+        for (name, want) in [("ar-short.wav", "ar"), ("fleurs-en.wav", "en"), ("fleurs-de.wav", "de"), ("fleurs-fr.wav", "fr"), ("fleurs-es.wav", "es"), ("ru-short.wav", "ru"), ("ja-short.wav", "ja"), ("zh-short.wav", "zh")] {
+            let audio = read(name);
+            let ranges = crate::language::first_speech(&audio.samples);
+            let clip = Audio { id: format!("{}-language", audio.id), samples: crate::language::joined(&audio.samples, &ranges) };
+            let heard = e.language(&language.display().to_string(), &clip, &[(0, clip.samples.len())]).unwrap();
+            e.forget(&clip.id);
+            let d = crate::language::decide(&heard, &every).unwrap();
+            println!("{name}: {} ({:.2}), next {:?}", d.language, heard[0].p, heard.get(1).map(|h| (&h.code, h.p)));
+            assert_eq!(d.language, want, "{name}");
+            // with only the Arabic model on the disk, German is still told for what it is
+            if want == "de" {
+                assert_eq!(crate::language::decide(&heard, &["ar", "en"]).unwrap(), crate::language::Decision { language: "de".into(), name: d.name.clone(), has_model: false });
+            }
+        }
+        e.shutdown();
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
     #[test]
     fn the_noise_marker_is_not_text() {
         assert_eq!(without_markers("@@@ضوضاء"), "");

@@ -2,7 +2,7 @@
 
 *Dawwin* means "write it down" in Arabic.
 
-**Turn recordings and videos into text, translate it, and subtitle them, on your own Windows PC.**
+**Turn recordings and videos into text, translate it, subtitle them, and write the minutes of a meeting, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
 languages. Translation into 46 languages. Nothing leaves your computer: no account, no upload, no
 subscription, no limit on hours.
@@ -24,7 +24,9 @@ subscription, no limit on hours.
 
 - **Business meetings.** Record on Zoom, Teams or Google Meet, drop the video on the window, and get
   the meeting as text you can search, correct and send as a Word document. Requirement meetings in
-  Arabic full of English terms ("الـ dashboard", "الـ API") come out as they were said.
+  Arabic full of English terms ("الـ dashboard", "الـ API") come out as they were said. Then one press
+  writes the minutes: a short summary, the decisions, and who does what by when, written on your own
+  computer instead of a cloud chatbot.
 - **Colleagues who speak another language.** Translate the transcript and share it on its own, or as a
   bilingual document with each line and its translation under it.
 - **Videos, courses and YouTube.** Subtitles timed the way professional ones are. Translate them to
@@ -52,7 +54,7 @@ subscription, no limit on hours.
   save the sound, transcribe, translate, and add the subtitles to the video, as tracks or burned in.
   Turn on only what you need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
 
-![The start page: a drop area, and under it four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+![The start page: a drop area, and under it four steps: Sound, Text (with Write the minutes), Translation and Video.](docs/screenshots/home.png)
 
 **Transcribe**
 
@@ -104,6 +106,26 @@ subscription, no limit on hours.
   after the speech goes. Transcribing what is left is faster, and the transcript still has the times
   of the original recording, so playback, Follow words and subtitles stay in step.
 - Save the sound as a file of its own (M4A): from a video, or without its silences.
+
+**Minutes** (new in 1.6)
+
+- **Write the minutes** on a transcript's Minutes tab: a summary of a few sentences, the decisions, the
+  action items (who, what, by when, with the speakers' names when the transcript has them), the topics
+  in order with their start times, and the questions left open. A lecture or an interview gets a summary
+  and its topics, without empty decisions and actions.
+- Every decision and action shows its time: press it to see the lines it came from in the transcript.
+- In the language of the meeting, with its English terms as they were said, or in another language:
+  the minutes of an Arabic meeting in English, without translating the transcript first.
+- Correct any line by hand; your text is kept. **Write again** after correcting the transcript, with a
+  warning that it replaces what you edited.
+- A meeting of three hours is written in parts, with the progress shown; stop it and it carries on where
+  it stopped, and the minutes cover the whole meeting.
+- Export the minutes alone, or followed by the transcript, to Word, Markdown or text. A step on the start
+  page writes them after the transcript, and a folder run saves them next to each recording.
+- Written on your computer by a model you download once in Settings, chosen by measuring (see below).
+  The panel offers the models with their sizes and says which fits your computer.
+
+![A meeting's minutes in Dawwin: the summary, four decisions with their times, and action items with who, what and by when.](docs/screenshots/minutes.png)
 
 **Edit, search and export**
 
@@ -219,8 +241,9 @@ If Dawwin is useful to you, a star on GitHub helps other people find it.
 Dawwin goes online only when you ask it to: to download a model (from
 [Hugging Face](https://huggingface.co)) or a tool (the translator and ffmpeg, from this repository's
 [releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for updates (from GitHub; also at startup if you
-turn that on in Settings). Recordings, transcripts and translations stay on your computer. The
-translator listens only to Dawwin on the same computer, with a key it is given at start.
+turn that on in Settings). Recordings, transcripts, translations and minutes stay on your computer. The
+translator, which also writes the minutes, listens only to Dawwin on the same computer, with a key it is
+given at start.
 
 ## Uninstall
 

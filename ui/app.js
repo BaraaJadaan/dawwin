@@ -7,7 +7,7 @@ const listen = T.event.listen;
 const fileSrc = (p) => T.core.convertFileSrc(p);
 
 const $ = (id) => document.getElementById(id);
-const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"]);
+const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video", "recording"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
 // what Dawwin takes, by extension: the backend's list (media_formats), filled at start
 let MEDIA = { all: ["m4a", "mp3", "wav", "ogg", "opus", "flac", "mp4", "mov", "mkv", "webm"], video: ["mp4", "mov", "mkv", "webm"], needs_ffmpeg: [] };
@@ -124,7 +124,7 @@ function showView(v) {
 // ------------------------------------------------------------------ how to use
 
 /** Each part of the app: a picture of it (in the interface language), and what to do with it. */
-const GUIDE = ["drop", "steps", "live", "listen", "translate", "export", "settings"];
+const GUIDE = ["drop", "steps", "live", "record", "listen", "translate", "export", "settings"];
 
 function renderGuide() {
   const box = $("guide-items");
@@ -350,7 +350,8 @@ function jobById(id) {
 
 function jobLine(j) {
   switch (j.status) {
-    case "queued": return t("job.queued");
+    case "queued": return recordWaiting() || t("job.queued");
+    case "recording": return recordJobLine(j);
     case "decoding": return t("job.decoding");
     case "loading": return t(j.kind === "translate" ? "job.loadingTranslator" : "job.loading");
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
@@ -384,7 +385,7 @@ function renderQueue() {
       ${what}
       <div class="sub">${esc(jobLine(j))}</div>
       ${ACTIVE.has(j.status) ? `<div class="progress ${indet ? "indeterminate" : ""}"><div class="bar" style="width:${indet ? "" : (j.progress * 100).toFixed(1) + "%"}"></div></div>` : ""}
-      <button class="icon-btn x" aria-label="${esc(t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
+      <button class="icon-btn x" aria-label="${esc(t(j.status === "recording" ? "rec.stop" : ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss"))}">×</button>`;
     // a job that only saves the sound has no transcript: it shows the file
     li.onclick = () => (j.kind === "burn" ? openTranscript(of) : j.kind !== "translate" && !j.steps?.transcribe ? j.outputs?.length && invoke("reveal", { path: j.outputs[0] }) : openTranscript(of, j.target));
     li.querySelector(".x").onclick = (ev) => {
@@ -924,7 +925,13 @@ function segRow(s, i, live) {
     });
     text.addEventListener("blur", () => saveSegment(i, text));
   }
-  row.append(time, text);
+  const who = whoLabel(s);
+  if (who) {
+    const line = document.createElement("div");
+    line.className = "line";
+    line.append(who, text);
+    row.append(time, line);
+  } else row.append(time, text);
   const tr = S.shown ? translationOf(S.current, S.shown) : null;
   const outdated = !!tr?.lines?.[i]?.text && tr.lines[i].from !== s.text;
   if (S.shown) row.append(translationLine(i, live));
@@ -1029,9 +1036,11 @@ function renderLiveProgress() {
   // the transcript being written, else a translation of it
   const j = own && ACTIVE.has(own.status) ? own : translateJob(cur.id, S.shown) || translateJob(cur.id);
   const box = $("t-progress");
-  if (!j) { box.hidden = true; return; }
+  if (!j) { box.hidden = true; recordProgress(null); return; }
   box.hidden = false;
   $("t-cancel").dataset.job = j.id;
+  $("t-cancel").textContent = t(j.status === "recording" ? "rec.stop" : "t.cancel");
+  recordProgress(j);
   const indet = j.status === "decoding" || j.status === "loading" || j.status === "queued";
   box.querySelector(".progress").classList.toggle("indeterminate", indet);
   $("t-bar").style.width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
@@ -1594,6 +1603,7 @@ function onState(snap) {
   renderChips();
   renderQueue();
   renderHomeNote();
+  recordOnState(snap);
   if (S.view === "setup") renderSetup();
   if (S.view === "settings") renderSettings();
   if (S.view === "transcript" && S.current) {
@@ -1643,7 +1653,14 @@ function onSegment({ id, segment }) {
   const cur = S.current;
   if (!cur || cur.id !== id || S.view !== "transcript") return;
   const last = cur.segments[cur.segments.length - 1];
-  if (last && segment.start <= last.start) return;
+  if (last && segment.start <= last.start) {
+    // a recorded meeting's two tracks: a line may belong before the last one
+    if (!segment.track || cur.segments.some((x) => x.start === segment.start && x.text === segment.text)) return;
+    const at = cur.segments.findIndex((x) => x.start > segment.start);
+    cur.segments.splice(at < 0 ? cur.segments.length : at, 0, segment);
+    renderTranscript();
+    return;
+  }
   cur.segments.push(segment);
   const box = $("segments");
   box.querySelector(".empty-live")?.remove();
@@ -1657,6 +1674,7 @@ function onSegment({ id, segment }) {
 // ------------------------------------------------------------------ wiring
 
 function wire() {
+  recordWire();
   wireListen();
   wireVolume();
   wirePlayer();

@@ -2,10 +2,10 @@
 
 *Dawwin* means "write it down" in Arabic.
 
-**Turn recordings and videos into text, translate it, and subtitle them, on your own Windows PC.**
+**Turn recordings, videos and meetings into text, translate it, and subtitle them, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
-languages. Translation into 46 languages. Nothing leaves your computer: no account, no upload, no
-subscription, no limit on hours.
+languages. Translation into 46 languages. Record a Zoom, Meet or Teams call and read it as it is
+said. Nothing leaves your computer: no account, no upload, no subscription, no limit on hours.
 
 **[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)** · free and open source (MIT)
 
@@ -13,6 +13,7 @@ subscription, no limit on hours.
 
 **دَوِّن** يفرّغ التسجيلات والفيديوهات إلى نص على حاسوبك، ويترجمها، ويضيف إليها نصًّا على الشاشة.
 العربية أولًا، بلهجاتها والكلمات الإنجليزية التي تتخللها، ونحو 100 لغة أخرى، والترجمة إلى 46 لغة.
+ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام.
 لاجتماعات العمل، والمحاضرات والدروس والخطب، والمقابلات والأبحاث، والفيديوهات والأفلام، والرسائل
 الصوتية. لا شيء يغادر جهازك: لا حساب ولا رفع ولا اشتراك.
 
@@ -22,8 +23,10 @@ subscription, no limit on hours.
 
 ## What people use it for
 
-- **Business meetings.** Record on Zoom, Teams or Google Meet, drop the video on the window, and get
-  the meeting as text you can search, correct and send as a Word document. Requirement meetings in
+- **Business meetings.** Press **Record** during a Zoom, Teams or Google Meet call: Dawwin records your
+  microphone and what the PC plays, with no bot joining the call, and writes the meeting while it goes,
+  each line marked Me or Them. Or drop a recording of it. Either way you get the meeting as text you
+  can search, correct and send as a Word document. Requirement meetings in
   Arabic full of English terms ("الـ dashboard", "الـ API") come out as they were said.
 - **Colleagues who speak another language.** Translate the transcript and share it on its own, or as a
   bilingual document with each line and its translation under it.
@@ -53,6 +56,29 @@ subscription, no limit on hours.
   Turn on only what you need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
 
 ![The start page: a drop area, and under it four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+
+**Record a meeting** (new in 1.5)
+
+- **Record** on the start page records your microphone and everything the PC plays, as two tracks:
+  a Zoom, Meet or Teams call, a call in the browser, a webinar or a video. It listens to the PC, not to
+  one program, so it works with any of them, and nothing joins the call. Dawwin's own sound is left out.
+- The text appears while people speak, about half a minute behind, each line marked **Me** or **Them**.
+  Press Stop and the transcript is ready within moments: nothing is transcribed twice. The steps
+  ticked on the start page, such as a translation, follow.
+- With laptop speakers instead of headphones, the microphone hears the others too: echo cancellation
+  (WebRTC's, in Rust) takes them out of your track, so their words are not written twice.
+- Record both sides, the microphone alone (a lecture in a room) or the PC's sound alone (a webinar).
+  Choose the microphone, or follow the Windows default; a headset plugged in or out mid-meeting is
+  followed without a gap. A microphone that sends no sound (muted, or a virtual one with nothing behind
+  it) is said at once, with the others to choose from.
+- The recording survives a crash, a power cut or a forced close up to the last second or so, and is
+  offered back at the next start. The PC does not sleep while it records, closing Dawwin asks first,
+  and a disk running low is said before it is full.
+- Kept in `Documents\Dawwin` as an M4A of about 45 MB an hour (with ffmpeg; as a WAV without it), with
+  both sides to play back in Dawwin. The first time, Dawwin reminds you that recording a call may need
+  everyone's consent.
+
+![Recording a meeting: the time, a level for Me and one for Them, Stop, and the text appearing with each line marked Me or Them.](docs/screenshots/record.png)
 
 **Transcribe**
 
@@ -219,7 +245,10 @@ If Dawwin is useful to you, a star on GitHub helps other people find it.
 Dawwin goes online only when you ask it to: to download a model (from
 [Hugging Face](https://huggingface.co)) or a tool (the translator and ffmpeg, from this repository's
 [releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for updates (from GitHub; also at startup if you
-turn that on in Settings). Recordings, transcripts and translations stay on your computer. The
+turn that on in Settings). Recordings, transcripts and translations stay on your computer. A meeting you
+record is captured from your own microphone and speakers only: nothing joins the call, and the
+recording is never sent anywhere. Recording a call may still need the consent of everyone on it, which
+Dawwin reminds you of before the first recording. The
 translator listens only to Dawwin on the same computer, with a key it is given at start.
 
 ## Uninstall
@@ -230,7 +259,7 @@ the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). Five things are not part of this repository and have their own terms:
+[MIT](LICENSE). Six things are not part of this repository and have their own terms:
 
 - **The speech models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC
   BY 4.0, and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
@@ -250,6 +279,8 @@ the model folder, if you chose another place for it).
   [libass](https://github.com/libass/libass), [FreeType](https://freetype.org),
   [HarfBuzz](https://github.com/harfbuzz/harfbuzz) and [FriBidi](https://github.com/fribidi/fribidi).
   Each download carries their licenses and says where their source is.
+- **Echo cancellation**: [sonora](https://github.com/dignifiedquire/sonora), a Rust port of the WebRTC
+  project's audio processing, under the BSD 3-Clause license.
 - **The font**: official builds embed [Thmanyah Sans](https://font.thmanyah.com), © Thmanyah Publishing
   and Distribution. Its license does not allow sharing the font files, so builds from this repository
   use the system font instead.

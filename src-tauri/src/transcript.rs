@@ -5,7 +5,7 @@ use std::io::Write;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Segment {
     /// seconds from the start of the recording
     pub start: f64,
@@ -25,6 +25,27 @@ pub struct Segment {
     /// Where the speaker stops in the line (see `audio::pauses`), for subtitles that end when they do
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pauses: Vec<[f32; 3]>,
+    /// In a recorded meeting, whose track the line is from: "me" (the microphone) or "them"
+    /// (what the PC played)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub track: Option<String>,
+}
+
+/// "Me" or "Them", for a line of a recorded meeting.
+pub fn who(s: &Segment) -> Option<String> {
+    match s.track.as_deref() {
+        Some("me") => Some(crate::tr!("Me")),
+        Some("them") => Some(crate::tr!("Them")),
+        _ => None,
+    }
+}
+
+/// A line's text as the exports write it: "Me: …" in a recorded meeting.
+fn said(s: &Segment) -> String {
+    match who(s) {
+        Some(w) => format!("{w}: {}", s.text.trim()),
+        None => s.text.trim().to_string(),
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -189,7 +210,7 @@ pub fn to_txt(t: &Transcript, stamps: bool) -> String {
         if stamps {
             out.push_str(&format!("[{} - {}] ", ts(s.start), ts(s.end)));
         }
-        out.push_str(s.text.trim());
+        out.push_str(&said(s));
         out.push('\n');
         if !stamps {
             out.push('\n');
@@ -217,7 +238,7 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
         if stamps {
             out.push_str(&format!("**[{}]** ", ts(s.start)));
         }
-        out.push_str(s.text.trim());
+        out.push_str(&said(s));
         out.push_str("\n\n");
     }
     out
@@ -268,7 +289,7 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
                 if stamps {
                     out.push_str(&format!("[{} - {}] ", ts(s.start), ts(s.end)));
                 }
-                out.push_str(&format!("{}\n{}\n\n", s.text.trim(), second[i]));
+                out.push_str(&format!("{}\n{}\n\n", said(s), second[i]));
             }
             out.into_bytes()
         }
@@ -278,7 +299,7 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
                 if stamps {
                     out.push_str(&format!("**[{}]** ", ts(s.start)));
                 }
-                out.push_str(&format!("{}  \n{}\n\n", s.text.trim(), second[i]));
+                out.push_str(&format!("{}  \n{}\n\n", said(s), second[i]));
             }
             out.into_bytes()
         }
@@ -339,19 +360,24 @@ fn secs(sec: f64) -> String {
 
 /// Opens in Excel with the Arabic intact: UTF-8 with a BOM, quoted where needed.
 pub fn to_csv(t: &Transcript) -> String {
-    let mut out = String::from("\u{feff}start,end,text\r\n");
+    // who said it, in a column of its own, in a recorded meeting
+    let tracks = t.segments.iter().any(|s| s.track.is_some());
+    let mut out = String::from(if tracks { "\u{feff}start,end,who,text\r\n" } else { "\u{feff}start,end,text\r\n" });
     for s in visible(t) {
         let text = s.text.trim().replace('"', "\"\"");
-        out.push_str(&format!("{},{},\"{}\"\r\n", secs(s.start), secs(s.end), text));
+        let who = if tracks { format!("\"{}\",", who(s).unwrap_or_default()) } else { String::new() };
+        out.push_str(&format!("{},{},{who}\"{}\"\r\n", secs(s.start), secs(s.end), text));
     }
     out
 }
 
 pub fn to_tsv(t: &Transcript) -> String {
-    let mut out = String::from("start\tend\ttext\n");
+    let tracks = t.segments.iter().any(|s| s.track.is_some());
+    let mut out = String::from(if tracks { "start\tend\twho\ttext\n" } else { "start\tend\ttext\n" });
     for s in visible(t) {
         let text = s.text.split_whitespace().collect::<Vec<_>>().join(" ");
-        out.push_str(&format!("{}\t{}\t{}\n", secs(s.start), secs(s.end), text));
+        let who = if tracks { format!("{}\t", who(s).unwrap_or_default()) } else { String::new() };
+        out.push_str(&format!("{}\t{}\t{who}{}\n", secs(s.start), secs(s.end), text));
     }
     out
 }
@@ -377,6 +403,9 @@ pub fn to_json(t: &Transcript) -> String {
     let segments: Vec<serde_json::Value> = visible(t)
         .map(|s| {
             let mut v = serde_json::json!({ "start": round(s.start), "end": round(s.end), "text": s.text.trim() });
+            if let Some(track) = &s.track {
+                v["track"] = track.clone().into();
+            }
             let words = timed_words(s);
             if !words.is_empty() {
                 v["words"] = words.into();
@@ -438,7 +467,7 @@ fn to_docx_with(t: &Transcript, second: Option<(&str, &[String])>, stamps: bool)
                 text_rpr
             ));
         }
-        body.push_str(&format!("<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>", text_rpr, xml(s.text.trim())));
+        body.push_str(&format!("<w:r>{}<w:t xml:space=\"preserve\">{}</w:t></w:r>", text_rpr, xml(&said(s))));
         body.push_str("</w:p>");
         if let Some((ppr, rpr, lines)) = &below {
             let text = lines.get(i).map_or("", |l| l.trim());
@@ -543,8 +572,8 @@ mod tests {
             model: "m".into(),
             partial: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], ..Default::default() },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], ..Default::default() },
             ],
             translations: vec![],
         }

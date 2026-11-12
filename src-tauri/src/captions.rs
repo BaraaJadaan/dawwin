@@ -382,7 +382,7 @@ mod tests {
     use super::*;
 
     fn seg(start: f64, end: f64, text: &str, voice: Vec<f32>, pauses: Vec<[f32; 3]>) -> Segment {
-        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses }
+        Segment { start, end, text: text.into(), flag: None, edited: false, voice, words: vec![], pauses, ..Default::default() }
     }
 
     fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {

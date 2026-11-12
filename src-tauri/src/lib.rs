@@ -9,6 +9,7 @@ pub mod i18n;
 mod instance;
 mod models;
 mod queue;
+mod record;
 mod setup;
 mod tools;
 mod transcript;
@@ -660,6 +661,11 @@ pub fn run() {
     };
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                queue::meeting::on_close(window, api);
+            }
+        })
         .setup(move |app| {
             if let Some(g) = guard {
                 let handle = app.handle().clone();
@@ -729,6 +735,16 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            queue::meeting::start_recording,
+            queue::meeting::stop_recording,
+            queue::meeting::recording_state,
+            queue::meeting::record_setup,
+            queue::meeting::set_record_sources,
+            queue::meeting::choose_microphone,
+            queue::meeting::recording_notice,
+            queue::meeting::interrupted_recordings,
+            queue::meeting::recover_recording,
+            queue::meeting::open_microphone_privacy,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

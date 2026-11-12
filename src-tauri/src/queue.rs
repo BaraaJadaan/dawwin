@@ -22,11 +22,13 @@ use crate::tools;
 use crate::transcript::{collapse_loops, find_loop, Segment, TranslatedLine, Transcript, Translation};
 use crate::translate::TranslatorProcess;
 
+pub mod meeting;
+
 const MAX_CHUNK_S: f32 = 30.0;
 const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "translating", "saving_audio", "saving_video", "recording"];
 /// Save a translation that is under way at least this often, so closing the app keeps it.
 const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
 
@@ -199,6 +201,8 @@ enum Msg {
     DeleteFile(PathBuf),
     /// Stop the translator, and delete it
     RemoveTool(tools::Tool),
+    /// A meeting being recorded, or one found after a crash (see `meeting`)
+    Record(String),
 }
 
 pub struct Core {
@@ -658,6 +662,7 @@ impl Core {
     }
 
     pub fn cancel(&self, id: &str) {
+        meeting::stop_if_recording(id);
         if let Some(c) = self.cancels.lock().unwrap().get(id) {
             c.store(true, Ordering::SeqCst);
         }
@@ -951,6 +956,14 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     }
                 }
                 core.cancels.lock().unwrap().remove(&id);
+            }
+            Msg::Record(id) => {
+                if let Some(t) = translator.take() {
+                    t.shutdown();
+                }
+                if let Err(err) = meeting::run(&core, &mut engine, &id) {
+                    end_in_error(&core, &id, err, false);
+                }
             }
             Msg::Job(id) => {
                 if let Some(t) = translator.take() {
@@ -1438,6 +1451,7 @@ fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize), got: Rec
         voice: audio::voice_profile(&audio.samples, a, b, 20),
         words: Vec::new(),
         pauses: audio::pauses(&audio.samples, a, b),
+        track: None,
     };
     if !got.stopped && find_loop(&got.text).is_none() {
         return Ok(vec![seg(a, b, got.text, None)]);
@@ -1535,7 +1549,7 @@ mod tests {
     }
 
     fn line(text: &str) -> Segment {
-        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![] }
+        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], ..Default::default() }
     }
 
     fn saved_transcript(name: &str, lines: &[&str]) -> (PathBuf, Transcript) {

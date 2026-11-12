@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dawwin</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="record.css">
 </head>
 <body>
   <header class="topbar">
@@ -70,6 +71,8 @@
           <h1 data-i18n="home.drop"></h1>
           <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
         </div>
+        <!-- recording a meeting (record.js) -->
+        <div id="record-bar" class="record-bar"></div>
         <!-- what happens to what is dropped: four steps, one after the other -->
         <div class="steps" id="steps">
           <section class="step" data-step="sound">
@@ -288,6 +291,7 @@
           </div>
           <p id="t-meta" class="muted small"></p>
           <div id="t-progress" class="t-progress" hidden>
+            <div id="t-rec" class="t-rec" hidden></div>
             <div class="progress"><div class="bar" id="t-bar"></div></div>
             <div class="t-progress-row">
               <span id="t-status" class="small"></span>
@@ -374,6 +378,7 @@
   </div>
 
   <script src="i18n.js"></script>
+  <script src="record.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

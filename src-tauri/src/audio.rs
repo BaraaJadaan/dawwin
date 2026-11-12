@@ -14,6 +14,60 @@ use crate::setup::no_window;
 
 pub const SR: usize = 16_000;
 
+/// The filter that keeps a file's own timeline when its sound becomes samples: sound that starts
+/// after the picture, or has holes, gets silence there, so every time stays the picture's time.
+pub const KEEP_TIMELINE: &str = "aresample=async=1:first_pts=0";
+
+/// A WAV header for 32-bit float mono samples of unknown length, as a stream: Dawwin's own ffmpeg
+/// builds read sound from a pipe only through their WAV reader (they have no raw-sample one).
+fn wav_stream_header(rate: u32) -> Vec<u8> {
+    let mut h = Vec::with_capacity(44);
+    h.extend_from_slice(b"RIFF");
+    h.extend_from_slice(&u32::MAX.to_le_bytes());
+    h.extend_from_slice(b"WAVEfmt ");
+    h.extend_from_slice(&16u32.to_le_bytes());
+    h.extend_from_slice(&3u16.to_le_bytes()); // IEEE float
+    h.extend_from_slice(&1u16.to_le_bytes()); // mono
+    h.extend_from_slice(&rate.to_le_bytes());
+    h.extend_from_slice(&(rate * 4).to_le_bytes());
+    h.extend_from_slice(&4u16.to_le_bytes());
+    h.extend_from_slice(&32u16.to_le_bytes());
+    h.extend_from_slice(b"data");
+    h.extend_from_slice(&u32::MAX.to_le_bytes());
+    h
+}
+
+/// What a child process wrote to stderr, read on a thread of its own so its pipe never fills.
+fn collect_stderr(child: &mut std::process::Child) -> std::thread::JoinHandle<String> {
+    let err = child.stderr.take();
+    std::thread::spawn(move || {
+        let mut s = String::new();
+        if let Some(mut e) = err {
+            let _ = e.read_to_string(&mut s);
+        }
+        s
+    })
+}
+
+/// Run ffmpeg to the end, or until `cancel`: then it is killed at once. Its status and what it said.
+fn run_until(mut cmd: Command, cancel: &AtomicBool) -> std::io::Result<(std::process::ExitStatus, String, bool)> {
+    cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    no_window(&mut cmd);
+    let mut child = cmd.spawn()?;
+    let err = collect_stderr(&mut child);
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok((status, err.join().unwrap_or_default(), false));
+        }
+        if cancel.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let status = child.wait()?;
+            return Ok((status, err.join().unwrap_or_default(), true));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 /// Decode `path` to 16 kHz mono samples. `cancel` stops it early.
 pub fn decode(path: &Path, ffmpeg: Option<&PathBuf>, cancel: &AtomicBool) -> Result<Vec<f32>> {
     if let Some(ff) = ffmpeg {
@@ -31,33 +85,35 @@ pub fn decode(path: &Path, ffmpeg: Option<&PathBuf>, cancel: &AtomicBool) -> Res
 
 fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<f32>> {
     let mut cmd = Command::new(ffmpeg);
+    // the first sound track, as saving takes it, on the file's own timeline
     cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
         .arg(path)
-        .args(["-vn", "-ac", "1", "-ar", "16000", "-f", "f32le", "-"])
+        .args(["-map", "0:a:0", "-vn", "-af", KEEP_TIMELINE, "-ac", "1", "-ar", "16000", "-f", "f32le", "pipe:1"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     no_window(&mut cmd);
     let mut child = cmd.spawn().with_context(|| crate::tr!("could not start ffmpeg"))?;
     let mut out = child.stdout.take().unwrap();
-    let mut err = child.stderr.take().unwrap();
-    let err_thread = std::thread::spawn(move || {
-        let mut s = String::new();
-        let _ = err.read_to_string(&mut s);
-        s
-    });
+    let err_thread = collect_stderr(&mut child);
     let mut bytes = Vec::with_capacity(1 << 24);
     let mut buf = vec![0u8; 1 << 16];
-    loop {
+    let stopped = loop {
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            bail!("cancelled");
+            break Some(anyhow!("cancelled"));
         }
-        let n = out.read(&mut buf)?;
-        if n == 0 {
-            break;
+        match out.read(&mut buf) {
+            Ok(0) => break None,
+            Ok(n) => bytes.extend_from_slice(&buf[..n]),
+            Err(e) => break Some(e.into()),
         }
-        bytes.extend_from_slice(&buf[..n]);
+    };
+    // never wait on a child whose pipe is still open
+    drop(out);
+    if let Some(e) = stopped {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
     }
     let status = child.wait()?;
     let stderr = err_thread.join().unwrap_or_default();
@@ -427,22 +483,23 @@ pub fn save_sound(source: &Path, dest: &Path, spans: Option<&[(usize, usize)]>, 
     };
     let dest = unique_path(&dest.with_extension("m4a"));
     let part = dest.with_extension("part.m4a");
-    let run = |args: &[&str], src: &Path| -> Result<std::process::Output> {
+    let run = |args: &[&str]| -> std::result::Result<(), String> {
         let mut cmd = Command::new(ff);
-        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(src).args(args).arg(&part);
-        cmd.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
-        no_window(&mut cmd);
-        Ok(cmd.output()?)
+        cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(source).args(args).arg(&part);
+        match run_until(cmd, cancel) {
+            Ok((_, _, true)) => Err("cancelled".into()),
+            Ok((status, _, _)) if status.success() => Ok(()),
+            Ok((_, why, _)) => Err(why.trim().to_string()),
+            Err(e) => Err(e.to_string()),
+        }
     };
     let result = match spans {
         None => {
-            // the sound track as it is, else made AAC
-            let copied = run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-c:a", "copy"], source)?;
-            if copied.status.success() {
-                Ok(())
-            } else {
-                let made = run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-c:a", "aac", "-b:a", "128k"], source)?;
-                if made.status.success() { Ok(()) } else { Err(String::from_utf8_lossy(&made.stderr).trim().to_string()) }
+            // the sound track as it is, else made AAC on the file's own timeline
+            match run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-c:a", "copy"]) {
+                Err(why) if why == "cancelled" => Err(why),
+                Ok(()) => Ok(()),
+                Err(_) => run(&["-vn", "-sn", "-dn", "-map", "0:a:0", "-af", KEEP_TIMELINE, "-c:a", "aac", "-b:a", "128k"]),
             }
         }
         Some(spans) => cut_with_ffmpeg(ff, source, &part, spans, cancel),
@@ -458,34 +515,52 @@ pub fn save_sound(source: &Path, dest: &Path, spans: Option<&[(usize, usize)]>, 
 /// One ffmpeg reads the sound at 48 kHz, this keeps the spans, and a second one writes them as AAC.
 fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize)], cancel: &AtomicBool) -> std::result::Result<(), String> {
     use std::io::Write;
-    const RATE: usize = 48_000;
-    let scale = RATE / SR;
+    const RATE: u32 = 48_000;
+    let scale = RATE as usize / SR;
     let mut read = Command::new(ff);
     read.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"]).arg(source);
-    read.args(["-vn", "-sn", "-dn", "-map", "0:a:0", "-ac", "1", "-ar", "48000", "-f", "f32le", "-"]);
-    read.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
+    // the same timeline the spans were found on (see `decode`)
+    read.args(["-vn", "-sn", "-dn", "-map", "0:a:0", "-af", KEEP_TIMELINE, "-ac", "1", "-ar", "48000", "-f", "f32le", "pipe:1"]);
+    read.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     no_window(&mut read);
+    // Dawwin's own builds read stdin only as `pipe:0` (a bare "-" is a protocol they lack), and
+    // only through their WAV reader
     let mut write = Command::new(ff);
-    write.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "f32le", "-ar", "48000", "-ac", "1", "-i", "-"]);
+    write.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "wav", "-i", "pipe:0"]);
     write.args(["-c:a", "aac", "-b:a", "96k"]).arg(dest);
     write.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     no_window(&mut write);
     let mut reader = read.spawn().map_err(|e| e.to_string())?;
-    let mut writer = write.spawn().map_err(|e| e.to_string())?;
+    let read_err = collect_stderr(&mut reader);
+    let mut writer = match write.spawn() {
+        Ok(w) => w,
+        Err(e) => {
+            let _ = reader.kill();
+            drop(reader.stdout.take());
+            let _ = reader.wait();
+            return Err(e.to_string());
+        }
+    };
+    let write_err = collect_stderr(&mut writer);
     let mut input = reader.stdout.take().unwrap();
     let mut output = writer.stdin.take().unwrap();
     let mut buf = vec![0u8; 1 << 16];
     let mut carry: Vec<u8> = Vec::new();
     let mut at = 0usize; // samples read so far, at 48 kHz
     let mut span = 0usize;
-    let failed = loop {
+    let mut failed = output.write_all(&wav_stream_header(RATE)).err().map(|_| "the encoder stopped".to_string());
+    while failed.is_none() {
         if cancel.load(Ordering::Relaxed) {
-            break Some("cancelled".to_string());
+            failed = Some("cancelled".to_string());
+            break;
         }
         let n = match input.read(&mut buf) {
-            Ok(0) => break None,
+            Ok(0) => break,
             Ok(n) => n,
-            Err(e) => break Some(e.to_string()),
+            Err(e) => {
+                failed = Some(e.to_string());
+                break;
+            }
         };
         carry.extend_from_slice(&buf[..n]);
         let whole = carry.len() / 4 * 4;
@@ -501,18 +576,36 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
         }
         carry.drain(..whole);
         if output.write_all(&keep).is_err() {
-            break Some("the encoder stopped".to_string());
+            failed = Some("the encoder stopped".to_string());
         }
-    };
+    }
+    // never wait on a child whose pipe is still open: on any early end the reader is killed and
+    // its pipe let go first, or it waits for ever to write what nobody reads
+    drop(input);
+    if failed.is_some() {
+        let _ = reader.kill();
+    }
+    let read_status = reader.wait().map_err(|e| e.to_string())?;
+    let read_why = read_err.join().unwrap_or_default();
+    if failed.as_deref() == Some("cancelled") {
+        let _ = writer.kill();
+    }
     drop(output);
-    let _ = reader.wait();
-    let done = writer.wait_with_output().map_err(|e| e.to_string())?;
+    let write_status = writer.wait().map_err(|e| e.to_string())?;
+    let write_why = write_err.join().unwrap_or_default();
+    let failed = match failed {
+        // what the encoder said is the better reason
+        Some(why) if why == "the encoder stopped" && !write_why.trim().is_empty() => Some(write_why.trim().to_string()),
+        Some(why) => Some(why),
+        None if !read_status.success() => Some(read_why.trim().to_string()),
+        None if !write_status.success() => Some(write_why.trim().to_string()),
+        None => None,
+    };
     match failed {
         Some(why) => {
             let _ = std::fs::remove_file(dest);
             Err(why)
         }
-        None if !done.status.success() => Err(String::from_utf8_lossy(&done.stderr).trim().to_string()),
         None => Ok(()),
     }
 }
@@ -553,6 +646,7 @@ pub fn write_wav(path: &Path, samples: &[f32]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn chunks_cover_everything_and_respect_max() {
@@ -662,29 +756,109 @@ mod tests {
         assert_eq!(original_time(&spans, 9.0, true), 6.0, "past the end: the end");
     }
 
-    /// With ffmpeg installed: the silences really leave the saved file.
-    #[test]
-    fn the_shortened_sound_is_saved() {
-        let Some(ff) = crate::setup::find_exe("ffmpeg") else { return };
-        let dir = std::env::temp_dir().join(format!("dawwin-sound-{}", std::process::id()));
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dawwin-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let audio = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5), (6.8, 7.8)]);
-        let source = dir.join("talk.wav");
-        write_wav(&source, &audio).unwrap();
+        dir
+    }
+
+    /// With every ffmpeg Dawwin may use: the silences really leave the saved file, and saving
+    /// finishes. Dawwin's own builds read no raw samples, and in 1.3.0 that hung the queue.
+    #[test]
+    fn the_shortened_sound_is_saved_with_every_ffmpeg() {
+        for (name, ff) in crate::setup::test_ffmpegs() {
+            let dir = temp_dir(&format!("sound-{name}"));
+            let audio = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5), (6.8, 7.8)]);
+            let source = dir.join("talk.wav");
+            write_wav(&source, &audio).unwrap();
+            let spans = speech_spans(&audio, 0.7, 0.3);
+            let (src, a, s, f) = (source.clone(), audio.clone(), spans.clone(), ff.clone());
+            let dest = dir.join("talk (without silences).m4a");
+            let short = crate::setup::within(Duration::from_secs(60), &format!("saving with {name}"), move || {
+                save_sound(&src, &dest, Some(&s), &a, Some(&f), &AtomicBool::new(false))
+            })
+            .unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(short.extension().unwrap(), "m4a", "{name}");
+            let back = decode(&short, Some(&ff), &AtomicBool::new(false)).unwrap();
+            let kept = spans.iter().map(|(a, b)| b - a).sum::<usize>() as f32 / SR as f32;
+            let got = back.len() as f32 / SR as f32;
+            assert!((got - kept).abs() < 0.1, "{name}: saved {got} s, kept {kept} s");
+            // the whole sound, again under the same name: a new name
+            let whole = save_sound(&source, &dir.join("talk (without silences).m4a"), None, &audio, Some(&ff), &AtomicBool::new(false)).unwrap();
+            assert!(whole.file_name().unwrap().to_string_lossy().ends_with("(2).m4a"), "{name}: {whole:?}");
+            assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|f| !f.file_name().to_string_lossy().contains(".part")), "{name}: no half file");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+        let dir = temp_dir("sound-none");
+        let audio = speech_at(9.8, &[(1.0, 3.0), (4.5, 6.5)]);
         let spans = speech_spans(&audio, 0.7, 0.3);
-        let stop = AtomicBool::new(false);
-        let short = save_sound(&source, &dir.join("talk (without silences).m4a"), Some(&spans), &audio, Some(&ff), &stop).unwrap();
-        assert_eq!(short.extension().unwrap(), "m4a");
-        let back = decode(&short, Some(&ff), &stop).unwrap();
-        let kept = spans.iter().map(|(a, b)| b - a).sum::<usize>() as f32 / SR as f32;
-        let got = back.len() as f32 / SR as f32;
-        assert!((got - kept).abs() < 0.1, "saved {got} s, kept {kept} s");
-        // the whole sound, again under the same name: a new name
-        let whole = save_sound(&source, &dir.join("talk (without silences).m4a"), None, &audio, Some(&ff), &stop).unwrap();
-        assert!(whole.file_name().unwrap().to_string_lossy().ends_with("(2).m4a"), "{whole:?}");
-        let wav = save_sound(&source, &dir.join("talk.m4a"), Some(&spans), &audio, None, &stop).unwrap();
+        let wav = save_sound(&dir.join("talk.wav"), &dir.join("talk.m4a"), Some(&spans), &audio, None, &AtomicBool::new(false)).unwrap();
         assert_eq!(wav.extension().unwrap(), "wav", "without ffmpeg: a WAV");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stopped while the sound is saved: it ends within a second and leaves no half file. And an
+    /// encoder that cannot write ends in an error, never in a wait.
+    #[test]
+    fn saving_the_sound_stops_at_once_and_never_waits_on_a_dead_encoder() {
+        for (name, ff) in crate::setup::test_ffmpegs() {
+            let dir = temp_dir(&format!("stop-{name}"));
+            // ten minutes, so it is still going when the stop comes
+            let audio = speech_at(600.0, &(0..300).map(|i| (i as f32 * 2.0, i as f32 * 2.0 + 1.2)).collect::<Vec<_>>());
+            let source = dir.join("long.wav");
+            write_wav(&source, &audio).unwrap();
+            let spans = speech_spans(&audio, 0.7, 0.3);
+            for whole in [false, true] {
+                let stop = std::sync::Arc::new(AtomicBool::new(false));
+                let (src, a, s, f, st, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), stop.clone(), dir.clone());
+                let worker = std::thread::spawn(move || {
+                    // the whole sound of a WAV is encoded, not copied: it takes long enough to stop
+                    save_sound(&src, &d.join("long.m4a"), (!whole).then_some(&s[..]), &a, Some(&f), &st)
+                });
+                std::thread::sleep(Duration::from_millis(300));
+                stop.store(true, Ordering::SeqCst);
+                let stopped_at = std::time::Instant::now();
+                let result = crate::setup::within(Duration::from_secs(20), &format!("stopping {name}"), move || worker.join().unwrap());
+                // within a second, as stopping should feel
+                assert!(stopped_at.elapsed() < Duration::from_secs(1), "{name}: took {:?} to stop", stopped_at.elapsed());
+                if result.is_err() {
+                    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
+                    assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");
+                }
+            }
+            // a folder that is not there: the encoder cannot start writing
+            let (src, a, s, f, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), dir.join("not there"));
+            let r = crate::setup::within(Duration::from_secs(60), &format!("a dead encoder with {name}"), move || {
+                save_sound(&src, &d.join("x.m4a"), Some(&s), &a, Some(&f), &AtomicBool::new(false))
+            });
+            assert!(r.is_err(), "{name}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A video whose sound starts 2 s after its picture: the samples keep the picture's timeline,
+    /// so every time in the transcript and the subtitles is the picture's time.
+    #[test]
+    fn sound_that_starts_after_the_picture_keeps_its_place() {
+        let dir = temp_dir("late");
+        for name in ["late.mkv", "late.mp4"] {
+            // 6 s of picture, a tone from 2 s to 6 s
+            let made = crate::setup::test_sample(&dir, name, &[
+                "-f", "lavfi", "-i", "testsrc=size=160x90:rate=10:duration=6",
+                "-itsoffset", "2", "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+                "-map", "0:v", "-map", "1:a", "-c:v", "mpeg4", "-c:a", "aac",
+            ]);
+            let Some(video) = made else { return };
+            for (ff_name, ff) in crate::setup::test_ffmpegs() {
+                let s = decode(&video, Some(&ff), &AtomicBool::new(false)).unwrap();
+                let secs = s.len() as f32 / SR as f32;
+                assert!((secs - 6.0).abs() < 0.15, "{ff_name}, {name}: {secs} s, not the video's 6");
+                let loudest = |a: f32, b: f32| s[(a * SR as f32) as usize..(b * SR as f32) as usize].iter().fold(0f32, |m, x| m.max(x.abs()));
+                assert!(loudest(0.0, 1.8) < 0.01 && loudest(2.2, 3.0) > 0.1, "{ff_name}, {name}: the tone is not where it is in the video");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// An MKV video (OBS, films) is read by the built-in decoder, without ffmpeg. ffmpeg only makes the file.

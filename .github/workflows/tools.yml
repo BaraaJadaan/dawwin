@@ -121,6 +121,14 @@ jobs:
           $env:DAWWIN_TEST_TOOLS_OUT = "$PWD\unpacked"
           cargo test --manifest-path src-tauri/Cargo.toml --locked real_tools_unpack_and_start -- --ignored --nocapture
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: The app's own tests on these builds (sound saved with and without silences, a late sound track, tracks beside PGS and ASS, a ProRes MOV, burning in)
+        shell: pwsh
+        run: |
+          # a full ffmpeg only makes the sample files; what is tested is the pair just unpacked
+          choco install ffmpeg -y --no-progress | Select-Object -Last 1
+          $env:DAWWIN_TEST_TOOLS_DIR = "$PWD\unpacked\tools"
+          cargo test --manifest-path src-tauri/Cargo.toml --locked -- audio:: video::
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Read the sound, save it, add subtitle tracks
         shell: pwsh
         run: |

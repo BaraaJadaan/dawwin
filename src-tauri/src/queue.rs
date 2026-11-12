@@ -88,6 +88,8 @@ pub struct FolderScan {
     pub added: Vec<String>,
     /// Recordings with a finished transcript, or already in the queue
     pub already: usize,
+    /// Recordings left out because only ffmpeg reads them and there is none
+    pub needs_ffmpeg: usize,
     /// Looking through the folder was stopped: nothing was added
     pub stopped: bool,
 }
@@ -140,6 +142,9 @@ pub struct ModelView {
     /// How much of a download that is not finished is there
     pub partial: u64,
     pub active: bool,
+    /// The file in use is the user's own copy outside the download folder: it is only forgotten,
+    /// never deleted
+    pub outside: bool,
 }
 
 /// One of the tools the app can download (see `tools`).
@@ -247,6 +252,9 @@ pub fn now_ms() -> u64 {
 impl Core {
     pub fn start(app: AppHandle) -> Result<Arc<Core>> {
         let paths = Paths::new()?;
+        // this is the one Dawwin of the data folder (see `instance`): what is left is nobody's
+        paths.clear_leftover_audio();
+        tools::refresh_dates(&paths);
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
         crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));
@@ -283,7 +291,7 @@ impl Core {
         // a model download that was running when the app closed carries on
         let resume = core.settings.lock().unwrap().resume_model.clone();
         if let Some(id) = resume {
-            core.download_model(&id);
+            let _ = core.download_model(&id);
         }
         Ok(core)
     }
@@ -350,8 +358,11 @@ impl Core {
             .iter()
             .map(|v| {
                 let dest = dir.join(v.file);
-                let active = families[v.family.key()].variant == v.id;
+                let in_use = &families[v.family.key()];
+                let active = in_use.variant == v.id;
+                let outside = active && !self.in_dawwins_folders(&in_use.path, &dir, v.file);
                 ModelView {
+                    outside,
                     id: v.id.into(),
                     family: v.family.key().into(),
                     file: v.file.into(),
@@ -445,7 +456,18 @@ impl Core {
         }
         let v = models::variant(id).ok_or_else(|| anyhow!("unknown model {id}"))?;
         let dir = self.settings.lock().unwrap().download_dir(&self.paths);
-        let file = dir.join(v.file);
+        let in_use = setup::model_status(&self.paths, &self.settings.lock().unwrap(), v.family);
+        let mut file = dir.join(v.file);
+        if in_use.found && in_use.variant == v.id {
+            if !self.in_dawwins_folders(&in_use.path, &dir, v.file) {
+                // the user's own copy elsewhere: stop using it, and leave the file alone
+                self.change_settings(|s| s.choose_model(v.family, None))?;
+                self.send(Msg::Restart);
+                return Ok(());
+            }
+            // the one in use, in the download folder or the one Dawwin used before it changed
+            file = PathBuf::from(&in_use.path);
+        }
         models::discard(&file);
         if file.exists() {
             let in_use = self.settings.lock().unwrap().chosen_model(v.family).as_ref() == Some(&file);
@@ -457,6 +479,12 @@ impl Core {
             self.refresh_setup();
         }
         Ok(())
+    }
+
+    /// Whether a model file is one Dawwin downloaded: in the download folder, or the default one.
+    fn in_dawwins_folders(&self, path: &str, download_dir: &Path, file: &str) -> bool {
+        let key = folder::same_file_key(path);
+        [download_dir.join(file), self.paths.default_model_dir().join(file)].iter().any(|p| folder::same_file_key(&p.display().to_string()) == key)
     }
 
     /// Change where downloads are saved. What is there of a paused download comes along, if it can.
@@ -495,11 +523,12 @@ impl Core {
     /// Start or continue downloading a model or a tool. It stays wanted until it finishes or is
     /// paused, so closing the app does not stop it for good. The first translation model brings
     /// the translator along, before it.
-    pub fn download_model(self: &Arc<Self>, id: &str) {
+    /// False when it did not start: one download at a time, and another one runs.
+    pub fn download_model(self: &Arc<Self>, id: &str) -> bool {
         let tool = tools::tool(id);
         let variant = models::variant(id);
         if (tool.is_none() && variant.is_none()) || self.snapshot().setup.download.active {
-            return;
+            return false;
         }
         let dest = variant.map(|v| self.settings.lock().unwrap().download_dir(&self.paths).join(v.file));
         let translator_first = variant.is_some_and(|v| v.family == Family::Translator) && setup::translator_exe(&self.paths).is_none();
@@ -593,6 +622,7 @@ impl Core {
                 core.send(Msg::Restart);
             }
         });
+        true
     }
 
     /// Pause: what arrived stays on the disk, and nothing resumes by itself.
@@ -632,7 +662,7 @@ impl Core {
         self.update(|s| s.scans.retain(|x| x.id != scan_id));
         self.cancels.lock().unwrap().remove(&scan_id);
         if cancel.load(Ordering::SeqCst) {
-            return FolderScan { added: Vec::new(), already: 0, stopped: true };
+            return FolderScan { added: Vec::new(), already: 0, needs_ffmpeg: 0, stopped: true };
         }
 
         let history = history::list(&self.paths.history_dir());
@@ -647,15 +677,19 @@ impl Core {
             .collect();
         let known = folder::known(history.iter().filter(|h| !h.partial).map(|h| h.source_path.clone()));
         let formats = self.settings.lock().unwrap().folder_formats();
+        let have_ffmpeg = setup::ffmpeg(&self.paths).is_some();
         let mut todo = Vec::new();
-        let mut already = 0;
+        let (mut already, mut needs_ffmpeg) = (0, 0);
         for rec in found {
             let path = rec.display().to_string();
             let key = folder::same_file_key(&path);
             if written.contains(&key) || folder::is_own_output(&rec, &known) {
                 continue;
             }
-            if active.contains(&key) {
+            if !have_ffmpeg && folder::needs_ffmpeg(&rec) && !finished.contains_key(&key) {
+                // offered ffmpeg instead; a run after its download picks these up
+                needs_ffmpeg += 1;
+            } else if active.contains(&key) {
                 already += 1;
             } else if let Some(id) = finished.get(&key) {
                 already += 1;
@@ -671,7 +705,7 @@ impl Core {
                 todo.push(path);
             }
         }
-        FolderScan { added: self.add_jobs(todo, language, steps, true), already, stopped: false }
+        FolderScan { added: self.add_jobs(todo, language, steps, true), already, needs_ffmpeg, stopped: false }
     }
 
     /// Note in a transcript the files Dawwin wrote for it.
@@ -952,6 +986,10 @@ impl Core {
 /// The engine, started if needed. With a `model` it is one that holds that model: a process holds
 /// one, and quitting it gives all the memory back.
 fn ensure_engine<'a>(core: &Arc<Core>, engine: &'a mut Option<EngineProcess>, model: Option<&str>) -> Result<&'a mut EngineProcess> {
+    // an engine that died since its last job is not used
+    if engine.as_mut().is_some_and(|e| !e.alive()) {
+        *engine = None;
+    }
     if let (Some(e), Some(m)) = (engine.as_mut(), model) {
         if !e.use_model(m) {
             engine.take().unwrap().shutdown();
@@ -1088,12 +1126,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         core.send(Msg::Translate(id));
                         continue;
                     }
-                    let msg = format!("{err:#}");
-                    core.update_job(&id, |j| {
-                        j.status = "failed".into();
-                        j.error = Some(msg);
-                        j.eta_s = None;
-                    });
+                    end_in_error(&core, &id, err, cancelled);
                     if let Some(t) = translator.as_mut() {
                         if !t.alive() {
                             translator = None;
@@ -1124,12 +1157,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         core.send(Msg::Job(id));
                         continue;
                     }
-                    let msg = format!("{err:#}");
-                    core.update_job(&id, |j| {
-                        j.status = "failed".into();
-                        j.error = Some(msg);
-                        j.eta_s = None;
-                    });
+                    end_in_error(&core, &id, err, cancelled);
                     // a dead engine is restarted for the next job
                     if let Some(e) = engine.as_mut() {
                         if !e.alive() {
@@ -1141,6 +1169,8 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 core.cancels.lock().unwrap().remove(&id);
             }
         }
+        // idle from the end of the last job, not its start: a long job's model stays loaded after it
+        last_used = Instant::now();
     }
     if let Some(e) = engine.take() {
         e.shutdown();
@@ -1148,6 +1178,21 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     if let Some(t) = translator.take() {
         t.shutdown();
     }
+}
+
+/// A job that ended in an error: stopped, when the user had pressed stop (whatever the error says:
+/// a stop while ffmpeg reads or the translator loads ends in one), else failed with the reason.
+fn end_in_error(core: &Arc<Core>, id: &str, err: anyhow::Error, cancelled: bool) {
+    let msg = format!("{err:#}");
+    core.update_job(id, |j| {
+        if cancelled {
+            j.status = "cancelled".into();
+        } else {
+            j.status = "failed".into();
+            j.error = Some(msg);
+        }
+        j.eta_s = None;
+    });
 }
 
 /// The translator, started with this model if it is not running with it already, and loaded.
@@ -1402,7 +1447,7 @@ fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::tran
         return Ok(dest);
     }
     let ffmpeg = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Download it in Settings.")))?;
-    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks));
+    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks, crate::video::output_ext(&ffmpeg, &source)));
     crate::video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &core.paths.cache_dir())?;
     Ok(dest)
 }
@@ -1594,6 +1639,10 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     if let Some(e) = failure {
         core.update_job(id, |j| j.saved = saved);
         return Err(e);
+    }
+    // nothing the model could read: said on the job, which would otherwise end without a transcript
+    if !saved && !cancelled {
+        return Err(anyhow!(crate::tr!("There is no speech in this recording.")));
     }
     if job.folder && saved && !cancelled {
         let formats = core.settings.lock().unwrap().folder_formats();

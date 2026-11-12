@@ -92,12 +92,12 @@ impl Paths {
         for d in [p.cache_dir(), p.logs_dir(), p.history_dir()] {
             std::fs::create_dir_all(&d).with_context(|| format!("cannot create {}", d.display()))?;
         }
-        p.clear_leftover_audio();
         Ok(p)
     }
 
-    /// Audio handed to the engine is deleted after each job; a crash can leave some behind.
-    fn clear_leftover_audio(&self) {
+    /// Audio handed to the engine is deleted after each job; a crash can leave some behind. Only
+    /// the one Dawwin of this data folder may do this (see `instance`): the files may be in use.
+    pub fn clear_leftover_audio(&self) {
         for entry in std::fs::read_dir(self.cache_dir()).into_iter().flatten().flatten() {
             if entry.path().extension().is_some_and(|x| x == "f32") {
                 let _ = std::fs::remove_file(entry.path());
@@ -313,6 +313,49 @@ pub fn find_exe(name: &str) -> Option<PathBuf> {
         dirs.push(l.join("Microsoft").join("WinGet").join("Links"));
     }
     dirs.into_iter().map(|d| d.join(&file)).find(|p| p.is_file())
+}
+
+/// For tests: every ffmpeg a feature must work with. Dawwin's own builds first, from
+/// DAWWIN_TEST_TOOLS_DIR (a folder laid out like the app's tools folder: `ffmpeg-audio\ffmpeg.exe`,
+/// `ffmpeg-video\ffmpeg.exe`), then a full ffmpeg on the PATH. Its own builds lack much of what a
+/// full one has, and bugs that only they show have shipped before.
+#[cfg(test)]
+pub fn test_ffmpegs() -> Vec<(&'static str, PathBuf)> {
+    let mut out = Vec::new();
+    if let Some(dir) = std::env::var_os("DAWWIN_TEST_TOOLS_DIR").map(PathBuf::from) {
+        for t in [tools::FFMPEG_AUDIO, tools::FFMPEG_VIDEO] {
+            let exe = dir.join(t.folder).join(t.exe);
+            if exe.is_file() {
+                out.push((t.id, exe));
+            }
+        }
+        assert!(!out.is_empty(), "DAWWIN_TEST_TOOLS_DIR holds no ffmpeg-audio or ffmpeg-video");
+    }
+    if let Some(ff) = find_exe("ffmpeg") {
+        out.push(("installed", ff));
+    }
+    out
+}
+
+/// For tests: a sample file of the kind people bring, made into `dir` with a full ffmpeg on the
+/// PATH and `args` (its inputs and options, before the output). None without a full ffmpeg.
+#[cfg(test)]
+pub fn test_sample(dir: &Path, name: &str, args: &[&str]) -> Option<PathBuf> {
+    let maker = find_exe("ffmpeg").filter(|f| ffmpeg_lists(f, "-filters").iter().any(|x| x == "sine"))?;
+    let out = dir.join(name);
+    let made = Command::new(maker).args(["-nostdin", "-loglevel", "error", "-y"]).args(args).arg(&out).status();
+    made.is_ok_and(|s| s.success()).then_some(out)
+}
+
+/// For tests: run `f` on a thread of its own, and fail when it takes longer than `limit`: a test
+/// of something that once hung must not hang itself.
+#[cfg(test)]
+pub fn within<T: Send + 'static>(limit: std::time::Duration, what: &str, f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    rx.recv_timeout(limit).unwrap_or_else(|_| panic!("{what} did not finish within {limit:?}"))
 }
 
 // ---------------------------------------------------------------- model

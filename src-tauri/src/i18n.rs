@@ -76,7 +76,8 @@ static AR: &[(&str, &str)] = &[
     ("Word document", "مستند Word"),
     ("Where should the model be saved?", "أين يُحفظ النموذج؟"),
     ("Choose the model file (.gguf)", "اختر ملف النموذج (.gguf)"),
-    ("Dawwin · Speech to text", "دَوِّن · تحويل الكلام إلى نص"),
+    ("Dawwin", "دَوِّن"),
+    ("The server keeps sending a different file. Try again later, or download it by hand.", "يرسل الخادم ملفًا مختلفًا في كل مرة. حاول لاحقًا، أو نزّله يدويًا."),
     // audio
     ("ffmpeg could not read the file: {}", "تعذّر على ffmpeg قراءة الملف: {}"),
     ("unsupported format ({}); install ffmpeg for this file type", "صيغة غير مدعومة ({})؛ ثبّت ffmpeg لهذا النوع من الملفات"),

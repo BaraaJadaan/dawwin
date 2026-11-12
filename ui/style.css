@@ -89,7 +89,6 @@ button { font: inherit; color: inherit; }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand img { border-radius: 6px; }
 .brand .name { font-weight: 650; font-size: 15px; }
-.brand .tag { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chips { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .chip {
   display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px;
@@ -469,7 +468,6 @@ mark.current { background: var(--mark-current); color: #1c1203; }
 .toast button { border: 0; background: transparent; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; }
 
 @media (max-width: 1000px) {
-  .brand .tag { display: none; }
   .sidebar { width: 236px; }
   .segments, .t-head { padding-left: 18px; padding-right: 18px; }
 }

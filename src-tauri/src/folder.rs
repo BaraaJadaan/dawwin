@@ -8,8 +8,23 @@ use anyhow::Result;
 
 use crate::transcript::{self, Transcript};
 
-pub const MEDIA_EXT: &[&str] = &["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
+/// Every recording Dawwin takes, by extension: the one list the file dialog, drops on the window
+/// and folder runs all use (the interface asks for it).
+pub const MEDIA_EXT: &[&str] = &[
+    "m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "aiff", "aif", "caf", "w64", "ac3",
+    "webm", "mp4", "m4v", "mov", "mkv", "3gp", "avi", "wmv", "flv", "ts", "mts", "m2ts", "mpg", "mpeg",
+];
+/// Of those, what only ffmpeg reads: the built-in decoder knows none of these.
+pub const NEEDS_FFMPEG: &[&str] = &[
+    "opus", "wma", "amr", "aiff", "aif", "caf", "w64", "ac3", "avi", "wmv", "flv", "ts", "mts", "m2ts", "mpg", "mpeg",
+];
 pub const FORMATS: &[&str] = &["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
+
+/// A recording only ffmpeg reads.
+pub fn needs_ffmpeg(path: &Path) -> bool {
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+    NEEDS_FFMPEG.contains(&ext.as_str())
+}
 
 fn is_media(path: &Path) -> bool {
     let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
@@ -173,11 +188,11 @@ mod tests {
         std::fs::create_dir_all(dir.join("a/b")).unwrap();
         std::fs::create_dir_all(dir.join(".hidden")).unwrap();
         std::fs::create_dir_all(dir.join("$RECYCLE.BIN")).unwrap();
-        for f in ["one.MP3", "a/two.m4a", "a/b/three.mp4", "a/notes.txt", ".hidden/no.mp3", "$RECYCLE.BIN/no.wav"] {
+        for f in ["one.MP3", "a/two.m4a", "a/b/three.mp4", "a/notes.txt", ".hidden/no.mp3", "$RECYCLE.BIN/no.wav", "a/film.AVI", "a/b/camera.m2ts"] {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
         let names: Vec<String> = recordings_in(&dir).iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(names, ["three.mp4", "two.m4a", "one.MP3"]);
+        assert_eq!(names, ["camera.m2ts", "three.mp4", "film.AVI", "two.m4a", "one.MP3"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -240,6 +255,15 @@ mod tests {
         assert!(got.len() < 600, "{}", got.len());
         assert!(has_recordings_at_top(&dir));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_video_is_a_recording_and_what_needs_ffmpeg_is_known() {
+        for ext in crate::video::VIDEO_EXT.iter().chain(NEEDS_FFMPEG) {
+            assert!(MEDIA_EXT.contains(ext), "{ext} is not taken");
+        }
+        assert!(needs_ffmpeg(Path::new("film.MPG")) && needs_ffmpeg(Path::new("voice.opus")));
+        assert!(!needs_ffmpeg(Path::new("talk.m4a")) && !needs_ffmpeg(Path::new("clip.mkv")), "the built-in decoder reads these");
     }
 
     #[test]

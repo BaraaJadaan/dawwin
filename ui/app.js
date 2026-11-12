@@ -9,7 +9,9 @@ const fileSrc = (p) => T.core.convertFileSrc(p);
 const $ = (id) => document.getElementById(id);
 const ACTIVE = new Set(["queued", "decoding", "loading", "transcribing", "timing", "translating", "saving_audio", "saving_video"]);
 const FOLDER_FORMATS = ["txt", "md", "docx", "srt", "vtt", "csv", "tsv", "json"];
-const MEDIA_EXT = ["m4a", "mp3", "wav", "ogg", "opus", "oga", "flac", "aac", "wma", "amr", "webm", "mp4", "m4v", "mov", "mkv", "3gp"];
+// what Dawwin takes, by extension: the backend's list (media_formats), filled at start
+let MEDIA = { all: ["m4a", "mp3", "wav", "ogg", "opus", "flac", "mp4", "mov", "mkv", "webm"], video: ["mp4", "mov", "mkv", "webm"], needs_ffmpeg: [] };
+const extOf = (p) => (p.split(/[\\/]/).pop().split(".").pop() || "").toLowerCase();
 
 const store = {
   get(k, d) { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
@@ -173,6 +175,18 @@ function stepsForJob() {
   };
 }
 
+/** What dropping a file does with the steps that are ticked: "Drop to transcribe and translate". */
+function dropText() {
+  const s = stepsForJob(), parts = [];
+  if (s.save_audio) parts.push(t(s.remove_silence ? "drop.soundShort" : "drop.sound"));
+  if (s.transcribe) parts.push(t("drop.transcribe"));
+  if (s.translate) parts.push(t("drop.translate"));
+  if (s.video) parts.push(t(s.burn ? "drop.burn" : "drop.video"));
+  if (!parts.length) return t("drop.overlay");
+  const what = parts.length === 1 ? parts[0] : parts.slice(0, -1).join(t("drop.comma")) + t("drop.and") + parts[parts.length - 1];
+  return t("drop.lead", { what });
+}
+
 /** The language to translate into: the one chosen, else English, or Arabic for recordings in English. */
 function stepTarget() {
   const t = S.steps.target;
@@ -243,14 +257,15 @@ function stepsReady(steps) {
 }
 
 /** A tool that what was asked for needs is not here: say so, with its download a press away. False. */
-function offerTool(id, message) {
+function offerTool(id, message, vars = {}, lead = "") {
   const tool = S.snap.setup.tools.find((x) => x.id === id);
   const name = t(`tool.${id}.long`);
-  toast(t(message, { size: sizeText(tool?.size || 0) }), {
+  // one toast at a time: what else there is to say comes first, in the same one
+  toast(lead + t(message, { ...vars, size: sizeText(tool?.size || 0) }), {
     label: t("dl.download"),
-    run: () => {
-      invoke("download_model", { id });
-      toast(t("toast.toolDownloading", { name }));
+    run: async () => {
+      // one download at a time: another one running means this one did not start
+      toast(t((await invoke("download_model", { id })) ? "toast.toolDownloading" : "toast.downloadBusy", { name }));
     },
   });
   return false;
@@ -744,14 +759,16 @@ function renderRows(box, st, models) {
     get.textContent = t(going ? "dl.pause" : m.partial > 0 ? "dl.resume" : "dl.download");
     const del = row.querySelector(".del");
     del.hidden = going || !(m.on_disk || m.partial > 0);
-    if (armedDelete !== m.id) del.textContent = t("set.modelDelete");
+    del.dataset.forget = m.outside ? "1" : "";
+    if (armedDelete !== m.id) del.textContent = t(m.outside ? "set.modelForget" : "set.modelDelete");
   }
 }
 
 /** Downloading a model can take hours: deleting one takes two presses. */
 let armedDelete = null;
 async function deleteModel(id, button) {
-  if (armedDelete !== id) {
+  // only forgetting a file of the user's own: nothing to confirm
+  if (armedDelete !== id && !button.dataset.forget) {
     armedDelete = id;
     button.textContent = t("set.modelDeleteSure");
     setTimeout(() => { if (armedDelete === id) { armedDelete = null; if (S.view === "settings") renderSettings(); } }, 4000);
@@ -787,7 +804,9 @@ async function checkUpdates(quiet) {
 async function importModel(errorEl) {
   errorEl.hidden = true;
   try {
-    onState(await invoke("import_model"));
+    const snap = await invoke("import_model");
+    if (!snap) return;
+    onState(snap);
     toast(t(spokenModel(S.snap.setup) ? "toast.modelReady" : "toast.modelFound"));
     if (S.view === "settings") renderSettings();
   } catch (err) {
@@ -1308,10 +1327,12 @@ function stopAudio() {
 async function setupAudio(live) {
   const c = S.current;
   const player = $("player"), a = $("audio"), note = $("player-note");
-  if (live) { player.hidden = true; return; }
+  const silence = () => { a.pause(); a.removeAttribute("src"); a.load(); S.audioFor = null; };
+  // a running job has no player: nothing may play on behind it
+  if (live) { silence(); player.hidden = true; return; }
   if (S.audioFor === c.id && a.src) { player.hidden = false; return; }
+  silence();
   S.audioFor = c.id;
-  a.removeAttribute("src");
   a.dataset.fallback = "";
   note.textContent = "";
   let p = null;
@@ -1614,8 +1635,11 @@ $("audio").addEventListener("timeupdate", () => {
 // ------------------------------------------------------------------ actions
 
 async function addFiles(paths) {
-  const isMedia = (p) => MEDIA_EXT.includes((p.split(".").pop() || "").toLowerCase());
-  const ok = paths.filter(isMedia);
+  const isMedia = (p) => MEDIA.all.includes(extOf(p));
+  let ok = paths.filter(isMedia);
+  // what only ffmpeg reads, when there is none: ffmpeg is offered instead
+  const unreadable = S.snap.setup.ffmpeg ? [] : ok.filter((p) => MEDIA.needs_ffmpeg.includes(extOf(p)));
+  ok = ok.filter((p) => !unreadable.includes(p));
   let skipped = 0;
   for (const p of paths.filter((p) => !isMedia(p))) {
     // a dropped folder is recordings to transcribe, unless it is the model or the model is what is being asked for
@@ -1639,7 +1663,9 @@ async function addFiles(paths) {
       } else skipped++;
     }
   }
-  if (skipped) toast(t("toast.skipped", { n: skipped }));
+  const lead = skipped ? t("toast.skipped", { n: skipped }) + " " : "";
+  if (unreadable.length) offerTool("ffmpeg-audio", "toast.needFfmpegRead", { ext: [...new Set(unreadable.map(extOf))].join(", ") }, lead);
+  else if (skipped) toast(lead.trim());
   if (!ok.length) return;
   const steps = stepsForJob();
   if (!stepsReady(steps)) return;
@@ -1656,12 +1682,13 @@ async function chooseFiles() {
 async function addFolder(path) {
   const steps = stepsForJob();
   if (!stepsReady(steps)) return;
-  const { added, already, stopped } = await invoke("enqueue_folder", { path, language: S.spoken, steps });
+  const { added, already, needs_ffmpeg, stopped } = await invoke("enqueue_folder", { path, language: S.spoken, steps });
   onState(await invoke("get_state"));
   if (stopped) return;
   const parts = [];
   if (added.length) parts.push(t("toast.folderAdded", { n: added.length }));
   if (already) parts.push(t("toast.folderAlready", { n: already }));
+  if (needs_ffmpeg) return offerTool("ffmpeg-audio", "toast.folderNeedsFfmpeg", {}, parts.length ? parts.join(" ") + " " : "");
   toast(parts.join(" ") || t("toast.folderEmpty"));
 }
 
@@ -1676,13 +1703,11 @@ function exportView() {
   return tr && tr.lines.some((l) => l.text) ? { view: S.scope, language: S.shown } : { view: "original", language: null };
 }
 
-const VIDEO_EXT = ["mp4", "m4v", "mov", "mkv", "webm", "avi", "wmv", "flv", "3gp", "ts", "mts", "m2ts", "mpg", "mpeg"];
-
 function paintExportScope() {
   const box = $("export-scope");
   // subtitles into the video it was made from, when it is a video
   const ext = (S.current?.source_path || "").split(".").pop().toLowerCase();
-  $("export-video").hidden = $("export-burn").hidden = !VIDEO_EXT.includes(ext);
+  $("export-video").hidden = $("export-burn").hidden = !MEDIA.video.includes(ext);
   box.hidden = !exportView().language;
   for (const b of box.querySelectorAll("button")) {
     const on = b.dataset.scope === S.scope;
@@ -1971,9 +1996,9 @@ function wire() {
     catch (err) { toast(String(err)); }
   };
   $("btn-download-dir").onclick = async () => onState(await invoke("choose_download_dir"));
-  $("btn-download").onclick = () => {
-    if (S.snap.setup.download.active) invoke("stop_download");
-    else invoke("download_model", { id: $("btn-download").dataset.model });
+  $("btn-download").onclick = async () => {
+    if (speechDownload(S.snap.setup).active) invoke("stop_download");
+    else if (!(await invoke("download_model", { id: $("btn-download").dataset.model }))) toast(t("toast.downloadBusy"));
   };
   $("btn-download-back").onclick = () => { S.setupStep = "choose"; renderSetup(); };
   $("btn-choose-go").onclick = async () => {
@@ -1984,8 +2009,8 @@ function wire() {
       catch (err) { $("import-error").textContent = String(err); $("import-error").hidden = false; }
       return;
     }
+    if (!(await invoke("download_model", { id: m.id }))) { toast(t("toast.downloadBusy")); return; }
     S.setupStep = "download";
-    invoke("download_model", { id: m.id });
     renderSetup();
   };
   $("btn-download-hand").onclick = () => {
@@ -2068,16 +2093,16 @@ function wire() {
   });
   title.addEventListener("blur", renameCurrent);
 
+  // by the key's place, not its letter: on the Arabic layout the F key types "ب"
   document.addEventListener("keydown", (ev) => {
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "f" && S.view === "transcript") {
-      ev.preventDefault(); $("search").focus(); $("search").select();
-    }
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "o") { ev.preventDefault(); chooseFiles(); }
-    if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "b") { ev.preventDefault(); $("btn-side").click(); }
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    if (ev.code === "KeyF" && S.view === "transcript") { ev.preventDefault(); $("search").focus(); $("search").select(); }
+    if (ev.code === "KeyO") { ev.preventDefault(); chooseFiles(); }
+    if (ev.code === "KeyB") { ev.preventDefault(); $("btn-side").click(); }
   });
 
   const overlay = $("drop-overlay");
-  listen("tauri://drag-enter", () => { overlay.hidden = false; });
+  listen("tauri://drag-enter", () => { overlay.querySelector(".drop-card").textContent = dropText(); overlay.hidden = false; });
   listen("tauri://drag-leave", () => { overlay.hidden = true; });
   listen("tauri://drag-drop", (e) => { overlay.hidden = true; addFiles(e.payload.paths || []); });
 
@@ -2086,7 +2111,8 @@ function wire() {
   listen("translated", (e) => onTranslated(e.payload));
   listen("history-changed", () => loadHistory());
   listen("transcript-started", (e) => {
-    if (S.current?.id === e.payload) openTranscript(e.payload);
+    // on screen only: someone who moved to another page stays there
+    if (S.current?.id === e.payload && S.view === "transcript") openTranscript(e.payload);
   });
 }
 
@@ -2148,6 +2174,7 @@ async function init() {
   applyI18n();
   S.languages = new Map((await invoke("spoken_languages")).map((l) => [l.code, l]));
   S.targets = new Map((await invoke("translation_targets")).map((l) => [l.code, l]));
+  try { MEDIA = await invoke("media_formats"); } catch { /* the list above */ }
   // the first time: the language of this Windows, when that is one more than Arabic and English
   const windows = (navigator.language || "").split("-")[0].toLowerCase();
   if (store.get("lang", null) === null && windows !== "en" && S.languages.has(windows)) S.spoken = windows;

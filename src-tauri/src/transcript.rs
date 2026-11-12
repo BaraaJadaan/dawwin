@@ -268,8 +268,18 @@ pub fn to_md(t: &Transcript, stamps: bool) -> String {
     out
 }
 
+/// Whether a text reads right to left: its first letter of a strong direction is Arabic or Hebrew.
+fn reads_right_to_left(text: &str) -> bool {
+    text.chars()
+        .find(|c| c.is_alphabetic())
+        .is_some_and(|c| matches!(c, '\u{0590}'..='\u{08FF}' | '\u{FB1D}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}'))
+}
+
 /// With the names in subtitles asked for (see `speakers::names_in_srt`), a subtitle where the
-/// speaker changes starts with the name: "Sami: …".
+/// speaker changes starts with the name: "Sami: …". Before a right-to-left line, a right-to-left
+/// mark comes first and after the colon: players (and libass, burning in) take the line's direction
+/// from its first letter, and "Sami" would lay the Arabic out from the left, its question mark and
+/// full stop on the wrong side.
 fn srt(t: &Transcript, cues: Vec<crate::captions::Cue>) -> String {
     let named = crate::speakers::names_in_srt() && t.has_speakers();
     let mut out = String::new();
@@ -278,7 +288,8 @@ fn srt(t: &Transcript, cues: Vec<crate::captions::Cue>) -> String {
         let mut text = c.text();
         if named {
             if let Some(x) = c.speaker.filter(|x| Some(*x) != last) {
-                text = format!("{}: {text}", t.speaker_name(x));
+                let rlm = if reads_right_to_left(&text) { "\u{200F}" } else { "" };
+                text = format!("{rlm}{}:{rlm} {text}", t.speaker_name(x));
             }
             last = c.speaker.or(last);
         }
@@ -804,8 +815,12 @@ mod tests {
         assert!(vtt.contains("\n<v Sami>طيب، نبدأ") && vtt.contains("\n<v Sami>أول نقطة"), "WebVTT's voice tag on each of the speaker's: {vtt}");
         crate::speakers::set_subtitle_names(true, false);
         let srt = to_srt(&t);
-        assert_eq!(srt.matches("Sami: ").count(), 1, "only where the speaker changes: {srt}");
-        assert!(srt.contains("\nSami: طيب، نبدأ"), "{srt}");
+        assert_eq!(srt.matches("Sami:").count(), 1, "only where the speaker changes: {srt}");
+        // an Arabic line keeps its direction behind a Latin name: marks before it and after the colon
+        assert!(srt.contains("\n\u{200F}Sami:\u{200F} طيب، نبدأ"), "{srt}");
+        let mut en = spoken_by_two();
+        en.segments[0].text = "Okay, shall we start?".into();
+        assert!(to_srt(&en).contains("\nSami: Okay, shall we start?"), "no marks before an English line");
         assert!(!to_vtt(&t).contains("<v "));
         crate::speakers::set_subtitle_names(false, true);
     }

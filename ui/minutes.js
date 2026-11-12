@@ -147,11 +147,18 @@ const Minutes = {
   scope: store.get("minutesScope", "alone"),
   armed: false,
   language: "",                          // the language picked for the next run ("": the transcript's)
+  stale: false,                          // not drawn again while a line was typed in
 };
 
 /** The minutes job of the transcript on screen, while it is in the list. */
 function minutesJob(id = S.current?.id) {
   return S.snap?.queue.find((j) => j.kind === "minutes" && j.transcript === id);
+}
+
+/** A field of the minutes is being typed in: nothing may draw the panel again under it. */
+function minutesEditing() {
+  const a = document.activeElement;
+  return !!a && a.isContentEditable && !!$("minutes")?.contains(a);
 }
 
 function minutesModels() {
@@ -201,7 +208,8 @@ function showMinutesTab(tab) {
 
 // ------------------------------------------------------------------ the panel
 
-function renderMinutes() {
+/** The Minutes tab. `force`: drawn even under a line being typed in (its items were numbered anew). */
+function renderMinutes(force = false) {
   const cur = S.current, panel = $("minutes"), tabs = $("t-tabs");
   if (!cur || !panel) return;
   const on = Minutes.tab === "minutes";
@@ -217,6 +225,12 @@ function renderMinutes() {
   document.querySelector("#view-transcript .t-head .toolbar").hidden = show;
   panel.hidden = !show;
   if (!show) return;
+  // a line being typed in is never drawn over: the panel is drawn when the typing ends
+  if (!force && minutesEditing()) {
+    Minutes.stale = true;
+    return;
+  }
+  Minutes.stale = false;
   const m = cur.minutes?.written_ms ? cur.minutes : null;
   const job = minutesJob();
   const running = job && ACTIVE.has(job.status);
@@ -236,7 +250,7 @@ function renderMinutes() {
     panel.append(p, privateLine(null));
     return;
   }
-  panel.append(minutesBody(m), privateLine(m));
+  panel.append(minutesBody(m, running), privateLine(m));
 }
 
 /** Write / write again, the language, and the export menu. */
@@ -374,7 +388,8 @@ function privateLine(m) {
 
 // ------------------------------------------------------------------ the minutes themselves
 
-function minutesBody(m) {
+/** The minutes, every line of them editable, unless a run is under way: it replaces them when it ends. */
+function minutesBody(m, running) {
   const cur = S.current;
   const body = document.createElement("div");
   body.className = "minutes-body";
@@ -406,16 +421,24 @@ function minutesBody(m) {
     el.className = "minutes-text " + cls;
     el.dir = rtl ? "rtl" : "ltr";
     el.lang = m.language;
-    el.contentEditable = "plaintext-only";
+    el.contentEditable = running ? "false" : "plaintext-only";
     el.spellcheck = false;
     el.textContent = text;
+    let saved = text;
     el.addEventListener("keydown", (ev) => {
       if (ev.key === "Enter" && !ev.shiftKey && !cls.includes("summary")) { ev.preventDefault(); el.blur(); }
-      if (ev.key === "Escape") { el.textContent = text; el.blur(); }
+      if (ev.key === "Escape") { el.textContent = saved; el.blur(); }
     });
-    el.addEventListener("blur", () => {
+    el.addEventListener("blur", async () => {
       const now = el.textContent.replace(/\s+/g, " ").trim();
-      if (now !== text.trim()) save(now);
+      if (now === saved.trim()) {
+        // the focus lands on its next place after this event: then the panel catches up, unless that is a line too
+        setTimeout(() => { if (Minutes.stale && !minutesEditing()) renderMinutes(); });
+        return;
+      }
+      saved = now;
+      // still typing in another field: the panel stayed as it is, so this line shows its mark itself
+      if ((await save(now)) === "kept") el.closest(".minutes-item")?.classList.add("edited");
     });
     return el;
   };
@@ -466,16 +489,25 @@ function minutesBody(m) {
   return body;
 }
 
+/** Save a change. The panel is drawn again, unless the user is typing in another of its fields and
+ *  no item came or went: then it is left as it is ("kept"), so that what they type stays. */
 async function saveMinutes(change) {
   const cur = S.current;
-  const next = JSON.parse(JSON.stringify(cur.minutes));
+  const before = cur.minutes;
+  const next = JSON.parse(JSON.stringify(before));
   change(next);
   try {
     cur.minutes = await invoke("edit_minutes", { id: cur.id, minutes: next });
   } catch (err) {
     toast(t("min.saveFailed", { err }));
+    if (minutesEditing()) return "failed";
   }
-  renderMinutes();
+  if (S.current !== cur) return "drawn";
+  const same = ["decisions", "actions", "topics", "open_questions"].every((k) => cur.minutes?.[k]?.length === before?.[k]?.length);
+  if (minutesEditing() && same) return "kept";
+  // an item went (an emptied line): the lines are numbered anew, so the panel is drawn now
+  renderMinutes(!same);
+  return "drawn";
 }
 
 /** Show the lines an item came from, on the Transcript tab. */
@@ -579,15 +611,17 @@ async function exportMinutes(fmt) {
     else if (now && ACTIVE.has(now.status)) {
       const box = $("minutes").querySelector(".minutes-progress");
       if (box) box.replaceWith(minutesProgress(now));
-      else renderMinutes();
-    } else if (
-      prev?.setup.download.active ||
-      snap.setup.download.active ||
-      !!prev?.setup.families.minutes?.found !== !!snap.setup.families.minutes?.found ||
-      // the GPU found: the offer says what fits
-      (!snap.setup.families.minutes?.found && (prev?.engine.device !== snap.engine.device || prev?.engine.vram_total_gb !== snap.engine.vram_total_gb))
-    )
-      renderMinutes();
+      else {
+        // a run started from elsewhere while a line was being corrected: that line is saved first
+        if (minutesEditing()) document.activeElement.blur();
+        renderMinutes();
+      }
+    } else if (!!prev?.setup.families.minutes?.found !== !!snap.setup.families.minutes?.found) renderMinutes();
+    else if ($("minutes").querySelector(".minutes-offer")) {
+      // the offer shows the downloads and what fits this computer: drawn again when they change
+      const shown = (x) => JSON.stringify([x?.setup.download, x?.engine.device, x?.engine.vram_total_gb]);
+      if (shown(prev) !== shown(snap)) renderMinutes();
+    }
   };
 }
 

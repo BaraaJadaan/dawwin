@@ -35,9 +35,12 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 
 pub fn check() -> Result<UpdateInfo> {
     let mut cmd = Command::new("curl.exe");
+    let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
+    // through the same proxy as the downloads
+    cmd.args(crate::net::curl_args(&url));
     cmd.args(["-sS", "-L", "-m", "30", "--retry", "2", "-w", "\n%{http_code}"])
         .args(["-H", "Accept: application/vnd.github+json", "-H", "User-Agent: Dawwin"])
-        .arg(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .arg(&url)
         .stdin(Stdio::null());
     no_window(&mut cmd);
     let out = cmd.output()?;

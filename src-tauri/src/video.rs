@@ -417,6 +417,10 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
     let part = dest.with_extension("part.mp4");
     let mut why = String::new();
     for encoder in encoders {
+        // stopped already: start nothing that would then have to be killed
+        if cancel.load(Ordering::Relaxed) {
+            bail!("cancelled");
+        }
         let mut cmd = Command::new(ffmpeg);
         cmd.args(burn_arguments(video, subtitles, encoder, &p, &part, look, clip)).current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         no_window(&mut cmd);
@@ -427,37 +431,42 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
             let _ = std::io::Read::read_to_string(&mut err, &mut s);
             s
         });
-        let mut moved = false;
-        let mut cancelled = false;
-        for line in std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap())).map_while(|l| l.ok()) {
-            if cancel.load(Ordering::Relaxed) {
-                cancelled = true;
-                let _ = child.kill();
-                break;
-            }
-            // the encoder works once a picture is out: the sound can move on before it fails to
-            // start (a picture enlarged for sharp text takes a moment to reach it)
-            if line.strip_prefix("frame=").and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|f| f > 0) {
-                moved = true;
-            }
-            if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
-                if us > 0.0 && p.duration_s > 0.0 {
-                    on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
+        let progress = child.stdout.take().unwrap();
+        let child = std::sync::Mutex::new(child);
+        // frames the encoder has written: ffmpeg may report a time before the encoder even opens
+        let mut frames = 0u64;
+        crate::setup::killing_on_stop(&[&child], cancel, || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(progress)).map_while(|l| l.ok()) {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if let Some(n) = line.strip_prefix("frame=").and_then(|v| v.trim().parse::<u64>().ok()) {
+                    frames = frames.max(n);
+                }
+                if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
+                    if us > 0.0 && p.duration_s > 0.0 {
+                        on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
+                    }
                 }
             }
+        });
+        let mut child = child.into_inner().unwrap_or_else(|e| e.into_inner());
+        if cancel.load(Ordering::Relaxed) {
+            crate::setup::kill_tree(&mut child);
+            let _ = child.wait();
+            // its stderr is not waited for: what it started may hold it open
+            crate::setup::remove_when_free(&part);
+            bail!("cancelled");
         }
         let status = child.wait()?;
         let stderr = err_thread.join().unwrap_or_default();
-        if cancelled || cancel.load(Ordering::Relaxed) {
-            let _ = std::fs::remove_file(&part);
-            bail!("cancelled");
-        }
+        let moved = frames > 0;
         if status.success() {
             std::fs::rename(&part, dest)?;
             on_progress(1.0);
             return Ok(());
         }
-        let _ = std::fs::remove_file(&part);
+        crate::setup::remove_when_free(&part);
         why = stderr.trim().to_string();
         // an encoder that could not even start (no such chip, an old driver): the next one
         if moved {

@@ -150,6 +150,10 @@ pub fn split_line(t: &mut Transcript, i: usize, k: usize, at: usize) {
     }
     a.words = s.words.iter().filter(|w| (w.0 as usize) < at).copied().collect();
     b.words = s.words.iter().filter(|w| (w.0 as usize) >= rest_from).map(|w| (w.0 - rest_from as u32, w.1)).collect();
+    // what the timing pass heard, a stretch between two pauses at a time: the split is at a pause,
+    // so each half keeps its own stretches, and stays timed
+    a.heard = s.heard.iter().filter(|h| h.1 <= p[1] + 0.05).cloned().collect();
+    b.heard = s.heard.iter().filter(|h| h.0 >= p[2] - 0.05).cloned().collect();
     for tr in t.translations.iter_mut() {
         if let Some(line) = tr.lines.get(i).cloned() {
             let current = !line.text.trim().is_empty() && line.from == s.text;
@@ -438,6 +442,7 @@ mod tests {
         let mut s = line(10.0, 20.0, "one two three, four five six", vec![[0.2, 11.0, 11.3], [0.5, 14.8, 15.4], [0.8, 18.0, 18.3]]);
         s.voice = vec![10.5, 12.0, 13.5, 14.8, 15.4, 16.5, 17.0, 18.0, 18.3, 19.0, 19.5];
         s.words = vec![(0, 10.5), (4, 11.3), (8, 12.0), (15, 15.4), (20, 16.5), (25, 18.3)];
+        s.heard = vec![(10.5, 11.0, "one".into()), (11.3, 14.8, "two three".into()), (15.4, 18.0, "four five".into()), (18.3, 19.5, "six".into())];
         s.flag = Some("repeat".into());
         let mut t = transcript(vec![s]);
         give_speakers(&mut t, &[turn(10.0, 15.0, 1), turn(15.2, 20.0, 2)]);
@@ -451,6 +456,8 @@ mod tests {
         assert!(a.voice.iter().all(|v| *v <= 14.8) && b.voice.iter().all(|v| *v >= 15.4), "{:?} {:?}", a.voice, b.voice);
         assert_eq!(a.words, [(0, 10.5), (4, 11.3), (8, 12.0)]);
         assert_eq!(b.words, [(0, 15.4), (5, 16.5), (10, 18.3)], "offsets into its own text");
+        assert_eq!(a.heard.len(), 2, "the stretches heard before the pause: {:?}", a.heard);
+        assert_eq!(b.heard.iter().map(|h| h.2.as_str()).collect::<Vec<_>>(), ["four five", "six"]);
         assert_eq!(b.flag.as_deref(), Some("repeat"));
     }
 

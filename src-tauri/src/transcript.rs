@@ -28,6 +28,10 @@ pub struct Segment {
     /// Who says it: one of the transcript's `speakers`, when they were told apart
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub speaker: Option<u32>,
+    /// What the timing pass heard in each stretch of the line between two pauses: (speech starts,
+    /// speech ends, rough text). Only used to place the words in time (see `timing`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub heard: Vec<(f32, f32, String)>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -47,6 +51,17 @@ pub struct Transcript {
     /// cancelled before the end
     #[serde(default)]
     pub partial: bool,
+    /// The words of its lines were placed in time by the timing pass (`timing`), for subtitles
+    /// and Follow words. Transcripts made without subtitles, and those of older versions, are not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub timed: bool,
+    /// The files Dawwin wrote for it (the sound, the video with subtitles, exports): a folder run
+    /// never takes them for recordings to transcribe
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outputs: Vec<String>,
+    /// `outputs` is kept for it (from 1.3.2 on): what is not in it is not Dawwin's
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outputs_listed: bool,
     pub segments: Vec<Segment>,
     /// The transcript in other languages, line by line
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -114,8 +129,17 @@ impl Transcript {
         t.model = tr.model.clone();
         t.translations.clear();
         for (i, s) in t.segments.iter_mut().enumerate() {
+            // with the words of the line timed, a pause is known to fall after that share of its
+            // text: the translation places it after the same share of its own
+            let len = s.text.chars().count().max(1) as f32;
+            for p in s.pauses.iter_mut() {
+                if let Some(w) = s.words.iter().find(|w| w.1 >= p[2] - 0.05) {
+                    p[0] = w.0 as f32 / len;
+                }
+            }
             s.text = tr.text(i).to_string();
             s.words.clear();
+            s.heard.clear();
             s.flag = None;
         }
         Some(t)
@@ -304,12 +328,42 @@ fn vtt(t: &Transcript, cues: Vec<crate::captions::Cue>) -> String {
     let mut out = String::from("WEBVTT\n\n");
     for c in cues {
         let voice = match c.speaker.filter(|_| named) {
-            Some(x) => format!("<v {}>", t.speaker_name(x).replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")),
+            Some(x) => format!("<v {}>", vtt_text(&t.speaker_name(x))),
             None => String::new(),
         };
-        out.push_str(&format!("{} --> {}\n{voice}{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), c.text()));
+        out.push_str(&format!("{} --> {}\n{voice}{}\n\n", ts_ms(c.start, '.'), ts_ms(c.end, '.'), vtt_text(&c.text())));
     }
     out
+}
+
+/// Text as WebVTT shows it: `<` would start a tag, `&` a character name, and `-->` a timing line.
+fn vtt_text(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+}
+
+/// A cell a spreadsheet keeps as text: one that starts with `=`, `+`, `-` or `@` would be taken
+/// for a formula, so it gets an apostrophe in front, which spreadsheets take to mean "text".
+fn text_cell(text: &str) -> String {
+    if text.starts_with(['=', '+', '-', '@']) {
+        format!("'{text}")
+    } else {
+        text.to_string()
+    }
+}
+
+/// A quoted CSV cell.
+fn csv_cell(text: &str) -> String {
+    format!("\"{}\"", text_cell(text.trim()).replace('"', "\"\""))
+}
+
+/// A TSV cell, on one line; one that starts with a quote is quoted, or it would be read as quoted.
+fn tsv_cell(text: &str) -> String {
+    let flat = text_cell(&text.split_whitespace().collect::<Vec<_>>().join(" "));
+    if flat.starts_with('"') {
+        format!("\"{}\"", flat.replace('"', "\"\""))
+    } else {
+        flat
+    }
 }
 /// Subtitles timed and broken as professional ones are: see `captions`.
 pub fn to_srt(t: &Transcript) -> String {
@@ -366,20 +420,18 @@ pub fn export_view(t: &Transcript, ext: &str, stamps: bool, view: &View) -> Resu
         "vtt" => vtt(t, crate::captions::bilingual_cues(t, tr)).into_bytes(),
         "docx" => to_docx_with(t, Some((&tr.language, &second)), stamps)?,
         "csv" => {
-            let q = |s: &str| s.trim().replace('"', "\"\"");
             let mut out = String::from(if named { "\u{feff}start,end,speaker,text,translation\r\n" } else { "\u{feff}start,end,text,translation\r\n" });
             for (i, s) in lines() {
-                let who = if named { format!("\"{}\",", q(&speaker_cell(t, s))) } else { String::new() };
-                out.push_str(&format!("{},{},{who}\"{}\",\"{}\"\r\n", secs(s.start), secs(s.end), q(&s.text), q(&second[i])));
+                let who = if named { format!("{},", csv_cell(&speaker_cell(t, s))) } else { String::new() };
+                out.push_str(&format!("{},{},{who}{},{}\r\n", secs(s.start), secs(s.end), csv_cell(&s.text), csv_cell(&second[i])));
             }
             out.into_bytes()
         }
         "tsv" => {
-            let flat = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
             let mut out = String::from(if named { "start\tend\tspeaker\ttext\ttranslation\n" } else { "start\tend\ttext\ttranslation\n" });
             for (i, s) in lines() {
-                let who = if named { format!("{}\t", flat(&speaker_cell(t, s))) } else { String::new() };
-                out.push_str(&format!("{}\t{}\t{who}{}\t{}\n", secs(s.start), secs(s.end), flat(&s.text), flat(&second[i])));
+                let who = if named { format!("{}\t", tsv_cell(&speaker_cell(t, s))) } else { String::new() };
+                out.push_str(&format!("{}\t{}\t{who}{}\t{}\n", secs(s.start), secs(s.end), tsv_cell(&s.text), tsv_cell(&second[i])));
             }
             out.into_bytes()
         }
@@ -425,20 +477,18 @@ pub fn to_csv(t: &Transcript) -> String {
     let named = t.has_speakers();
     let mut out = String::from(if named { "\u{feff}start,end,speaker,text\r\n" } else { "\u{feff}start,end,text\r\n" });
     for s in visible(t) {
-        let text = s.text.trim().replace('"', "\"\"");
-        let who = if named { format!("\"{}\",", speaker_cell(t, s).replace('"', "\"\"")) } else { String::new() };
-        out.push_str(&format!("{},{},{who}\"{}\"\r\n", secs(s.start), secs(s.end), text));
+        let who = if named { format!("{},", csv_cell(&speaker_cell(t, s))) } else { String::new() };
+        out.push_str(&format!("{},{},{who}{}\r\n", secs(s.start), secs(s.end), csv_cell(&s.text)));
     }
     out
 }
 
 pub fn to_tsv(t: &Transcript) -> String {
     let named = t.has_speakers();
-    let flat = |x: &str| x.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut out = String::from(if named { "start\tend\tspeaker\ttext\n" } else { "start\tend\ttext\n" });
     for s in visible(t) {
-        let who = if named { format!("{}\t", flat(&speaker_cell(t, s))) } else { String::new() };
-        out.push_str(&format!("{}\t{}\t{who}{}\n", secs(s.start), secs(s.end), flat(&s.text)));
+        let who = if named { format!("{}\t", tsv_cell(&speaker_cell(t, s))) } else { String::new() };
+        out.push_str(&format!("{}\t{}\t{who}{}\n", secs(s.start), secs(s.end), tsv_cell(&s.text)));
     }
     out
 }
@@ -642,9 +692,12 @@ mod tests {
             device: "cuda".into(),
             model: "m".into(),
             partial: false,
+            timed: false,
+            outputs: vec![],
+            outputs_listed: false,
             segments: vec![
-                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None },
-                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], speaker: None },
+                Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![], speaker: None },
+                Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![], speaker: None },
             ],
             translations: vec![],
             speakers: Vec::new(),
@@ -693,14 +746,14 @@ mod tests {
         assert_eq!(both("txt"), "يعني مثلا بيجيك اخر شيء ثلاث زرار\nI mean, at the end you get three buttons\n\n");
         let srt = both("srt");
         assert!(srt.starts_with("1\n00:00:00,000 --> "), "{srt}");
-        // every subtitle: a part of the line, and under it the part of the translation that goes with it
+        // every subtitle: a part of the line; the translation, one sentence, whole under the one
+        // where the middle of it is said, never cut into pieces
         let cues: Vec<&str> = srt.split("\n\n").filter(|c| !c.is_empty()).collect();
         assert!(cues.len() >= 2, "22 seconds do not fit in one subtitle: {srt}");
-        for c in &cues {
-            assert_eq!(c.lines().count(), 4, "number, time, the line's part, the translation's: {c}");
-        }
-        assert!(cues[0].contains("يعني") && cues[0].contains("I mean"), "{srt}");
-        assert!(cues.last().unwrap().contains("زرار") && cues.last().unwrap().ends_with("buttons"), "{srt}");
+        assert!(cues[0].contains("يعني"), "{srt}");
+        assert!(cues.last().unwrap().contains("زرار"), "{srt}");
+        assert_eq!(cues.iter().filter(|c| c.contains("I mean, at the end you get three buttons")).count(), 1, "{srt}");
+        assert_eq!(cues.iter().filter(|c| c.contains("I mean")).count(), 1, "{srt}");
         assert_eq!(both("csv").lines().nth(1).unwrap(), "0.000,22.000,\"يعني مثلا بيجيك اخر شيء ثلاث زرار\",\"I mean, at the end you get three buttons\"");
         let json: serde_json::Value = serde_json::from_str(&both("json")).unwrap();
         assert_eq!(json["segments"][0]["translation"], "I mean, at the end you get three buttons");
@@ -736,6 +789,23 @@ mod tests {
         assert!(csv.starts_with("\u{feff}start,end,text\r\n"));
         assert_eq!(csv.lines().nth(1).unwrap(), "0.000,22.000,\"قال \"\"نعم\"\", ثم مشى\"");
         assert_eq!(csv.lines().count(), 2);
+    }
+
+    #[test]
+    fn what_players_and_spreadsheets_would_read_as_something_else_comes_out_as_text() {
+        let mut t = sample();
+        t.segments[0].text = "=SUM(A1:A9) <b>bold</b> --> & more".into();
+        let vtt = to_vtt(&t);
+        assert!(vtt.contains("&lt;b&gt;bold&lt;/b&gt;") && vtt.contains("--&gt; &amp; more"), "{vtt}");
+        assert!(vtt.lines().filter(|l| l.contains("-->")).all(|l| l.contains(" --> ") && l.starts_with("00:")), "only timing lines have an arrow: {vtt}");
+        assert_eq!(to_csv(&t).lines().nth(1).unwrap(), "0.000,22.000,\"'=SUM(A1:A9) <b>bold</b> --> & more\"");
+        for lead in ["+", "-", "@"] {
+            t.segments[0].text = format!("{lead}1 تمام");
+            assert!(to_csv(&t).lines().nth(1).unwrap().ends_with(&format!("\"'{lead}1 تمام\"")));
+            assert!(to_tsv(&t).ends_with(&format!("\t'{lead}1 تمام\n")));
+        }
+        t.segments[0].text = "\"نعم\" قالها".into();
+        assert_eq!(to_tsv(&t).lines().nth(1).unwrap(), "0.000\t22.000\t\"\"\"نعم\"\" قالها\"");
     }
 
     #[test]

@@ -71,6 +71,8 @@
           <h1 data-i18n="home.drop"></h1>
           <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
         </div>
+        <!-- the common jobs by name: each ticks its steps below -->
+        <div class="jobs" id="jobs" role="group" data-i18n-aria="jobs.label"></div>
         <!-- what happens to what is dropped: four steps, one after the other -->
         <div class="steps" id="steps">
           <section class="step" data-step="sound">
@@ -81,8 +83,8 @@
           <section class="step" data-step="text">
             <h2><span class="step-no">2</span><span data-i18n="steps.text"></span></h2>
             <label class="toggle"><input type="checkbox" id="step-transcribe"> <span data-i18n="steps.transcribe"></span></label>
-            <select id="spoken" class="input select" data-i18n-aria="home.spoken" data-i18n-title="tip.spoken"></select>
-            <label class="toggle" data-i18n-title="tip.speakers"><input type="checkbox" id="step-speakers"> <span data-i18n="steps.speakers"></span></label>
+            <select id="spoken" class="input select" data-i18n-aria="home.spoken"></select>
+            <label class="toggle"><input type="checkbox" id="step-speakers"> <span data-i18n="steps.speakers"></span></label>
           </section>
           <section class="step" data-step="translate">
             <h2><span class="step-no">3</span><span data-i18n="steps.translation"></span></h2>
@@ -140,8 +142,10 @@
               <div class="progress" id="download-progress"><div class="bar" id="download-bar"></div></div>
               <p class="small" id="download-text"></p>
             </div>
+            <p id="download-why" class="error small" dir="auto" hidden></p>
             <div class="row">
               <button class="btn btn-primary" id="btn-download"></button>
+              <button class="btn btn-ghost" id="btn-download-hand" data-i18n="choose.manual" hidden></button>
               <button class="btn btn-ghost" id="btn-download-back" data-i18n="dl.other"></button>
             </div>
             <p id="download-error" class="error" dir="auto" hidden></p>
@@ -226,7 +230,7 @@
           </section>
 
           <section class="card group">
-            <h2 data-i18n="set.words" data-i18n-title="tip.words"></h2>
+            <h2 data-i18n="set.words"></h2>
             <div class="word-list" id="set-words-list"></div>
             <div class="setting actions">
               <button class="btn btn-sm" id="words-add" data-i18n="words.add"></button>
@@ -236,16 +240,16 @@
           </section>
 
           <section class="card group">
-            <h2 data-i18n="set.look" data-i18n-title="tip.look"></h2>
+            <h2 data-i18n="set.look"></h2>
             <div class="look-grid">
               <label><span data-i18n="look.size"></span><select id="look-size" class="input select"></select></label>
-              <label data-i18n-title="tip.font"><span data-i18n="look.font"></span><select id="look-font" class="input select"></select></label>
+              <label><span data-i18n="look.font"></span><select id="look-font" class="input select"></select></label>
               <label><span data-i18n="look.color"></span><select id="look-color" class="input select"></select></label>
               <label><span data-i18n="look.back"></span><select id="look-back" class="input select"></select></label>
               <label><span data-i18n="look.place"></span><select id="look-place" class="input select"></select></label>
             </div>
             <div class="setting">
-              <label class="toggle" data-i18n-title="tip.sharp"><input type="checkbox" id="look-sharp"> <span data-i18n="look.sharp"></span></label>
+              <label class="toggle"><input type="checkbox" id="look-sharp"> <span data-i18n="look.sharp"></span></label>
             </div>
             <div class="setting">
               <label class="toggle"><input type="checkbox" id="set-names-srt"> <span data-i18n="set.namesSrt"></span></label>
@@ -274,6 +278,21 @@
                 <h3 data-i18n="set.folderFiles"></h3>
                 <div class="format-list" id="set-folder-formats"></div>
               </div>
+            </div>
+          </section>
+
+          <section class="card group" id="set-saving">
+            <h2 data-i18n="set.saving"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="set.saveWhere"></h3>
+                <p class="muted small" id="set-save-dir" dir="ltr" hidden></p>
+              </div>
+              <select id="set-save-where" class="input select select-sm">
+                <option value="next" data-i18n="set.saveNext"></option>
+                <option value="own" data-i18n="set.saveOwn"></option>
+              </select>
+              <button class="btn btn-sm btn-ghost" id="set-save-change" data-i18n="setup.change" hidden></button>
             </div>
           </section>
 
@@ -338,11 +357,12 @@
               <button class="icon-btn" id="search-prev" data-i18n-aria="t.prev">‹</button>
               <button class="icon-btn" id="search-next" data-i18n-aria="t.next">›</button>
             </div>
-            <select id="search-who" class="input select select-sm" data-i18n-aria="who.searchWho" data-i18n-title="who.searchWho" hidden></select>
+            <select id="search-who" class="input select select-sm" data-i18n-aria="who.searchWho" hidden></select>
             <label class="toggle small"><input type="checkbox" id="follow"> <span data-i18n="t.follow"></span></label>
             <label class="toggle small"><input type="checkbox" id="stamps" checked> <span data-i18n="t.stamps"></span></label>
             <select id="t-lang" class="input select select-sm" data-i18n-aria="t.translation"></select>
             <button class="btn btn-sm" id="btn-retranslate" data-i18n="t.updateTranslation" hidden></button>
+            <button class="btn btn-sm" id="btn-fix-timing" data-i18n="t.fixTiming" hidden></button>
             <button class="btn btn-sm" id="btn-copy" data-i18n="t.copyAll"></button>
             <div class="menu-wrap">
               <button class="btn btn-sm btn-primary" id="btn-export" aria-haspopup="true" data-i18n="t.export"></button>
@@ -416,5 +436,7 @@
   <script src="i18n.js"></script>
   <script src="who.js"></script>
   <script src="app.js"></script>
+  <script src="jobs.js"></script>
+  <script src="tips.js"></script>
 </body>
 </html>

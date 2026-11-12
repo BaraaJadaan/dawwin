@@ -11,7 +11,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
@@ -63,8 +63,8 @@ pub trait Engine: Send {
     fn forget(&mut self, audio_id: &str);
     /// The words the model should hear right, for a model that takes them (Whisper).
     fn set_vocabulary(&mut self, _words: Vec<String>) {}
-    /// Who speaks when in all of `audio`, by the speaker model `model`; `stop` ends it early.
-    fn speakers(&mut self, _model: &str, _audio: &Audio, _stop: &AtomicBool) -> Result<Vec<crate::speakers::Turn>> {
+    /// Who speaks when in all of `audio`, by the speaker model `model`; the stop it `watch`es ends it early.
+    fn speakers(&mut self, _model: &str, _audio: &Audio) -> Result<Vec<crate::speakers::Turn>> {
         bail!("this engine cannot tell speakers apart")
     }
     /// Which language the sample ranges of `audio` are in, by the language model `model`: every
@@ -72,9 +72,17 @@ pub trait Engine: Send {
     fn language(&mut self, _model: &str, _audio: &Audio, _ranges: &[(usize, usize)]) -> Result<Vec<Heard>> {
         bail!("this engine cannot tell languages apart")
     }
+    /// The stop of the job it works for: waiting for the engine ends soon after it is set.
+    fn watch(&mut self, _stop: Option<Arc<AtomicBool>>) {}
 }
 
-/// The request was stopped (see `Engine::speakers`).
+/// Loading a model takes a minute at most, even from a slow disk on the CPU. One that takes this
+/// long is stuck (a graphics driver that hangs): the engine is ended, and the job goes on the CPU.
+const LOAD_LIMIT: Duration = Duration::from_secs(5 * 60);
+/// After a stop, how long the engine has to answer before it is ended.
+const STOP_GRACE: Duration = Duration::from_secs(3);
+
+/// The job was stopped while the engine worked for it. Not the engine's fault, nor the GPU's.
 #[derive(Debug)]
 pub struct Stopped;
 impl std::fmt::Display for Stopped {
@@ -83,6 +91,16 @@ impl std::fmt::Display for Stopped {
     }
 }
 impl std::error::Error for Stopped {}
+
+/// The time limit on loading, which a debug build can shorten for its tests.
+fn load_limit() -> Duration {
+    if cfg!(debug_assertions) {
+        if let Some(s) = std::env::var("DAWWIN_TEST_LOAD_LIMIT_S").ok().and_then(|v| v.parse().ok()) {
+            return Duration::from_secs(s);
+        }
+    }
+    LOAD_LIMIT
+}
 
 /// "Try again with a smaller batch."
 #[derive(Debug)]
@@ -139,6 +157,8 @@ pub struct EngineProcess {
     cache_dir: PathBuf,
     raw_files: Vec<(String, PathBuf)>,
     vocabulary: Vec<String>,
+    /// The stop of the job it works for
+    stop: Option<Arc<AtomicBool>>,
 }
 
 impl EngineProcess {
@@ -194,6 +214,7 @@ impl EngineProcess {
             cache_dir: paths.cache_dir(),
             raw_files: Vec::new(),
             vocabulary: Vec::new(),
+            stop: None,
         })
     }
 
@@ -229,20 +250,29 @@ impl EngineProcess {
         true
     }
 
-    fn wait(&mut self, id: u64) -> Result<Value> {
-        self.wait_or_stop(id, None)
-    }
-
-    /// Wait for the reply to `id`; when `stop` is set meanwhile, ask the engine to stop it.
-    fn wait_or_stop(&mut self, id: u64, stop: Option<&AtomicBool>) -> Result<Value> {
-        let mut asked = false;
+    /// The reply to request `id`. Within `limit`, if one is given: past it the engine is ended. A
+    /// stop of the job is waited out for a moment, then the engine is ended too, so that a stuck
+    /// driver never keeps a job, and the jobs after it, waiting.
+    fn wait(&mut self, id: u64, limit: Option<Duration>) -> Result<Value> {
+        let started = Instant::now();
+        let mut stopped_at: Option<Instant> = None;
         loop {
-            if !asked && stop.is_some_and(|s| s.load(Ordering::SeqCst)) {
-                asked = true;
-                self.send(json!({"cmd": "stop", "target": id}))?;
+            if stopped_at.is_none() && self.stop.as_ref().is_some_and(|s| s.load(Ordering::SeqCst)) {
+                stopped_at = Some(Instant::now());
+                // a request that can stop (finding the speakers) ends at once, and says so; an
+                // engine that does not answer is ended after the grace
+                let _ = self.send(json!({"cmd": "stop", "target": id}));
             }
-            let tick = if stop.is_some() { Duration::from_millis(200) } else { Duration::from_secs(1) };
-            match self.replies.recv_timeout(tick) {
+            if stopped_at.is_some_and(|t| t.elapsed() >= STOP_GRACE) {
+                self.end();
+                return Err(Stopped.into());
+            }
+            if limit.is_some_and(|l| started.elapsed() >= l) {
+                self.end();
+                let minutes = limit.unwrap().as_secs().div_ceil(60);
+                return Err(EngineFailed(crate::tr!("The model did not load in {} minutes: the graphics driver may be stuck.", minutes)).into());
+            }
+            match self.replies.recv_timeout(Duration::from_millis(200)) {
                 Ok(v) => {
                     if v.get("id").and_then(|i| i.as_u64()) != Some(id) {
                         continue; // a reply to a request nobody waits for any more
@@ -265,10 +295,17 @@ impl EngineProcess {
         }
     }
 
+    /// End the engine, and wait until Windows says it has: a moment after `kill` the process can
+    /// still look alive, and the next job would talk to a dead one and take that for the GPU's fault.
+    fn end(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
     /// What this computer has to run on.
     pub fn probe(&mut self) -> Result<Value> {
         let id = self.send(json!({"cmd": "probe"}))?;
-        self.wait(id)
+        self.wait(id, Some(load_limit()))
     }
 
     fn raw_file(&mut self, audio: &Audio) -> Result<PathBuf> {
@@ -319,7 +356,7 @@ impl Engine for EngineProcess {
         }
         self.start_loading()?;
         let id = self.pending_load.take().unwrap();
-        let v = self.wait(id)?;
+        let v = self.wait(id, Some(load_limit()))?;
         let info = EngineInfo {
             device: v.get("device").and_then(|d| d.as_str()).unwrap_or("cpu").to_string(),
             gpu: v.get("gpu").and_then(|d| d.as_str()).map(String::from),
@@ -341,7 +378,7 @@ impl Engine for EngineProcess {
             "language": language,
             "vocabulary": self.vocabulary,
         }))?;
-        let v = self.wait(id)?;
+        let v = self.wait(id, None)?;
         let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
         let stopped = v.get("stopped").and_then(|t| t.as_array());
         if texts.len() != ranges.len() {
@@ -355,6 +392,10 @@ impl Engine for EngineProcess {
                 stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
             })
             .collect())
+    }
+
+    fn watch(&mut self, stop: Option<Arc<AtomicBool>>) {
+        self.stop = stop;
     }
 
     fn forget(&mut self, audio_id: &str) {
@@ -372,10 +413,10 @@ impl Engine for EngineProcess {
         self.vocabulary = words;
     }
 
-    fn speakers(&mut self, model: &str, audio: &Audio, stop: &AtomicBool) -> Result<Vec<crate::speakers::Turn>> {
+    fn speakers(&mut self, model: &str, audio: &Audio) -> Result<Vec<crate::speakers::Turn>> {
         let path = self.raw_file(audio)?;
         let id = self.send(json!({"cmd": "speakers", "model": model, "path": path}))?;
-        let v = self.wait_or_stop(id, Some(stop))?;
+        let v = self.wait(id, None)?;
         Ok(turns_of(&v))
     }
 
@@ -387,7 +428,7 @@ impl Engine for EngineProcess {
             "path": path,
             "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
         }))?;
-        let v = self.wait(id)?;
+        let v = self.wait(id, None)?;
         Ok(heard_of(&v))
     }
 }
@@ -462,7 +503,7 @@ mod tests {
         for (name, want) in [("sortformer-2spk-mix.wav", 2), ("multitalker-2spk-mix.wav", 2), ("jfk.wav", 1)] {
             let audio = read(name);
             let started = std::time::Instant::now();
-            let turns = e.speakers(&speakers.display().to_string(), &audio, &AtomicBool::new(false)).unwrap();
+            let turns = e.speakers(&speakers.display().to_string(), &audio).unwrap();
             let mut who: Vec<u32> = turns.iter().filter(|t| t.end - t.start >= 0.3).map(|t| t.speaker).collect();
             who.sort_unstable();
             who.dedup();
@@ -481,7 +522,9 @@ mod tests {
             s2.store(true, Ordering::SeqCst);
         });
         let started = std::time::Instant::now();
-        let stopped = e.speakers(&speakers.display().to_string(), &long, &stop);
+        e.watch(Some(stop.clone()));
+        let stopped = e.speakers(&speakers.display().to_string(), &long);
+        e.watch(None);
         println!("stopped after {:.2} s: {:?}", started.elapsed().as_secs_f64(), stopped.as_ref().map(|t| t.len()));
         assert!(stopped.is_err_and(|x| x.is::<Stopped>()), "a stop ends it as stopped");
         e.forget(&long.id);

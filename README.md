@@ -52,8 +52,11 @@ subscription, no limit on hours.
 - Choose on the start page what happens to what you drop, in order: take the long silences out and
   save the sound, transcribe, translate, and add the subtitles to the video, as tracks or burned in.
   Turn on only what you need: Dawwin runs the steps one after the other, and each one can also be done later on its own.
+- Or pick a common job by name, and it ticks its steps: **Transcribe**, **Transcribe and translate**,
+  **Video to sound file**, **Sound without silences** or **Video with subtitles** (new in 1.3.2).
+- Save the sound and the videos next to the recording, or in a folder of your own (new in 1.3.2).
 
-![The start page: a drop area, and under it four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
 
 **Who said what** (new in 1.4)
 
@@ -90,12 +93,16 @@ subscription, no limit on hours.
   Dawwin offers it when a file needs it (a download of 1.3 MB), or uses one already on the PC. Several
   files queue up. The message while you drag a file over the window says what the ticked steps will do.
 - Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
-  recordings that are already done are skipped, so a stopped run picks up where it left off.
+  recordings that are already done are skipped, so a stopped run picks up where it left off. The files
+  Dawwin wrote there itself (the sound, the videos with subtitles) are never taken for new recordings,
+  and a folder of thousands of files, or a whole drive, shows how far it has looked and can be stopped.
 - Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
   yet, it offers to download it.
 - The transcript appears line by line while it is written, in the direction of its language.
 - **Follow words**: the word being said is highlighted as the recording plays. Ctrl+click a word, or
   select text and right-click → **Play from here**, to hear it.
+- Long recordings stay quick: a three-hour meeting of 5,000 lines opens in a fifth of a second, and
+  search answers each key at once (new in 1.3.2).
 - Runs on the GPU of any brand (NVIDIA, AMD, Intel), or on the CPU when there is none.
 
 **Translate** (new in 1.3)
@@ -114,6 +121,14 @@ subscription, no limit on hours.
   characters, on screen between 5/6 of a second and 7 seconds and slow enough to read, on when the
   speaker starts and off when they stop, and broken where a sentence ends or the speaker pauses, not
   in the middle of a phrase.
+- **They follow the speaker** (new in 1.3.2): the speech models give no word times, so when subtitles or
+  Follow words are first wanted, Dawwin listens to each stretch between two pauses again to learn which
+  words fall in it. In our test 98 % of the words land within half a second of when they are said
+  (47 % before), and no subtitle is gone before its last word. **Fix the timing** does it for older
+  transcripts. See [the measurement](tools/timing/README.md).
+- Chinese, Japanese, Korean, Thai, Lao, Khmer and Burmese get subtitles of their own line length (16
+  characters in Chinese, 13 in Japanese, as Netflix's guides say), broken at their own punctuation,
+  and a translation under them keeps its sentences whole (new in 1.3.2).
 - SRT and WebVTT files of the transcript, of the translation, or of both.
 - **Video with subtitles**: the video itself, with a subtitle track for each language. The picture and
   sound are copied untouched, so it takes seconds, even for a long film. MP4 and MOV videos give an
@@ -142,8 +157,20 @@ subscription, no limit on hours.
 **Edit, search and export**
 
 - Correct lines in place, and search with Arabic in mind: أ/إ/ا, ة/ه and ى/ي match.
-- Export to Word, text, Markdown, subtitles (SRT, VTT) or data (CSV, TSV, JSON).
+- Export to Word, text, Markdown, subtitles (SRT, VTT) or data (CSV, TSV, JSON). A line that starts
+  with `=` or holds `<` comes out as text in every spreadsheet and player.
 - English or Arabic interface, and a **How to use** page with pictures of every part of the app.
+- Short descriptions on hover, in both languages, where a name cannot say everything (new in 1.3.2).
+
+**For everyone** (new in 1.3.2)
+
+- Works with the keyboard alone: Tab reaches every transcript and job, Enter opens it, Escape closes a
+  menu, and the focus always shows. Ctrl and plus or minus enlarge the whole interface, and it keeps
+  the size. With animations turned off in Windows, nothing moves.
+- Behind the proxy of a university or a company: downloads use the one Windows is set to use (or
+  `HTTPS_PROXY`), and if they cannot connect, Dawwin says why, next to the way to download by hand.
+- A job that goes wrong fails on its own, and the next one runs; a graphics driver that hangs while a
+  model loads is given five minutes, then the job goes on the CPU.
 
 <table>
   <tr>
@@ -235,6 +262,8 @@ npm run build
 The installer and a portable zip of the current version land in `dist/`, with their checksums.
 
 How the app is put together, and how to release it: [docs/how-it-works.md](docs/how-it-works.md).
+`cargo test` in `src-tauri` runs the unit tests; [tools/e2e](tools/e2e) has the tests that drive the real
+app, with recordings they make themselves.
 
 ## Contributing
 

@@ -471,7 +471,8 @@ impl Reader {
             return true;
         }
         const IDLE: [&str; 4] = ["queued", "done", "failed", "cancelled"];
-        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| !IDLE.contains(&j.status.as_str())))
+        // saving a reading as sound is the voice's own work, not a job that holds the GPU
+        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| j.kind != "reading_sound" && !IDLE.contains(&j.status.as_str())))
     }
 
     /// Whether this PC has a GPU the speech engine found.

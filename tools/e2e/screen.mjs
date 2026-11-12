@@ -12,7 +12,7 @@
 // (and make_word.ps1). PDFium: the release's dawwin-pdfium-*.tar.xz in DAWWIN_E2E_TOOLS.
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { APP, check, finish, makeHome, open, OUT, PORT, sleep, TOOLS } from "./lib.mjs";
 
@@ -46,7 +46,7 @@ if (pack) {
 }
 
 const env = {
-  DAWWIN_TEST_VOICE: FAKE, FAKE_VOICE_DELAY_MS: "60", DAWWIN_TEST_AUTOSTART_KEY: KEY, DAWWIN_TOOLS_URL: toolsUrl,
+  DAWWIN_TEST_VOICE: FAKE, FAKE_VOICE_DELAY_MS: "250", DAWWIN_TEST_AUTOSTART_KEY: KEY, DAWWIN_TOOLS_URL: toolsUrl,
   WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: `--remote-debugging-port=${port} --mute-audio --autoplay-policy=no-user-gesture-required`,
 };
 
@@ -229,17 +229,21 @@ if (!PDFS) {
   await sleep(1000);
   const docNow = await a.ev("window.__readAloud.doc.id");
   const dest = join(OUT, "screen-book.m4b");
+  rmSync(dest, { force: true });
   const job = await a.ev(`window.__TAURI__.core.invoke("reading_save_sound_to_path", { doc: ${JSON.stringify(docNow)}, path: ${JSON.stringify(dest)} }).catch((e) => "error: " + e)`);
   check("saving as sound starts a job in the list", typeof job === "string" && !job.startsWith("error"), job);
-  let j;
-  for (let i = 0; i < 240; i++) {
-    j = (await a.state()).queue.find((x) => x.id === job);
-    if (!j || !["saving_audio"].includes(j.status)) break;
-    await sleep(250);
+  // a finished job leaves the list at once, and a message says where the file is
+  let row = "", told = false, failed = null;
+  for (let i = 0; i < 1200 && !told && !failed; i++) {
+    const w = await a.ev(`({ row: document.querySelector('#queue li[data-key="${job}"]')?.innerText || "", told: S.told.has(${JSON.stringify(job)}), failed: S.snap.queue.find(j => j.id === ${JSON.stringify(job)} && j.status === "failed")?.error || null })`);
+    if (w.row) row = w.row;
+    told = w.told;
+    failed = w.failed;
+    await sleep(50);
   }
+  check("the job shows in the list while it works, with how far it is", row.includes("Saving the reading as sound") && /\d+%/.test(row), row);
   const m4b = existsSync(dest) ? readFileSync(dest) : Buffer.alloc(0);
-  check("it ends with the book saved, with its chapters", j?.status === "done" && m4b.includes(Buffer.from("chpl")) && m4b.includes(Buffer.from("Chapter two")), { status: j?.status, error: j?.error, bytes: m4b.length });
-  check("the job shows in the list, and opens the file's folder", (await a.ev(`document.querySelector('#queue li[data-key="${job}"] .doing')?.textContent || ""`)).includes("sound"));
+  check("it ends with the book saved, with its chapters, and says so", told && !failed && m4b.includes(Buffer.from("chpl")) && m4b.includes(Buffer.from("Chapter two")), { told, failed, bytes: m4b.length });
 }
 
 // ---- off: closing quits as before

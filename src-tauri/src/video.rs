@@ -435,12 +435,14 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
                 let _ = child.kill();
                 break;
             }
+            // the encoder works once a picture is out: the sound can move on before it fails to
+            // start (a picture enlarged for sharp text takes a moment to reach it)
+            if line.strip_prefix("frame=").and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|f| f > 0) {
+                moved = true;
+            }
             if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
-                if us > 0.0 {
-                    moved = true;
-                    if p.duration_s > 0.0 {
-                        on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
-                    }
+                if us > 0.0 && p.duration_s > 0.0 {
+                    on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
                 }
             }
         }

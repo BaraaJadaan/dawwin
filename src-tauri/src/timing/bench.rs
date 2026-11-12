@@ -98,6 +98,7 @@ fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {
         partial: false,
         timed: false,
         outputs: vec![],
+        outputs_listed: false,
         segments,
         translations: vec![],
     }

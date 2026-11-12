@@ -139,8 +139,15 @@ pub fn agent(proxy: Option<&str>) -> Result<ureq::Agent> {
 }
 
 /// Why a request failed, in words for the person waiting for it.
+/// A proxy's address as it may be shown: its host and port, never a user name or password in it.
+pub fn shown(proxy: &str) -> String {
+    let rest = proxy.split_once("://").map_or(proxy, |(_, r)| r);
+    let rest = rest.rsplit_once('@').map_or(rest, |(_, h)| h);
+    rest.trim_end_matches('/').to_string()
+}
+
 pub fn why(e: &ureq::Error, proxy: Option<&str>) -> String {
-    let proxy_name = || proxy.map(|p| p.trim_start_matches("http://").to_string()).unwrap_or_default();
+    let proxy_name = || proxy.map(shown).unwrap_or_default();
     match e {
         ureq::Error::Status(407, _) => crate::tr!("The proxy asks for a sign-in, which Dawwin cannot give it. Ask whoever looks after the network, or download the file by hand."),
         ureq::Error::Status(code, _) if *code == 429 || *code >= 500 => crate::tr!("The server is busy (error {}).", code),
@@ -186,6 +193,15 @@ mod tests {
         let per_kind = listing.replace("proxy.uni.edu:3128", "http=p1:80;https=p2:443;socks=p3:1080");
         assert_eq!(parse_windows_setting(&per_kind).unwrap().server, "http://p2:443");
         assert!(parse_windows_setting(&listing.replace("0x1", "0x0")).is_none(), "switched off");
+    }
+
+    #[test]
+    fn a_proxys_sign_in_is_never_shown() {
+        assert_eq!(shown("http://user:pa:ss@proxy.uni.edu:3128/"), "proxy.uni.edu:3128");
+        assert_eq!(shown("proxy:8080"), "proxy:8080");
+        let e = ureq::get("http://example.invalid/").call().unwrap_err();
+        let said = why(&e, Some("http://user:secret@proxy.invalid:3128"));
+        assert!(!said.contains("secret") && !said.contains("user"), "{said}");
     }
 
     #[test]

@@ -303,8 +303,22 @@ pub fn pass(w: &mut dyn Engine, audio: &Audio, segments: &mut [Segment], languag
                 (x.min(y), y)
             })
             .collect();
-        let texts = w.transcribe(audio, &ranges, language)?;
-        s.heard = parts.iter().zip(texts).map(|(&(a, b), r)| (a as f32, b as f32, r.text)).collect();
+        // one stretch at a time, as the engine reads everything (a batch pads its shorter pieces, and
+        // on padding the model makes sentences up); out of memory leaves this line's words guessed
+        let mut texts = Vec::with_capacity(ranges.len());
+        for r in &ranges {
+            match w.transcribe(audio, std::slice::from_ref(r), language) {
+                Ok(mut got) => texts.push(got.pop().map(|g| g.text).unwrap_or_default()),
+                Err(e) if e.is::<crate::engine::OutOfMemory>() => break,
+                Err(e) => return Err(e),
+            }
+        }
+        if texts.len() < ranges.len() {
+            s.heard.clear();
+            progress(done / total);
+            continue;
+        }
+        s.heard = parts.iter().zip(texts).map(|(&(a, b), text)| (a as f32, b as f32, text)).collect();
         apply(s);
         progress(done / total);
     }

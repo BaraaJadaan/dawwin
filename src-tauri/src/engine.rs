@@ -238,11 +238,11 @@ impl EngineProcess {
                 stopped_at = Some(Instant::now());
             }
             if stopped_at.is_some_and(|t| t.elapsed() >= STOP_GRACE) {
-                let _ = self.child.kill();
+                self.end();
                 return Err(Stopped.into());
             }
             if limit.is_some_and(|l| started.elapsed() >= l) {
-                let _ = self.child.kill();
+                self.end();
                 let minutes = limit.unwrap().as_secs().div_ceil(60);
                 return Err(EngineFailed(crate::tr!("The model did not load in {} minutes: the graphics driver may be stuck.", minutes)).into());
             }
@@ -267,6 +267,13 @@ impl EngineProcess {
                 }
             }
         }
+    }
+
+    /// End the engine, and wait until Windows says it has: a moment after `kill` the process can
+    /// still look alive, and the next job would talk to a dead one and take that for the GPU's fault.
+    fn end(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 
     /// What this computer has to run on.

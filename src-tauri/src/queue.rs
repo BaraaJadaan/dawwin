@@ -300,6 +300,10 @@ impl Core {
 
     /// Hand a message to the queue's thread. Should that thread be gone, the job the message was
     /// for says so, rather than wait for ever.
+    pub fn app(&self) -> &AppHandle {
+        &self.app
+    }
+
     fn send(&self, m: Msg) {
         let undelivered = self.tx.lock().unwrap().send(m).err().map(|e| e.0);
         if let Some(Msg::Job(id) | Msg::Priority(id) | Msg::Translate(id)) = undelivered {
@@ -687,7 +691,7 @@ impl Core {
             .chain(snap.queue.iter().flat_map(|j| j.outputs.iter()))
             .map(|p| folder::same_file_key(p))
             .collect();
-        let known = folder::known(history.iter().filter(|h| !h.partial).map(|h| h.source_path.clone()));
+        let known = folder::known(history.iter().filter(|h| !h.partial).map(|h| (h.source_path.clone(), h.outputs_listed)));
         let formats = self.settings.lock().unwrap().folder_formats();
         let have_ffmpeg = setup::ffmpeg(&self.paths).is_some();
         let mut todo = Vec::new();
@@ -725,6 +729,8 @@ impl Core {
         if files.is_empty() || self.is_live(transcript) {
             return;
         }
+        // an older transcript stays marked as one that did not list its files: what the older
+        // version wrote next to its recording is still told by its name
         let _ = history::modify(&self.paths.history_dir(), transcript, |t| {
             for f in files {
                 let f = f.display().to_string();
@@ -959,15 +965,26 @@ impl Core {
     /// The transcript, its words placed in time first when they are not and can be: what every
     /// kind of subtitles is made from. Where that cannot be done (the recording moved, no model,
     /// stopped), the times stay guesses, and the subtitles allow for that.
-    pub fn timed_transcript(&self, id: &str) -> Result<Transcript> {
+    ///
+    /// Behind a job that is already running (a long recording, a translation), it does not wait:
+    /// the subtitles are made at once with the times guessed, the words are placed in time once
+    /// that job is done, and `waited` is false, so that the person can be told.
+    pub fn timed_transcript(&self, id: &str) -> Result<(Transcript, bool)> {
         let t = self.transcript(id)?;
         if t.timed || self.is_live(id) {
-            return Ok(t);
+            return Ok((t, true));
         }
-        if let Ok(job) = self.fix_timing(id) {
-            self.wait_for(&job);
+        // the speech engine's own work: anything but a burn, which runs beside it
+        let own = |j: &JobView| j.kind == "timing" && j.transcript.as_deref() == Some(id);
+        let busy = self.snapshot().queue.iter().any(|j| j.kind != "burn" && !own(j) && ACTIVE_JOB.contains(&j.status.as_str()) && j.status != "queued");
+        match self.fix_timing(id) {
+            Ok(job) if !busy => {
+                self.wait_for(&job);
+                Ok((self.transcript(id)?, true))
+            }
+            Ok(_) => Ok((t, false)),
+            Err(_) => Ok((t, true)),
         }
-        self.transcript(id)
     }
 
     pub fn cancel_all(&self) {
@@ -1608,6 +1625,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         partial: false,
         timed: false,
         outputs: vec![],
+        outputs_listed: false,
         segments: Vec::new(),
         translations: Vec::new(),
     };
@@ -1695,6 +1713,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     t.timed = time_words && !t.partial;
     // the sound it saved, if any: a folder run never takes it for a recording
     t.outputs = core.snapshot().queue.into_iter().find(|j| j.id == id).map(|j| j.outputs).unwrap_or_default();
+    t.outputs_listed = true;
     let saved = !t.segments.is_empty();
     if saved {
         history::save(&core.paths.history_dir(), &t)?;
@@ -1894,6 +1913,7 @@ mod tests {
             partial: false,
             timed: false,
             outputs: vec![],
+            outputs_listed: false,
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
         };

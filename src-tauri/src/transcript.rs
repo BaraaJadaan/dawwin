@@ -56,6 +56,9 @@ pub struct Transcript {
     /// never takes them for recordings to transcribe
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<String>,
+    /// `outputs` is kept for it (from 1.3.2 on): what is not in it is not Dawwin's
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outputs_listed: bool,
     pub segments: Vec<Segment>,
     /// The transcript in other languages, line by line
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -591,6 +594,7 @@ mod tests {
             partial: false,
             timed: false,
             outputs: vec![],
+            outputs_listed: false,
             segments: vec![
                 Segment { start: 0.0, end: 22.0, text: "يعني مثلا بيجيك اخر شيء ثلاث زرار".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },
                 Segment { start: 22.0, end: 40.0, text: "  ".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] },

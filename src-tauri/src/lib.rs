@@ -488,8 +488,13 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
 /// The transcript with its words placed in time, for subtitles: a timing job first when they are
 /// not (see `Core::timed_transcript`), off the interface's thread.
 async fn timed(core: &Arc<Core>, id: &str) -> R<Transcript> {
-    let (core, id) = (core.clone(), id.to_string());
-    tauri::async_runtime::spawn_blocking(move || core.timed_transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)
+    let (core2, id) = (core.clone(), id.to_string());
+    let (t, waited) = tauri::async_runtime::spawn_blocking(move || core2.timed_transcript(&id)).await.map_err(|x| x.to_string())?.map_err(e)?;
+    if !waited {
+        // made at once, behind a running job: say so, and that the words are placed in time later
+        let _ = core.app().emit("timing-later", t.id.clone());
+    }
+    Ok(t)
 }
 
 /// Export without asking where (the file name decides the format).

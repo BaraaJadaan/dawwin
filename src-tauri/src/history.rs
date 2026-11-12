@@ -19,6 +19,9 @@ pub struct Summary {
     /// The files Dawwin wrote for it: a folder run never takes them for recordings
     #[serde(skip)]
     pub outputs: Vec<String>,
+    /// Those files are listed (1.3.2 on), rather than to be told by their names
+    #[serde(skip)]
+    pub outputs_listed: bool,
 }
 
 fn file(dir: &Path, id: &str) -> Result<PathBuf> {
@@ -80,6 +83,7 @@ fn summary(t: &Transcript) -> Summary {
         preview,
         source_path: t.source_path.clone(),
         outputs: t.outputs.clone(),
+        outputs_listed: t.outputs_listed,
     }
 }
 
@@ -145,6 +149,7 @@ mod tests {
             partial: false,
             timed: false,
             outputs: vec![],
+            outputs_listed: false,
             segments: vec![],
             translations: vec![],
         }

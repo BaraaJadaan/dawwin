@@ -250,6 +250,12 @@ pub fn is_right_to_left(code: &str) -> bool {
 
 /// The name of a language in English, or the code of one the app does not know. A language that is
 /// only translated into ("zh-Hant") has its name from the translation model's list.
+/// Whether `name`, in lower case, is the English name of a language Dawwin knows: those its
+/// subtitle tracks are called by.
+pub fn is_language_name(name: &str) -> bool {
+    LANGUAGES.iter().chain(MILMMT_LANGUAGES).any(|(_, n)| n.to_lowercase() == name)
+}
+
 pub fn language_name<'a>(code: &'a str) -> &'a str {
     LANGUAGES.iter().chain(MILMMT_LANGUAGES).find(|(c, _)| *c == code).map_or(code, |(_, name)| *name)
 }

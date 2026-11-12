@@ -2092,6 +2092,7 @@ function wire() {
   $("export-audio-short").onclick = () => exportAudio(true);
   listen("video-saving", () => toast(t("toast.videoSaving")));
   listen("audio-saving", () => toast(t("toast.audioSaving")));
+  listen("timing-later", () => toast(t("toast.timingLater")));
   for (const b of $("export-scope").querySelectorAll("button")) {
     b.onclick = (ev) => {
       ev.stopPropagation(); // the menu stays open for the format

@@ -569,6 +569,10 @@ pub fn bilingual_cues(t: &Transcript, tr: &Translation) -> Vec<Cue> {
     let mut all = Vec::new();
     for (i, s) in t.segments.iter().enumerate() {
         let own = line_cues(s, &s.text, true, &rules);
+        if own.is_empty() {
+            // a line cleared by hand: no subtitle for its old translation to go under
+            continue;
+        }
         let theirs = words_in(tr.text(i), &theirs_rules);
         let count = own.len();
         let mut parts: Vec<Vec<usize>> = vec![Vec::new(); count];
@@ -609,6 +613,7 @@ mod tests {
             partial: false,
             timed: false,
             outputs: vec![],
+            outputs_listed: false,
             segments,
             translations: vec![],
         }
@@ -727,6 +732,20 @@ mod tests {
         }
         let all: String = both.iter().map(latin).collect::<Vec<_>>().join(" ");
         assert_eq!(all.split_whitespace().count(), 18, "no word of the translation lost: {all}");
+    }
+
+    #[test]
+    fn a_line_cleared_by_hand_leaves_its_translation_out_of_both() {
+        let mut t = transcript("ar", vec![seg(0.0, 4.0, "صباح الخير.", vec![0.2, 3.8], vec![]), seg(4.0, 8.0, "  ", vec![4.2, 7.8], vec![])]);
+        let mut tr = Translation::new("en", "m");
+        tr.lines = vec![
+            crate::transcript::TranslatedLine { text: "Good morning.".into(), from: "صباح الخير.".into(), edited: false },
+            crate::transcript::TranslatedLine { text: "Today we have three points.".into(), from: "اليوم عندنا ثلاث نقاط.".into(), edited: false },
+        ];
+        t.translations.push(tr);
+        let both = bilingual_cues(&t, t.translation("en").unwrap());
+        assert_eq!(both.len(), 1, "{both:?}");
+        assert_eq!(both[0].lines, ["صباح الخير.", "Good morning."]);
     }
 
     #[test]

@@ -5,6 +5,7 @@
 //! It finds a "Fake GPU". Every piece of audio reads "مرحبا بكم في الاجتماع". With
 //! `FAKE_ENGINE_HANG_LOAD`, loading on the GPU never ends, as with a graphics driver that hangs
 //! (with `--cpu` it loads at once). With `FAKE_ENGINE_HANG_TRANSCRIBE`, transcribing never ends.
+//! `FAKE_ENGINE_SLOW_MS`: how long each piece of audio takes (none).
 
 use std::io::{BufRead, Write};
 
@@ -12,6 +13,8 @@ fn main() {
     let cpu = std::env::args().any(|a| a == "--cpu");
     let hang_load = std::env::var_os("FAKE_ENGINE_HANG_LOAD").is_some() && !cpu;
     let hang_transcribe = std::env::var_os("FAKE_ENGINE_HANG_TRANSCRIBE").is_some();
+    // a slower engine, for a job that runs a while: each piece takes this long
+    let slow = std::env::var("FAKE_ENGINE_SLOW_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(0u64);
     let stdin = std::io::stdin();
     let mut out = std::io::stdout();
     let hang = || loop {
@@ -35,6 +38,7 @@ fn main() {
                     hang();
                 }
                 let n = req["ranges"].as_array().map_or(0, |r| r.len());
+                std::thread::sleep(std::time::Duration::from_millis(slow * n as u64));
                 serde_json::json!({ "id": id, "ok": true, "texts": vec!["مرحبا بكم في الاجتماع"; n], "stopped": vec![false; n] })
             }
             Some("quit") => {

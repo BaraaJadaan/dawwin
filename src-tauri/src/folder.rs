@@ -78,35 +78,57 @@ pub fn has_recordings_at_top(dir: &Path) -> bool {
     std::fs::read_dir(dir).into_iter().flatten().flatten().any(|e| e.file_type().is_ok_and(|k| k.is_file()) && is_media(&e.path()))
 }
 
-/// Recordings Dawwin knows (it has their transcripts), by folder: the names, in lower case.
-pub type Known = HashMap<String, Vec<String>>;
+/// Recordings Dawwin knows (it has their finished transcripts), by folder: their names in lower
+/// case, and whether their transcripts list the files Dawwin wrote for them (from 1.3.2 on).
+pub type Known = HashMap<String, Vec<(String, bool)>>;
 
-pub fn known(recordings: impl Iterator<Item = String>) -> Known {
+pub fn known(recordings: impl Iterator<Item = (String, bool)>) -> Known {
     let mut out: Known = HashMap::new();
-    for r in recordings {
+    for (r, listed) in recordings {
         let p = PathBuf::from(&r);
         let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else { continue };
-        out.entry(same_file_key(&dir.display().to_string())).or_default().push(name.to_string_lossy().to_lowercase());
+        out.entry(same_file_key(&dir.display().to_string())).or_default().push((name.to_string_lossy().to_lowercase(), listed));
     }
     out
 }
 
-/// Whether `file` is one Dawwin wrote next to a recording it knows: its sound ("talk.m4a" next to
-/// "talk.mp4", "talk (without silences).m4a"), or its video with subtitles ("talk (Arabic).mp4",
-/// "talk (English, Arabic, burned in).mp4"). A name such as "talk (2).mp3" is the user's own.
+/// What Dawwin added in brackets to the names of the files it wrote, in either language of its
+/// interface: "talk (without silences).m4a", "talk (English, Arabic, burned in).mp4".
+const SOUND_TAGS: &[&str] = &["without silences", "دون فترات الصمت"];
+const BURNED_TAGS: &[&str] = &["burned in", "مدمج"];
+
+/// Whether `file` is one an older Dawwin (before 1.3.2, which lists what it writes) wrote next to a
+/// recording it transcribed: its sound ("talk.m4a" next to "talk.mp4", "talk (without
+/// silences).m4a"), or its video with subtitles ("talk (Arabic).mp4", "talk (English, Arabic,
+/// burned in).mp4"), each perhaps with " (2)" after it. Only those exact names: "talk
+/// (continued).mp3" and "talk (Monday).m4a" are recordings of their own. The files of a
+/// transcript that lists them are found by that list, and never by their names.
 pub fn is_own_output(file: &Path, known: &Known) -> bool {
     let (Some(dir), Some(name)) = (file.parent(), file.file_name()) else { return false };
     let Some(names) = known.get(&same_file_key(&dir.display().to_string())) else { return false };
     let name = name.to_string_lossy().to_lowercase();
     let (stem, ext) = name.rsplit_once('.').unwrap_or((name.as_str(), ""));
-    names.iter().filter(|r| **r != name).any(|r| {
+    // "talk (English) (2).mp4": a second file of the same name
+    let stem = match stem.rsplit_once(" (") {
+        Some((rest, n)) if n.strip_suffix(')').is_some_and(|d| !d.is_empty() && d.chars().all(|c| c.is_ascii_digit())) => rest,
+        _ => stem,
+    };
+    let sound = matches!(ext, "m4a" | "wav");
+    let video = matches!(ext, "mp4" | "mkv" | "mov");
+    names.iter().filter(|(r, listed)| *r != name && !*listed).any(|(r, _)| {
         let rstem = r.rsplit_once('.').map_or(r.as_str(), |x| x.0);
         if stem == rstem {
-            return matches!(ext, "m4a" | "wav");
+            return sound;
         }
-        stem.strip_prefix(rstem)
-            .and_then(|rest| rest.strip_prefix(" (")?.strip_suffix(')'))
-            .is_some_and(|inner| !inner.is_empty() && !inner.chars().all(|c| c.is_ascii_digit()))
+        let Some(inner) = stem.strip_prefix(rstem).and_then(|rest| rest.strip_prefix(" (")?.strip_suffix(')')) else { return false };
+        if sound && SOUND_TAGS.contains(&inner) {
+            return true;
+        }
+        let mut parts: Vec<&str> = inner.split(", ").collect();
+        if parts.last().is_some_and(|p| BURNED_TAGS.contains(p)) {
+            parts.pop();
+        }
+        video && !parts.is_empty() && parts.iter().all(|p| crate::models::is_language_name(p))
     })
 }
 
@@ -177,6 +199,7 @@ mod tests {
             partial: false,
             timed: false,
             outputs: vec![],
+            outputs_listed: false,
             segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] }],
             translations: vec![],
         }
@@ -226,19 +249,30 @@ mod tests {
     }
 
     #[test]
-    fn the_files_dawwin_wrote_are_not_taken_for_recordings() {
-        let k = known(["D:/Talks/talk.mp4".to_string(), "D:/Talks/درس.mp3".to_string()].into_iter());
+    fn the_files_an_older_dawwin_wrote_are_known_by_their_exact_names() {
+        let k = known([("D:/Talks/talk.mp4".to_string(), false), ("D:/Talks/درس.mp3".to_string(), false)].into_iter());
         let own = |f: &str| is_own_output(Path::new(f), &k);
         assert!(own("D:/Talks/talk.m4a"), "the sound saved from the video");
         assert!(own(r"d:\talks\Talk (without silences).m4a"));
         assert!(own("D:/Talks/talk (Arabic).mp4"));
         assert!(own("D:/Talks/talk (English, Arabic, burned in).mp4"));
-        assert!(own("D:/Talks/درس (بدون الصمت).m4a"));
+        assert!(own("D:/Talks/talk (English) (2).mp4"), "a second one of the same name");
+        assert!(own("D:/Talks/درس (دون فترات الصمت).m4a"));
         assert!(!own("D:/Talks/talk.mp4"), "the recording itself");
         assert!(!own("D:/Talks/talk (2).mp4"), "a name the user gave");
+        assert!(!own("D:/Talks/talk (continued).mp3"), "another recording");
+        assert!(!own("D:/Talks/talk (Monday).m4a"), "another recording");
+        assert!(!own("D:/Talks/talk (Arabic).mp3"), "a language in brackets, but not a video Dawwin makes");
         assert!(!own("D:/Talks/talking.m4a"));
         assert!(!own("D:/Other/talk.m4a"), "another folder");
         assert!(!own("D:/Talks/lesson.m4a"));
+    }
+
+    #[test]
+    fn a_transcript_that_lists_its_files_is_never_guessed_from_names() {
+        let k = known([("D:/Talks/talk.mp3".to_string(), true)].into_iter());
+        assert!(!is_own_output(Path::new("D:/Talks/talk.m4a"), &k), "a sound file of the user's own next to it");
+        assert!(!is_own_output(Path::new("D:/Talks/talk (without silences).m4a"), &k), "not in its list: not Dawwin's");
     }
 
     #[test]

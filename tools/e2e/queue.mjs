@@ -74,6 +74,32 @@ const waitFor = async (a, id, done, seconds) => {
   a.close();
 }
 
+// ---- subtitles exported while another job runs: made at once, the person told, timed later
+{
+  const home = makeHome("queue-busy");
+  const said = tone("said.wav", 6);
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(join(home, "history", "earlier.json"), JSON.stringify({
+    id: "earlier", title: "earlier", source_path: said, created_ms: Date.now(), duration_s: 6, language: "ar", elapsed_s: 1, device: "CPU", model: "made up", partial: false,
+    segments: [{ start: 0.2, end: 3, text: "طيب، خلونا نبدأ.", edited: false, voice: [0.2, 3], pauses: [[0.5, 1.4, 1.9]] }, { start: 3, end: 5.8, text: "الـ dashboard أولًا.", edited: false, voice: [3, 5.8] }],
+  }));
+  const a = await open(home, PORT + 14, { DAWWIN_TEST_ENGINE: FAKE, FAKE_ENGINE_SLOW_MS: "400" });
+  await a.ev(`window.__told = []; window.__TAURI__.event.listen('timing-later', () => window.__told.push(1)); 1`);
+  const [long] = await a.invoke("enqueue", { paths: [tone("long.wav", 600)], language: "ar", steps });
+  await waitFor(a, long, (j) => j.status === "transcribing", 60);
+  const t0 = Date.now();
+  const srt = join(work, "earlier.srt");
+  await a.invoke("export_to_path", { id: "earlier", path: slash(srt), stamps: false });
+  const ms = Date.now() - t0;
+  const queued = (await a.state()).queue.some((j) => j.kind === "timing" && j.transcript === "earlier");
+  check("subtitles exported while a long job runs are saved at once, the words placed in time after it", ms < 3000 && existsSync(srt) && queued, { ms, queued });
+  await sleep(300);
+  check("and the person is told so", (await a.ev(`window.__told.length`)) === 1 && /estimated/.test(await a.ev(`t('toast.timingLater')`)));
+  await a.invoke("cancel_all_jobs");
+  await a.idle(60);
+  a.close();
+}
+
 // ---- a long recording without its silences takes about as much memory as with them
 {
   const long = join(work, "an hour.wav");

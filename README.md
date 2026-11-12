@@ -179,14 +179,24 @@ subscription, no limit on hours.
    | **Translation, best quality** (MiLMMT-46 12B) | 7.3 GB | The best of the ten open translation models we tested. Fast with a GPU of 8 GB, slow without one. |
    | **Translation, smaller** (MiLMMT-46 4B) | 2.5 GB | As good as the best one from and into Arabic, a little less in other languages. Faster without a GPU. |
    | **Translation, smallest** (MiLMMT-46 1B) | 0.8 GB | For slow connections and older computers: fast on any of them, a little less accurate. |
+5. To write the minutes of a meeting, open the **Minutes** tab of its transcript. The first time, download
+   a minutes model there or in **Settings → Minutes**. The translator runs it too:
+
+   | Model | Download | |
+   | --- | --- | --- |
+   | **Minutes, best** (Jais-3 7B) | 5.6 GB | The best of the 20 open models we tested, in Arabic and in English. Fits a GPU with 8 GB, slow without one. |
+   | **Minutes, smaller** (Ministral 3 3B) | 2.1 GB | Good minutes at under half the size. Fits a GPU with 4 GB. |
+   | **Minutes, smallest** (Jais-3 0.9B) | 0.7 GB | For older computers: fast on any of them, but it misses more of the decisions and tasks. |
 
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
 laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary
 ran about 7 times faster than real time, and Whisper about as fast as real time. The smaller
-translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU.
+translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU. On the
+same kind of CPU, the minutes of a meeting of eight minutes took about 4½ minutes with Jais-3 7B and
+under a minute with Jais-3 0.9B.
 
-**Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation model without a
-GPU), and room for the models. The installer is small (about 10 MB): the translator and ffmpeg download
+**Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation or minutes model
+without a GPU), and room for the models. The installer is small (about 10 MB): the translator and ffmpeg download
 only for those who use them.
 
 ## How the translation models were chosen
@@ -208,6 +218,37 @@ to how people talk in a meeting.
 
 The seven directions are Arabic, Danish and Turkish to and from English, and English to French. All the
 numbers, and the test itself, are in [tools/bench-translate](tools/bench-translate).
+
+## How the minutes models were chosen
+
+We had 20 open models that run on a PC write the minutes of eight recordings made up for the test, the
+way Dawwin asks for them: meetings in Levantine, Gulf and Egyptian Arabic, one in Arabic and English
+mixed, a lecture in Modern Standard Arabic, and three in English, each also in the other language and
+two in parts as a long meeting goes. Their minutes were scored against minutes written by hand: the
+decisions and tasks found (at the lines they were said), who and by when, the key facts in the summary,
+the topics, and whether the minutes are in the language asked for. Score out of 100:
+
+| Model | Size | Score | Arabic | English | In the other language | Decisions found | Tasks found |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **Jais-3 7B** | 5.6 GB | **88.7** | **89.8** | 86.9 | **91.6** | 83 % | 87 % |
+| Mistral Ministral 3 8B | 5.2 GB | 85.8 | 87.5 | 82.9 | 70.3 | 88 % | 93 % |
+| Google Gemma 4 12B | 7.1 GB | 83.9 | 82.5 | 86.2 | 88.8 | 88 % | 93 % |
+| IBM Granite 4.2 8B | 5.4 GB | 82.6 | 82.2 | 83.3 | 66.7 | 83 % | 87 % |
+| Alibaba Qwen3.5 4B | 2.7 GB | 80.0 | 81.2 | 77.9 | 79.1 | 88 % | 97 % |
+| Alibaba Qwen3.5 9B | 5.7 GB | 79.2 | 76.9 | 83.2 | 82.5 | 92 % | 90 % |
+| **Mistral Ministral 3 3B** | 2.1 GB | 78.7 | 81.2 | 74.5 | 72.6 | 71 % | 100 % |
+| Mistral Ministral 3 14B | 8.2 GB | 76.0 | 76.0 | 76.0 | 64.1 | 92 % | 97 % |
+| Jais-3 3.7B | 3.2 GB | 74.1 | 69.9 | 80.9 | 72.0 | 84 % | 90 % |
+| Google Gemma 4 E2B | 3.1 GB | 72.2 | 71.1 | 74.0 | 70.4 | 76 % | 83 % |
+| **Jais-3 0.9B** | 0.7 GB | 65.0 | 61.5 | 70.8 | 56.9 | 56 % | 63 % |
+| Alibaba Qwen3.5 2B | 1.3 GB | 48.3 | 36.6 | 67.9 | 62.4 | 85 % | 80 % |
+| Alibaba Qwen3.5 0.8B | 0.5 GB | 26.7 | 25.0 | 29.5 | 26.8 | 53 % | 44 % |
+
+Most of the lower scores in Arabic are minutes written in English when Arabic was asked for. Qwen3.5 4B
+finds as much as the best, but its summaries of the Arabic meetings say nothing ("no one attended").
+Dawwin offers the best (Jais-3 7B, which also fits a GPU with 8 GB, its context kept in 8 bits), the best
+for its size (Ministral 3 3B) and the smallest that is still usable (Jais-3 0.9B). The models, the
+scoring and all the numbers are in [tools/bench-minutes](tools/bench-minutes).
 
 ## Building from source
 
@@ -253,7 +294,7 @@ the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). Five things are not part of this repository and have their own terms:
+[MIT](LICENSE). Six things are not part of this repository and have their own terms:
 
 - **The speech models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC
   BY 4.0, and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
@@ -266,6 +307,11 @@ the model folder, if you chose another place for it).
   Dawwin downloads GGUF conversions of the [12B](https://huggingface.co/mradermacher/MiLMMT-46-12B-v1.0-GGUF),
   the [4B](https://huggingface.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF) and the
   [1B](https://huggingface.co/mradermacher/MiLMMT-46-1B-v1.0-GGUF) made by mradermacher.
+- **The minutes models**: [Jais-3](https://huggingface.co/inception42/Jais-3-7B) and Mistral AI's
+  [Ministral 3](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512) are published under
+  Apache-2.0. Dawwin downloads the GGUF files of Jais-3 [7B](https://huggingface.co/IFM/Jais-3-7B-GGUF)
+  and [0.9B](https://huggingface.co/IFM/Jais-3-0.9B-GGUF) published by IFM, and of
+  [Ministral 3 3B](https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF) published by Mistral AI.
 - **The engines**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and
   [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license.
 - **ffmpeg**: Dawwin's own builds of [FFmpeg](https://ffmpeg.org), under the LGPL 2.1, made by

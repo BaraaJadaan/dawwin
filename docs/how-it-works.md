@@ -66,9 +66,11 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   however the app ends. It runs on the GPU the speech engine found best (a dedicated one before one in
   the processor), never spread over several. Why MiLMMT-46: we measured ten open translation models
   on WMT24++, see `tools/bench-translate` and the **Translation bench** workflow.
-- **Minutes.** The translator's server runs a minutes model too (Qwen3.5 or Gemma 4, see **Minutes bench**),
-  with room for 16,384 tokens, taking its turn with the speech engine and the translator. It is asked
-  through `/v1/chat/completions`, greedily and without thinking, for JSON held to the schema in
+- **Minutes.** The translator's server runs a minutes model too (Jais-3 or Ministral 3, see **Minutes
+  bench**), with room for 16,384 tokens whose cache is kept in 8 bits (flash attention on), so that the
+  7B model fits a GPU with 8 GB; it takes its turn with the speech engine and the translator. It is asked
+  through `/v1/chat/completions`, greedily and without thinking (each model's chat format is told so its
+  own way: `no_thinking` in `minutes::MODELS`), for JSON held to the schema in
   `src-tauri/prompts/minutes-schema.json` (line numbers limited to the transcript's), never for free text.
   A recording up to about 12 minutes goes in one pass. A longer one is cut into parts of at most ten
   minutes, where the speaker changes or pauses longest in a part's last quarter; each part becomes notes,

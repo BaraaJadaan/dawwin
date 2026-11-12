@@ -375,7 +375,7 @@ function jobLine(j) {
     case "transcribing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "translating": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
     case "timing": return `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}`;
-    case "saving_audio": return t("job.savingAudio");
+    case "saving_audio": return j.kind === "reading_sound" ? `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}` : t("job.savingAudio");
     case "saving_video": return j.steps?.burn ? `${Math.floor(j.progress * 100)}% · ${eta(j.eta_s)}` : t("job.savingVideo");
     case "done": return t("job.done", { dur: dur(j.elapsed_s) });
     case "cancelled": return t(j.kind === "translate" ? "job.cancelledKept" : j.saved ? "job.cancelledSaved" : "job.cancelled");
@@ -442,13 +442,13 @@ function paintJobRow(li, j) {
   const of = j.transcript || j.id;
   li.className = "item" + (S.current?.id === of && S.view === "transcript" ? " active" : "") + (j.status === "failed" ? " failed" : "");
   setText(li.querySelector(".title"), j.title);
-  const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "timing" ? t("job.timing") : j.kind === "speakers" ? t("job.findSpeakers") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
+  const doing = j.kind === "translate" ? t("job.translating", { lang: langName(j.target) }) : j.kind === "timing" ? t("job.timing") : j.kind === "speakers" ? t("job.findSpeakers") : j.kind === "reading_sound" ? t("scr.jobSaving") : j.status === "saving_video" && j.steps?.burn ? t("job.burning") : "";
   const d = li.querySelector(".doing");
   setText(d, doing);
   d.hidden = !doing;
   setText(li.querySelector(".line"), jobLine(j));
   // burning the subtitles in takes a while, and says how far it is
-  const indet = ["decoding", "detecting", "loading", "speakers", "saving_audio", "saving_video", "queued"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn);
+  const indet = ["decoding", "detecting", "loading", "speakers", "saving_audio", "saving_video", "queued"].includes(j.status) && !(j.status === "saving_video" && j.steps?.burn) && j.kind !== "reading_sound";
   const bar = li.querySelector(".progress");
   // a recording has no end to go towards: its time is in its line
   bar.hidden = !ACTIVE.has(j.status) || j.status === "recording";

@@ -43,6 +43,9 @@ fn pdfium(paths: &Paths) -> Result<&'static pdfium_render::prelude::Pdfium> {
     Ok(BOUND.get_or_init(|| p))
 }
 
+/// What Read aloud opens through this file, besides 1.7.0's text formats.
+pub const EXTENSIONS: &[&str] = &["pdf", "epub", "png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "jfif", "webp", "heic"];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
@@ -86,6 +89,66 @@ pub enum Refused {
     /// Windows cannot read this language in pictures: add it in Windows' settings
     NoLanguage { language: String, message: String },
     Failed { message: String },
+}
+
+impl Refused {
+    /// As Read aloud's error: "needs-pdfium" asks for the download, the rest is said as it is.
+    pub fn for_interface(&self) -> String {
+        match self {
+            Refused::NeedsPdfium { .. } => "needs-pdfium".into(),
+            Refused::NoLanguage { message, .. } | Refused::Failed { message } => message.clone(),
+        }
+    }
+}
+
+/// Lines of a page into paragraphs: lines run on, a word cut at a line's end joined again.
+fn run_on(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        if out.ends_with('-') && line.chars().next().is_some_and(|c| c.is_lowercase()) {
+            out.pop();
+        } else if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(line);
+    }
+    out
+}
+
+/// The file as Read aloud's blocks: a book's chapters as headings with their paragraphs, a
+/// PDF's pages and a picture's text as paragraphs.
+pub fn read(paths: &Paths, path: &Path) -> std::result::Result<crate::reading::formats::Opened, Refused> {
+    use crate::reading::formats::{Block, Kind as B, Opened as Read};
+    let o = open(paths, path)?;
+    let mut blocks = Vec::new();
+    match o.kind {
+        Kind::Epub => {
+            for part in &o.parts {
+                let mut lines = part.text.lines().map(str::trim).filter(|l| !l.is_empty()).peekable();
+                // a chapter that begins with its own name says it once
+                let title = part.title.trim();
+                if !title.is_empty() {
+                    if lines.peek().is_some_and(|l| *l == title) {
+                        lines.next();
+                    }
+                    blocks.push(Block { kind: B::Heading, text: title.to_string() });
+                }
+                blocks.extend(lines.map(|l| Block { kind: B::Paragraph, text: l.to_string() }));
+            }
+        }
+        Kind::Pdf | Kind::Picture => {
+            for part in &o.parts {
+                let text = run_on(&part.text);
+                if !text.is_empty() {
+                    blocks.push(Block { kind: B::Paragraph, text });
+                }
+            }
+        }
+    }
+    if blocks.is_empty() {
+        return Err(Refused::Failed { message: crate::tr!("There is nothing to read in it.") });
+    }
+    Ok(Read { title: o.title, blocks })
 }
 
 fn recognise(bgra: &[u8], w: i32, h: i32) -> std::result::Result<String, super::ocr::Fail> {
@@ -172,6 +235,23 @@ mod tests {
         let o = open(&paths, &book).unwrap();
         assert_eq!((o.kind, o.parts.len(), o.recognised), (Kind::Epub, 2, false));
         assert_eq!(o.parts[0].title, "الفصل الأول");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_book_reads_as_chapters_and_pages_run_on() {
+        use crate::reading::formats::Kind as B;
+        let dir = std::env::temp_dir().join(format!("dawwin-files-read-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let book = dir.join("book.epub");
+        super::super::epub::tests::made_epub(&book, true);
+        let paths = Paths { local: dir.clone(), roaming: dir.clone() };
+        let r = read(&paths, &book).unwrap();
+        let kinds: Vec<B> = r.blocks.iter().map(|b| b.kind).collect();
+        assert_eq!(kinds, [B::Heading, B::Paragraph, B::Paragraph, B::Heading, B::Paragraph]);
+        assert_eq!(r.blocks[0].text, "الفصل الأول");
+        assert_eq!(run_on("A word cut at the end of a line, exam-\nple, and\n  the next line."), "A word cut at the end of a line, example, and the next line.");
+        assert_eq!(Refused::NeedsPdfium { size: 1 }.for_interface(), "needs-pdfium");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

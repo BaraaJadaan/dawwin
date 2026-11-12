@@ -22,7 +22,67 @@ pub struct Screen {
     hotkey: Option<super::shortcut::Hotkey>,
     registered: Mutex<Registered>,
     /// What the small player shows: a player opened just now asks for it once its page is loaded
-    last_note: Mutex<Option<PlayerNote>>,
+    last_note: Mutex<Option<serde_json::Value>>,
+}
+
+/// The seam filled with 1.7.0's reader: a selection opens as a document nobody keeps (its place is
+/// never remembered), the small player reads it sentence by sentence in the voices chosen in Read
+/// aloud, and once it stops the document and the sound made of it are forgotten.
+pub struct VoiceReader {
+    app: AppHandle,
+    doc: Mutex<Option<String>>,
+}
+
+impl VoiceReader {
+    fn reading_of(&self) -> Arc<crate::reading::Reader> {
+        self.app.state::<Arc<crate::reading::Reader>>().inner().clone()
+    }
+    fn control(&self, action: &str) {
+        if let Some(w) = self.app.get_webview_window(PLAYER) {
+            let _ = w.emit("player-control", action);
+        }
+    }
+}
+
+impl Reader for VoiceReader {
+    fn read(&self, text: String) -> anyhow::Result<()> {
+        use crate::reading::formats;
+        self.stop();
+        let r = self.reading_of();
+        r.stop();
+        let blocks = if formats::looks_like_markdown(&text) { formats::from_markdown(&text) } else { formats::from_text(&text) };
+        let doc = r.open(format!("selection:{}", crate::queue::now_ms()), crate::tr!("The selection"), blocks)?;
+        *self.doc.lock().unwrap() = Some(doc.id.clone());
+        // Read aloud in the window stops: one voice at a time
+        let _ = self.app.emit_to("main", "reading-yield", ());
+        let view = serde_json::to_value(r.view(&doc))?;
+        show_player_with(&self.app, Note::Reading, Some(view));
+        Ok(())
+    }
+    fn stop(&self) {
+        if let Some(id) = self.doc.lock().unwrap().take() {
+            self.control("stop");
+            self.reading_of().forget(&id);
+        }
+    }
+    fn pause(&self, paused: bool) {
+        self.control(if paused { "pause" } else { "resume" });
+    }
+    fn skip(&self, sentences: i32) {
+        self.control(if sentences < 0 { "back" } else { "forward" });
+    }
+    fn reading(&self) -> bool {
+        self.doc.lock().unwrap().is_some()
+    }
+}
+
+/// The reader of this part: the stand-in when a test asks for it, else 1.7.0's voices.
+fn make_reader(app: &AppHandle) -> Arc<dyn Reader> {
+    #[cfg(debug_assertions)]
+    if std::env::var_os("DAWWIN_TEST_READER").is_some() {
+        return Arc::new(super::StandIn::default());
+    }
+    Arc::new(VoiceReader { app: app.clone(), doc: Mutex::new(None) })
 }
 
 fn settings(app: &AppHandle) -> Settings {
@@ -41,7 +101,7 @@ pub fn start(app: &AppHandle) {
     #[cfg(not(windows))]
     let _ = handle;
     app.manage(Screen {
-        reader: super::reader(),
+        reader: make_reader(app),
         #[cfg(windows)]
         hotkey,
         registered: Mutex::new(Registered::Off),
@@ -109,7 +169,10 @@ fn on_press(app: &AppHandle) {
     let screen = app.state::<Screen>();
     let key = Keys::parse(&s.shortcut).map_or(0, |k| k.key);
     let note = pressed(&*screen.reader, &s, |copy| capture(key, copy));
-    show_player(app, note);
+    // a reading shows itself in the player as it starts
+    if note != Note::Reading || !screen.reader.reading() {
+        show_player(app, note);
+    }
 }
 
 #[cfg(windows)]
@@ -123,21 +186,28 @@ fn capture(_key: u16, _copy: bool) -> crate::selection::Outcome {
     crate::selection::Outcome::NothingSelected
 }
 
-/// What the small player shows.
+/// What the small player shows: a note, and the document when it is to read one.
 #[derive(Clone, Serialize)]
 pub struct PlayerNote {
     note: Note,
     message: String,
     reading: bool,
     dir: &'static str,
+    doc: Option<serde_json::Value>,
+}
+
+fn show_player(app: &AppHandle, note: Note) {
+    show_player_with(app, note, None);
 }
 
 /// The small player: on top, without a taskbar entry, and never taking the keyboard from the
 /// program the user is in.
-fn show_player(app: &AppHandle, note: Note) {
-    let reading = app.state::<Screen>().reader.reading();
-    let payload = PlayerNote { note, message: note.message(), reading, dir: if crate::i18n::lang() == "ar" { "rtl" } else { "ltr" } };
-    *app.state::<Screen>().last_note.lock().unwrap() = Some(payload.clone());
+fn show_player_with(app: &AppHandle, note: Note, doc: Option<serde_json::Value>) {
+    let reading = doc.is_some() || app.try_state::<Screen>().is_some_and(|s| s.reader.reading());
+    let payload = PlayerNote { note, message: note.message(), reading, dir: if crate::i18n::lang() == "ar" { "rtl" } else { "ltr" }, doc };
+    if let Some(s) = app.try_state::<Screen>() {
+        *s.last_note.lock().unwrap() = serde_json::to_value(&payload).ok();
+    }
     let window = match app.get_webview_window(PLAYER) {
         Some(w) => w,
         None => {
@@ -339,8 +409,75 @@ pub async fn test_player_note(app: AppHandle, note: Note) {
 
 /// What the small player shows now (its page asks once it is loaded).
 #[tauri::command]
-pub fn player_last(app: AppHandle) -> Option<PlayerNote> {
-    app.state::<Screen>().last_note.lock().unwrap().clone()
+pub fn player_last(app: AppHandle) -> Option<serde_json::Value> {
+    app.state::<Screen>().last_note.lock().unwrap().take()
+}
+
+/// Test builds: read this text as a press of the shortcut would after taking it from another
+/// program (the taking itself is the trial's and the unit tests').
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn test_screen_read(app: AppHandle, text: String) -> Note {
+    tauri::async_runtime::spawn_blocking(move || {
+        let s = settings(&app);
+        let screen = app.state::<Screen>();
+        let note = pressed(&*screen.reader, &s, |_| crate::selection::Outcome::Text { text, by: crate::selection::Method::Uia });
+        if note != Note::Reading || !screen.reader.reading() {
+            show_player(&app, note);
+        }
+        note
+    })
+    .await
+    .unwrap_or(Note::Failed)
+}
+
+/// What Read aloud has open, saved as sound: M4A, or M4B with a chapter at each heading for a
+/// book. A job in the list with progress and stop; the file is asked for first. Its job's id.
+#[tauri::command]
+pub async fn reading_save_sound(app: AppHandle, doc: String) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let r = app.state::<Arc<crate::reading::Reader>>().inner().clone();
+    let d = r.doc(&doc).ok_or_else(|| crate::tr!("That text is no longer open."))?;
+    let book = d.sentences.iter().filter(|s| s.kind == crate::reading::formats::Kind::Heading).count() >= 2;
+    let ext = if book { "m4b" } else { "m4a" };
+    let name: String = d.title.chars().map(|c| if "\\/:*?\"<>|".contains(c) || c.is_control() { ' ' } else { c }).collect::<String>().trim().to_string();
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let mut dlg = app
+        .dialog()
+        .file()
+        .set_title(crate::tr!("Save the reading as sound"))
+        .set_file_name(format!("{}.{ext}", if name.is_empty() { "Dawwin".to_string() } else { name }))
+        .add_filter(crate::tr!("Sound"), &[ext]);
+    // a file's reading goes beside it, or to the folder chosen in Settings
+    let beside = d.key.strip_prefix("file:").map(std::path::PathBuf::from);
+    let folder = match &beside {
+        Some(f) => crate::saving::dialog_folder(&core.settings.lock().unwrap(), f),
+        None => crate::saving::own_folder(&core.settings.lock().unwrap()),
+    };
+    if let Some(dir) = folder {
+        dlg = dlg.set_directory(dir);
+    }
+    let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
+    let dest = dest.into_path().map_err(|e| e.to_string())?;
+    start_saving(&app, d, dest).map(Some)
+}
+
+/// Test builds: the same, to a path given (no dialog).
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn reading_save_sound_to_path(app: AppHandle, doc: String, path: String) -> Result<String, String> {
+    let r = app.state::<Arc<crate::reading::Reader>>().inner().clone();
+    let d = r.doc(&doc).ok_or_else(|| crate::tr!("That text is no longer open."))?;
+    start_saving(&app, d, path.into())
+}
+
+fn start_saving(app: &AppHandle, d: Arc<crate::reading::Doc>, dest: std::path::PathBuf) -> Result<String, String> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let ffmpeg = crate::setup::ffmpeg(&core.paths).ok_or_else(|| crate::tr!("Saving as sound needs ffmpeg. Download it in Settings."))?;
+    let r = app.state::<Arc<crate::reading::Reader>>().inner().clone();
+    let work = core.paths.cache_dir();
+    let title = d.title.clone();
+    Ok(core.side_job("reading_sound", &title, &dest.display().to_string(), move |cancel, progress| super::sound::save_reading(&r, &d, &ffmpeg, &work, &dest, cancel, progress)))
 }
 
 /// A button of the small player.
@@ -352,6 +489,8 @@ pub fn player_action(app: AppHandle, action: String) {
         "resume" => screen.reader.pause(false),
         "back" => screen.reader.skip(-1),
         "forward" => screen.reader.skip(1),
+        // the reading came to its end, or failed: it is forgotten
+        "ended" => screen.reader.stop(),
         "close" | "hide" => {
             if action == "close" {
                 screen.reader.stop();
@@ -364,17 +503,7 @@ pub fn player_action(app: AppHandle, action: String) {
     }
 }
 
-// ---- the files of 1.8.0 in Read aloud ----
-
-/// A PDF, an e-book or a picture of text, as its pages or chapters. Refused with a reason the
-/// interface acts on (PDFium to download, a Windows language to add).
-#[tauri::command]
-pub async fn screen_open_file(app: AppHandle, path: String) -> Result<super::files::Opened, super::files::Refused> {
-    let paths = app.state::<Arc<Core>>().paths.clone();
-    tauri::async_runtime::spawn_blocking(move || super::files::open(&paths, std::path::Path::new(&path)))
-        .await
-        .map_err(|e| super::files::Refused::Failed { message: e.to_string() })?
-}
+// ---- PDFs in Read aloud ----
 
 /// Download PDFium (about 4 MB), with "pdfium-progress" events of the bytes so far.
 #[tauri::command]
@@ -393,13 +522,4 @@ pub async fn screen_install_pdfium(app: AppHandle) -> Result<(), String> {
     })
     .await
     .map_err(|e| e.to_string())?
-}
-
-/// Read a text aloud: a file's, from Read aloud. Its place may be kept; a selection's never is.
-#[tauri::command]
-pub fn screen_read_text(app: AppHandle, text: String, path: Option<String>) -> Result<(), String> {
-    let s = settings(&app);
-    let text = super::say::apply(&text, &s.say);
-    let origin = path.map_or(super::Origin::Selection, |p| super::Origin::File(p.into()));
-    app.state::<Screen>().reader.read(text, origin).map_err(|e| format!("{e:#}"))
 }

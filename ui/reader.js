@@ -65,7 +65,10 @@ function buildReadView() {
     readEl("div", { class: "t-head read-head" },
       readEl("div", { class: "t-title-row" },
         readEl("h1", { class: "t-title", id: "read-title", dir: "auto" }),
-        readEl("button", { class: "btn btn-sm btn-ghost", id: "read-other", text: t("read.other"), on: { click: closeReading } })),
+        readEl("div", { class: "read-head-tools" },
+          readEl("select", { class: "input select select-sm", id: "read-chapters", title: t("scr.chaptersTip"), "aria-label": t("scr.chapters"), hidden: true, on: { change: (e) => goToChapter(Number(e.target.value)) } }),
+          readEl("button", { class: "btn btn-sm btn-ghost", id: "read-save", text: t("scr.saveSound"), title: t("scr.saveSoundTip"), on: { click: saveReadingSound } }),
+          readEl("button", { class: "btn btn-sm btn-ghost", id: "read-other", text: t("read.other"), on: { click: closeReading } }))),
       readEl("div", { class: "toolbar read-voices", id: "read-voices" })),
     readEl("div", { class: "read-text-box", id: "read-body", on: {
       wheel: () => (READ.lastUserScroll = Date.now()),
@@ -179,6 +182,12 @@ function renderReadDoc() {
     el.append(span);
   });
   body.append(frag);
+  // a book's chapters, to go to one (1.8.0: e-books)
+  const chapters = $("read-chapters");
+  chapters.innerHTML = "";
+  const heads = d.sentences.map((s, i) => (s.kind === "heading" ? i : -1)).filter((i) => i >= 0);
+  for (const i of heads) chapters.append(readEl("option", { value: String(i), text: d.sentences[i].text }));
+  chapters.hidden = heads.length < 2;
   renderVoicePickers();
   markSentence(false);
   paintReadPlayer();
@@ -191,6 +200,12 @@ function markSentence(scroll = true) {
   const el = body.querySelector(`.rs[data-i="${READ.i}"]`);
   if (!el) return;
   el.classList.add("now");
+  // the chapter list says which chapter this is
+  const chapters = $("read-chapters");
+  if (chapters && !chapters.hidden) {
+    const at = [...chapters.options].map((o) => Number(o.value)).filter((i) => i <= READ.i).pop();
+    if (at !== undefined) chapters.value = String(at);
+  }
   // the page follows the reading, unless the reader scrolled away a moment ago
   if (scroll && Date.now() - READ.lastUserScroll > 4000) el.scrollIntoView({ block: "center", behavior: "smooth" });
 }
@@ -209,6 +224,41 @@ async function openReading(source) {
     buildReadView();
     renderReadDoc();
     markSentence(true);
+  } catch (err) {
+    // a PDF wants PDFium first (1.8.0): a download of its own, asked for once
+    if (String(err) === "needs-pdfium" && source.path) return getPdfium(source);
+    toast(String(err));
+  }
+}
+
+async function getPdfium(source) {
+  if (!confirm(t("scr.pdfiumAsk"))) return;
+  toast(t("scr.pdfiumGetting"));
+  try {
+    await invoke("screen_install_pdfium");
+    openReading(source);
+  } catch (err) {
+    toast(String(err));
+  }
+}
+
+function goToChapter(i) {
+  if (!READ.doc) return;
+  if (READ.playing || READ.waiting) return readFrom(i);
+  READ.i = i;
+  READ.audio.removeAttribute("src");
+  READ.lastUserScroll = 0;
+  markSentence();
+  paintReadPlayer();
+  invoke("reading_place", { doc: READ.doc.id, index: i }).catch(() => {});
+}
+
+/** The reading saved as a sound file (1.8.0): a job in the list, after asking where. */
+async function saveReadingSound() {
+  if (!READ.doc) return;
+  try {
+    const id = await invoke("reading_save_sound", { doc: READ.doc.id });
+    if (id) toast(t("scr.saving"));
   } catch (err) {
     toast(String(err));
   }
@@ -399,6 +449,8 @@ function wireReader() {
     const text = ev.clipboardData?.getData("text/plain");
     if (text && text.trim()) { ev.preventDefault(); openReading({ text }); }
   });
+  // the small player reads a selection: one voice at a time (1.8.0)
+  listen("reading-yield", () => { if (READ.playing || READ.waiting) stopReading(); });
   listen("voice-download", (e) => {
     READ.dl = READ.dl || {};
     READ.dl[e.payload.id] = e.payload;

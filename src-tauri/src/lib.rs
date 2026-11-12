@@ -890,9 +890,12 @@ pub fn run() {
             screen::app::player_last,
             #[cfg(debug_assertions)]
             screen::app::test_player_note,
-            screen::app::screen_open_file,
             screen::app::screen_install_pdfium,
-            screen::app::screen_read_text,
+            screen::app::reading_save_sound,
+            #[cfg(debug_assertions)]
+            screen::app::reading_save_sound_to_path,
+            #[cfg(debug_assertions)]
+            screen::app::test_screen_read,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

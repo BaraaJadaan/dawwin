@@ -249,7 +249,7 @@ pub fn write_wav(path: &Path, rate: u32, samples: &[f32]) -> Result<()> {
     Ok(())
 }
 
-fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
+pub fn resample(samples: &[f32], from: u32, to: u32) -> Vec<f32> {
     if from == to || samples.is_empty() {
         return samples.to_vec();
     }

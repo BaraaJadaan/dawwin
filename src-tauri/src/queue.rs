@@ -789,6 +789,65 @@ impl Core {
         ids
     }
 
+    /// A job in the list that another part of Dawwin runs on a thread of its own, with progress
+    /// and stop (saving a reading as sound): `run` gets the stop flag and a way to say how far it
+    /// is (0 to 1), and gives the files it saved. Its id.
+    pub fn side_job(
+        self: &Arc<Self>,
+        kind: &str,
+        title: &str,
+        path: &str,
+        run: impl FnOnce(&AtomicBool, &mut dyn FnMut(f64)) -> Result<Vec<PathBuf>> + Send + 'static,
+    ) -> String {
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!("{}-{:03}", now_ms(), n % 1000);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.cancels.lock().unwrap().insert(id.clone(), cancel.clone());
+        let job = JobView {
+            id: id.clone(),
+            title: title.to_string(),
+            path: path.to_string(),
+            kind: kind.into(),
+            steps: Steps { transcribe: false, save_audio: true, ..Default::default() },
+            status: "saving_audio".into(),
+            ..Default::default()
+        };
+        self.update(|s| s.queue.push(job));
+        let core = self.clone();
+        let job_id = id.clone();
+        std::thread::spawn(move || {
+            let _awake = KeepAwake::new();
+            let started = Instant::now();
+            let result = run(&cancel, &mut |f| {
+                core.update_job(&job_id, |j| {
+                    let spent = started.elapsed().as_secs_f64();
+                    j.progress = f.clamp(0.0, 1.0);
+                    j.elapsed_s = spent;
+                    j.eta_s = (f > 0.02).then(|| spent / f * (1.0 - f));
+                });
+            });
+            let cancelled = cancel.load(Ordering::SeqCst);
+            core.update_job(&job_id, |j| {
+                j.eta_s = None;
+                j.elapsed_s = started.elapsed().as_secs_f64();
+                match &result {
+                    Ok(files) => {
+                        j.status = "done".into();
+                        j.progress = 1.0;
+                        j.outputs.extend(files.iter().map(|f| f.display().to_string()));
+                    }
+                    Err(_) if cancelled => j.status = "cancelled".into(),
+                    Err(e) => {
+                        j.status = "failed".into();
+                        j.error = Some(format!("{e:#}"));
+                    }
+                }
+            });
+            core.cancels.lock().unwrap().remove(&job_id);
+        });
+        id
+    }
+
     pub fn cancel(&self, id: &str) {
         // a meeting being recorded stops, and its text is still written
         if meeting::stop_if_recording(id) {

@@ -22,6 +22,14 @@ Object.assign(I18N.en.s, {
   "scr.remove": "Remove",
   "scr.lang.ar": "Arabic",
   "scr.lang.en": "English",
+  "scr.saveSound": "Save as sound",
+  "scr.saveSoundTip": "A sound file of the reading, to listen to away from the computer: M4A, or M4B with its chapters for a book. It is made in the list on the left, and can be stopped there.",
+  "scr.saving": "Saving as sound: it goes on in the list on the left.",
+  "scr.jobSaving": "Saving the reading as sound",
+  "scr.chapters": "Chapters",
+  "scr.chaptersTip": "Go to a chapter",
+  "scr.pdfiumAsk": "Reading PDFs needs PDFium, a download of about 4 MB, once. Download it now?",
+  "scr.pdfiumGetting": "Downloading PDFium…",
 });
 
 Object.assign(I18N.ar.s, {
@@ -44,6 +52,14 @@ Object.assign(I18N.ar.s, {
   "scr.remove": "احذف",
   "scr.lang.ar": "العربية",
   "scr.lang.en": "الإنجليزية",
+  "scr.saveSound": "احفظها صوتًا",
+  "scr.saveSoundTip": "ملف صوتي للقراءة تسمعه بعيدًا عن الحاسوب: M4A، أو M4B بفصوله إن كان كتابًا. يُصنع في القائمة على الجانب، ويمكن إيقافه منها.",
+  "scr.saving": "يُحفَظ صوتًا: تابعه في القائمة على الجانب.",
+  "scr.jobSaving": "حفظ القراءة صوتًا",
+  "scr.chapters": "الفصول",
+  "scr.chaptersTip": "انتقل إلى فصل",
+  "scr.pdfiumAsk": "تحتاج قراءة ملفات PDF إلى PDFium، تنزيل بحجم 4 ميغابايت تقريبًا مرة واحدة. أتنزّله الآن؟",
+  "scr.pdfiumGetting": "يُنزَّل PDFium…",
 });
 
 (function () {

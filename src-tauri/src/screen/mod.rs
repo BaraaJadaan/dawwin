@@ -14,12 +14,9 @@ pub mod ocr;
 pub mod pdf;
 pub mod say;
 pub mod shortcut;
-// saving a reading needs the voice of 1.7.0 to make its sound: wired with it
-#[allow(dead_code)]
 pub mod sound;
 
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+
 
 use serde::{Deserialize, Serialize};
 
@@ -49,19 +46,10 @@ impl Default for Settings {
     }
 }
 
-/// Where a text to read comes from.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Origin {
-    /// Selected in another program: never kept, not even its place
-    Selection,
-    /// A file opened in Read aloud (PDF, EPUB, a picture of text)
-    File(PathBuf),
-}
-
 /// "This text, read aloud": what 1.8.0 needs from the reader of 1.7.0.
 pub trait Reader: Send + Sync {
-    /// Read this text from its start, in place of anything being read
-    fn read(&self, text: String, origin: Origin) -> anyhow::Result<()>;
+    /// Read this text from its start, in place of anything being read. It is kept nowhere.
+    fn read(&self, text: String) -> anyhow::Result<()>;
     fn stop(&self);
     fn pause(&self, paused: bool);
     /// Back (negative) or forward a number of sentences
@@ -69,34 +57,19 @@ pub trait Reader: Send + Sync {
     fn reading(&self) -> bool;
 }
 
-/// Until the voices of 1.7.0 are in: nothing can be read, and the user is told so.
-pub struct NoVoice;
-
-impl Reader for NoVoice {
-    fn read(&self, _text: String, _origin: Origin) -> anyhow::Result<()> {
-        anyhow::bail!("{}", crate::tr!("Reading aloud needs a voice, and no voice is installed yet."))
-    }
-    fn stop(&self) {}
-    fn pause(&self, _paused: bool) {}
-    fn skip(&self, _sentences: i32) {}
-    fn reading(&self) -> bool {
-        false
-    }
-}
-
 /// A stand-in for tests (debug builds, `DAWWIN_TEST_READER`): it "reads" for a few seconds a
 /// text it keeps in memory only, so a test can see what reached the voice and press again to stop.
 #[cfg(debug_assertions)]
 #[derive(Default)]
 pub struct StandIn {
-    pub last: Mutex<Option<(String, Origin)>>,
-    until: Mutex<Option<std::time::Instant>>,
+    pub last: std::sync::Mutex<Option<String>>,
+    until: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 #[cfg(debug_assertions)]
 impl Reader for StandIn {
-    fn read(&self, text: String, origin: Origin) -> anyhow::Result<()> {
-        *self.last.lock().unwrap() = Some((text, origin));
+    fn read(&self, text: String) -> anyhow::Result<()> {
+        *self.last.lock().unwrap() = Some(text);
         *self.until.lock().unwrap() = Some(std::time::Instant::now() + std::time::Duration::from_secs(8));
         Ok(())
     }
@@ -121,7 +94,6 @@ pub enum Note {
     Terminal,
     CopyOff,
     KeysHeld,
-    NoVoice,
     Failed,
 }
 
@@ -136,7 +108,6 @@ impl Note {
             Note::Terminal => crate::tr!("This terminal does not give Dawwin its selection, and Ctrl+C would stop its program."),
             Note::CopyOff => crate::tr!("This program does not give Dawwin its selection, and copying it is turned off in Settings."),
             Note::KeysHeld => crate::tr!("The shortcut's keys were still held down. Press it and let go."),
-            Note::NoVoice => crate::tr!("Reading aloud needs a voice, and no voice is installed yet."),
             Note::Failed => crate::tr!("Dawwin could not read the selection."),
         }
         .to_string()
@@ -153,9 +124,9 @@ pub fn pressed(reader: &dyn Reader, settings: &Settings, capture: impl FnOnce(bo
     match capture(settings.copy) {
         Outcome::Text { text, .. } => {
             let text = say::apply(&text, &settings.say);
-            match reader.read(text, Origin::Selection) {
+            match reader.read(text) {
                 Ok(()) => Note::Reading,
-                Err(_) => Note::NoVoice,
+                Err(_) => Note::Failed,
             }
         }
         Outcome::NothingSelected => Note::NothingSelected,
@@ -165,15 +136,6 @@ pub fn pressed(reader: &dyn Reader, settings: &Settings, capture: impl FnOnce(bo
         Outcome::KeysHeld => Note::KeysHeld,
         Outcome::Failed(_) => Note::Failed,
     }
-}
-
-/// The reader Dawwin uses: the stand-in when a test asks for it, otherwise the real one.
-pub fn reader() -> Arc<dyn Reader> {
-    #[cfg(debug_assertions)]
-    if std::env::var_os("DAWWIN_TEST_READER").is_some() {
-        return Arc::new(StandIn::default());
-    }
-    Arc::new(NoVoice)
 }
 
 #[cfg(test)]
@@ -189,7 +151,7 @@ mod tests {
         let r = StandIn::default();
         let note = pressed(&r, &settings(), |_| Outcome::Text { text: "يعمل AI هنا.".into(), by: Method::Uia });
         assert_eq!(note, Note::Reading);
-        assert_eq!(r.last.lock().unwrap().clone(), Some(("يعمل الذكاء الاصطناعي هنا.".into(), Origin::Selection)));
+        assert_eq!(r.last.lock().unwrap().clone(), Some("يعمل الذكاء الاصطناعي هنا.".into()));
         assert!(r.reading());
         let mut asked = false;
         assert_eq!(pressed(&r, &settings(), |_| {
@@ -215,8 +177,6 @@ mod tests {
             assert!(r.last.lock().unwrap().is_none());
             assert!(!n.message().is_empty());
         }
-        // without a voice, the user is told so
-        assert_eq!(pressed(&NoVoice, &settings(), |_| Outcome::Text { text: "x".into(), by: Method::Copy }), Note::NoVoice);
     }
 
     #[test]
@@ -248,13 +208,15 @@ pub static AR: &[(&str, &str)] = &[
     ("This terminal does not give Dawwin its selection, and Ctrl+C would stop its program.", "هذه الطرفية لا تعطي دَوِّن ما حُدِّد فيها، وCtrl+C يوقف البرنامج الذي يعمل فيها."),
     ("This program does not give Dawwin its selection, and copying it is turned off in Settings.", "هذا البرنامج لا يعطي دَوِّن ما حُدِّد فيه، ونسخُه مُطفأ في الإعدادات."),
     ("The shortcut's keys were still held down. Press it and let go.", "كانت مفاتيح الاختصار ما زالت مضغوطة. اضغطه ثم اتركه."),
-    ("Reading aloud needs a voice, and no voice is installed yet.", "تحتاج القراءة بصوت عالٍ إلى صوت، ولم يُثبَّت أي صوت بعد."),
     ("Dawwin could not read the selection.", "تعذّر على دَوِّن قراءة النص المحدَّد."),
     ("Open Dawwin", "افتح دَوِّن"),
     ("Stop reading", "أوقف القراءة"),
     ("Quit Dawwin", "أغلق دَوِّن"),
     ("{} is used by another program. Choose other keys.", "يستخدم برنامج آخر {}. اختر مفاتيح أخرى."),
     ("That is not a shortcut Dawwin can use. Use Ctrl, Alt or Win with a letter, a number or F1 to F24.", "هذا ليس اختصارًا يستطيع دَوِّن استخدامه. استخدم Ctrl أو Alt أو Win مع حرف أو رقم أو F1 إلى F24."),
+    ("The selection", "النص المحدَّد"),
+    ("Save the reading as sound", "احفظ القراءة صوتًا"),
+    ("Saving as sound needs ffmpeg. Download it in Settings.", "يحتاج حفظ القراءة صوتًا إلى ffmpeg. نزّله من الإعدادات."),
     // files
     ("Page {}", "الصفحة {}"),
     ("Chapter {}", "الفصل {}"),

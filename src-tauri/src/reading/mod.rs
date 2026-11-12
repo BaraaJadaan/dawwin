@@ -162,6 +162,8 @@ type Made = Result<Ready, String>;
 struct Work {
     /// (document, sentence), the one waited for first
     wanted: VecDeque<(String, usize)>,
+    /// The sentences someone is waiting for: kept in `wanted` whatever else is asked for
+    waited: HashMap<(String, usize), usize>,
     made: HashMap<(String, usize), (String, Made)>,
 }
 
@@ -182,6 +184,8 @@ pub struct Reader {
     let_go: AtomicBool,
     /// Every voice program is to end (a model is being deleted)
     end_all: AtomicBool,
+    /// Documents being saved as sound: stopping the reading leaves their sentences in the queue
+    saving: Mutex<std::collections::HashSet<String>>,
 }
 
 fn cache_root(paths: &Paths) -> PathBuf {
@@ -199,7 +203,7 @@ impl Reader {
             paths,
             app,
             docs: Mutex::new(HashMap::new()),
-            work: Mutex::new(Work { wanted: VecDeque::new(), made: HashMap::new() }),
+            work: Mutex::new(Work { wanted: VecDeque::new(), waited: HashMap::new(), made: HashMap::new() }),
             wake: Condvar::new(),
             done: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
@@ -207,6 +211,7 @@ impl Reader {
             gpu_held: AtomicBool::new(false),
             let_go: AtomicBool::new(false),
             end_all: AtomicBool::new(false),
+            saving: Mutex::new(Default::default()),
         });
         let r = reader.clone();
         std::thread::Builder::new().name("voice".into()).spawn(move || r.run()).expect("voice thread");
@@ -264,8 +269,11 @@ impl Reader {
         let key = (doc_id.to_string(), index);
         let mut w = self.work.lock().unwrap();
         let count = self.docs.lock().unwrap().get(doc_id).map(|d| d.sentences.len()).ok_or_else(|| crate::tr!("That text is no longer open."))?;
-        // what is wanted now: this sentence, then the ones after it; other places can wait
-        w.wanted.retain(|(d, i)| d == doc_id && *i > index && *i <= index + AHEAD);
+        // what is wanted now: this sentence, then the ones after it; other places can wait, but
+        // not one someone else waits for, nor a document being saved as sound
+        let saving = self.saving.lock().unwrap().clone();
+        let waited: Vec<(String, usize)> = w.waited.keys().cloned().collect();
+        w.wanted.retain(|k| (k.0 == doc_id && k.1 > index && k.1 <= index + AHEAD) || waited.contains(k) || saving.contains(&k.0));
         for i in (index..(index + AHEAD + 1).min(count)).rev() {
             let k = (doc_id.to_string(), i);
             let fresh = w.made.get(&k).is_some_and(|(s, m)| *s == sig && m.is_ok());
@@ -283,24 +291,66 @@ impl Reader {
             w.made.remove(&key);
         }
         self.wake.notify_all();
+        *w.waited.entry(key.clone()).or_insert(0) += 1;
         let deadline = std::time::Instant::now() + Duration::from_secs(6 * 60);
-        loop {
+        let result = loop {
             if let Some((s, m)) = w.made.get(&key) {
                 if *s == sig {
-                    return m.clone();
+                    break m.clone();
                 }
+            }
+            // forgotten meanwhile (a selection stopped): nobody wants it any more
+            if !self.docs.lock().unwrap().contains_key(doc_id) {
+                break Err(crate::tr!("That text is no longer open."));
             }
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             if left.is_zero() {
-                return Err(crate::tr!("The voice did not answer in {} seconds.", 360));
+                break Err(crate::tr!("The voice did not answer in {} seconds.", 360));
             }
-            w = self.done.wait_timeout(w, left).unwrap().0;
+            w = self.done.wait_timeout(w, left.min(Duration::from_secs(1))).unwrap().0;
+        };
+        if let Some(n) = w.waited.get_mut(&key) {
+            *n -= 1;
+            if *n == 0 {
+                w.waited.remove(&key);
+            }
+        }
+        result
+    }
+
+    /// An open document, by its id.
+    pub fn doc(&self, id: &str) -> Option<Arc<Doc>> {
+        self.docs.lock().unwrap().get(id).cloned()
+    }
+
+    /// Forget a document and the sound made of it: a selection read from another program is kept
+    /// nowhere once it has been read.
+    pub fn forget(&self, doc_id: &str) {
+        self.docs.lock().unwrap().remove(doc_id);
+        {
+            let mut w = self.work.lock().unwrap();
+            w.wanted.retain(|(d, _)| d != doc_id);
+            w.made.retain(|(d, _), _| d != doc_id);
+        }
+        self.done.notify_all();
+        let _ = std::fs::remove_dir_all(cache_root(&self.paths).join(doc_id));
+    }
+
+    /// While a document is saved as sound, stopping the reading leaves its sentences queued.
+    pub fn set_saving(&self, doc_id: &str, on: bool) {
+        let mut s = self.saving.lock().unwrap();
+        if on {
+            s.insert(doc_id.to_string());
+        } else {
+            s.remove(doc_id);
         }
     }
 
-    /// Stop making sentences ahead (reading was stopped, or another text opened).
+    /// Stop making sentences ahead (reading was stopped, or another text opened). What a document
+    /// being saved as sound wants stays.
     pub fn stop(&self) {
-        self.work.lock().unwrap().wanted.clear();
+        let saving = self.saving.lock().unwrap().clone();
+        self.work.lock().unwrap().wanted.retain(|(d, _)| saving.contains(d));
     }
 
     fn run(self: Arc<Self>) {
@@ -679,7 +729,12 @@ pub async fn reading_open(app: AppHandle, path: Option<String>, text: Option<Str
         let r = reader(&app);
         r.stop();
         let doc = if let Some(p) = path {
-            let read = formats::read_path(Path::new(&p)).map_err(|e| format!("{e:#}"))?;
+            let read = if crate::screen::files::kind(Path::new(&p)).is_some() {
+                let paths = app.state::<Arc<Core>>().paths.clone();
+                crate::screen::files::read(&paths, Path::new(&p)).map_err(|refused| refused.for_interface())?
+            } else {
+                formats::read_path(Path::new(&p)).map_err(|e| format!("{e:#}"))?
+            };
             r.open(format!("file:{}", p.to_lowercase()), read.title, read.blocks)
         } else if let Some(t) = text {
             let title = title_of(&t);
@@ -751,7 +806,7 @@ pub fn reading_delete_voice(app: AppHandle, id: String) -> R<VoicesView> {
 /// The files Read aloud opens, for dropping.
 #[tauri::command]
 pub fn reading_formats() -> Vec<&'static str> {
-    formats::EXTENSIONS.to_vec()
+    formats::EXTENSIONS.iter().chain(crate::screen::files::EXTENSIONS).copied().collect()
 }
 
 #[tauri::command]
@@ -760,7 +815,7 @@ pub async fn reading_pick_file(app: AppHandle) -> Option<String> {
     app.dialog()
         .file()
         .set_title(crate::tr!("Choose a file to read aloud"))
-        .add_filter(crate::tr!("Text"), formats::EXTENSIONS)
+        .add_filter(crate::tr!("Text"), &formats::EXTENSIONS.iter().chain(crate::screen::files::EXTENSIONS).copied().collect::<Vec<_>>())
         .add_filter(crate::tr!("All files"), &["*"])
         .blocking_pick_file()
         .and_then(|f| f.into_path().ok())

@@ -4,7 +4,7 @@
 Object.assign(I18N.en.s, {
   "read.title": "Read aloud",
   "read.drop": "Drop a file to hear it",
-  "read.formats": "Text, Markdown, web pages, Word documents and subtitles",
+  "read.formats": "Text, Markdown, web pages, Word documents, subtitles, PDFs, e-books and pictures of text",
   "read.open": "Open a file",
   "read.paste": "Or paste text here",
   "read.readIt": "Read it",
@@ -47,7 +47,7 @@ Object.assign(I18N.en.s, {
 Object.assign(I18N.ar.s, {
   "read.title": "القراءة بصوت عالٍ",
   "read.drop": "أفلت ملفًا لتسمعه",
-  "read.formats": "نصوص وMarkdown وصفحات ويب ومستندات Word وملفات ترجمة",
+  "read.formats": "نصوص وMarkdown وصفحات ويب ومستندات Word وملفات ترجمة وPDF وكتب إلكترونية وصور فيها نص",
   "read.open": "افتح ملفًا",
   "read.paste": "أو الصق نصًا هنا",
   "read.readIt": "اقرأه",

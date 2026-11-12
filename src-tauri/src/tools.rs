@@ -127,9 +127,9 @@ pub const PDFIUM: Tool = Tool {
     files: &["pdfium.dll"],
     version: 1,
 };
-// from the Tools run on the 1.8.0 branch: the release uploads that run's files (from_run)
-const PDFIUM_SIZE: u64 = 0;
-const PDFIUM_SHA256: &str = "";
+// from Tools run 43323214991 (the 1.8.0 branch): its pack-pdfium artifact is the file to upload
+const PDFIUM_SIZE: u64 = 3_065_396;
+const PDFIUM_SHA256: &str = "d35d6ed89cdf9e9ebf2bd455de02d3960f31d6c43fcff0ca2f8bfaf372b3af9b";
 
 pub const TOOLS: [Tool; 6] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE, VOICE_GPU, PDFIUM];
 

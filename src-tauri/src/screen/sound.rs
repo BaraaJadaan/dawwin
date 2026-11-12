@@ -66,7 +66,8 @@ pub fn save(ffmpeg: &Path, wav: &Path, title: &str, chapters: &[Chapter], total_
     let part = dest.with_extension("part.m4a");
     let marks = dest.with_extension("chapters.mkv");
     let mut cmd = Command::new(ffmpeg);
-    cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"]).arg(wav);
+    // a book's WAV can pass 4 GB, past what its header can say: read it to its end
+    cmd.args(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ignore_length", "1", "-i"]).arg(wav);
     if !chapters.is_empty() {
         std::fs::write(&marks, chapters_mkv(chapters, total_ms))?;
         cmd.arg("-i").arg(&marks).args(["-map", "0:a", "-map_chapters", "1"]);
@@ -105,6 +106,102 @@ pub fn save(ffmpeg: &Path, wav: &Path, title: &str, chapters: &[Chapter], total_
     }
     std::fs::rename(&part, dest)?;
     Ok(())
+}
+
+/// A mono 16-bit WAV written as it comes, its sizes put in at the end (the largest a header can
+/// say when it is bigger: ffmpeg reads it to its end anyway).
+pub struct WavWriter {
+    file: std::io::BufWriter<std::fs::File>,
+    pub rate: u32,
+    pub samples: u64,
+}
+
+impl WavWriter {
+    pub fn create(path: &Path, rate: u32) -> Result<WavWriter> {
+        use std::io::Write;
+        let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
+        let mut h = Vec::with_capacity(44);
+        h.extend_from_slice(b"RIFF\0\0\0\0WAVEfmt ");
+        h.extend_from_slice(&16u32.to_le_bytes());
+        h.extend_from_slice(&[1, 0, 1, 0]);
+        h.extend_from_slice(&rate.to_le_bytes());
+        h.extend_from_slice(&(rate * 2).to_le_bytes());
+        h.extend_from_slice(&[2, 0, 16, 0]);
+        h.extend_from_slice(b"data\0\0\0\0");
+        file.write_all(&h)?;
+        Ok(WavWriter { file, rate, samples: 0 })
+    }
+
+    pub fn write(&mut self, samples: &[f32]) -> Result<()> {
+        use std::io::Write;
+        let mut b = Vec::with_capacity(samples.len() * 2);
+        for s in samples {
+            b.extend_from_slice(&((s.clamp(-1.0, 1.0) * 32767.0) as i16).to_le_bytes());
+        }
+        self.file.write_all(&b)?;
+        self.samples += samples.len() as u64;
+        Ok(())
+    }
+
+    pub fn ms(&self) -> u64 {
+        self.samples * 1000 / self.rate.max(1) as u64
+    }
+
+    pub fn finish(self) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+        let data = (self.samples * 2).min(u32::MAX as u64 - 36) as u32;
+        let mut f = self.file.into_inner().map_err(|e| anyhow::anyhow!("{e}"))?;
+        f.seek(SeekFrom::Start(4))?;
+        f.write_all(&(data + 36).to_le_bytes())?;
+        f.seek(SeekFrom::Start(40))?;
+        f.write_all(&data.to_le_bytes())?;
+        Ok(())
+    }
+}
+
+/// Save what Read aloud has open as sound, sentence by sentence through the voices: the job's
+/// work. A book (two headings or more) gets a chapter at each heading. `progress` goes from 0 to 1.
+pub fn save_reading(r: &crate::reading::Reader, doc: &crate::reading::Doc, ffmpeg: &Path, work: &Path, dest: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(f64)) -> Result<Vec<std::path::PathBuf>> {
+    use crate::reading::formats::Kind;
+    r.set_saving(&doc.id, true);
+    let wav = work.join(format!("reading-{}.wav", crate::queue::now_ms()));
+    let result = (|| -> Result<Vec<std::path::PathBuf>> {
+        let book = doc.sentences.iter().filter(|s| s.kind == Kind::Heading).count() >= 2;
+        let mut chapters: Vec<Chapter> = Vec::new();
+        let mut out: Option<WavWriter> = None;
+        let n = doc.sentences.len();
+        for (i, s) in doc.sentences.iter().enumerate() {
+            if cancel.load(Ordering::Relaxed) {
+                bail!("cancelled");
+            }
+            let ready = r.sentence(&doc.id, i).map_err(|e| anyhow::anyhow!(e))?;
+            let (rate, samples) = crate::reading::voice::read_wav(Path::new(&ready.path))?;
+            if out.is_none() {
+                out = Some(WavWriter::create(&wav, rate)?);
+            }
+            let w = out.as_mut().unwrap();
+            let samples = if rate == w.rate { samples } else { crate::reading::voice::resample(&samples, rate, w.rate) };
+            if book && s.kind == Kind::Heading {
+                chapters.push(Chapter { title: s.text.clone(), start_ms: w.ms() });
+            }
+            w.write(&samples)?;
+            // the voice is most of the time: the encoding after it is the last part
+            progress(0.95 * (i + 1) as f64 / n as f64);
+        }
+        let w = out.ok_or_else(|| anyhow::anyhow!(crate::tr!("There is nothing to read in it.")))?;
+        let total = w.ms();
+        w.finish()?;
+        // a book's first chapter starts at its beginning
+        if chapters.first().is_some_and(|c| c.start_ms > 0) {
+            chapters.insert(0, Chapter { title: doc.title.clone(), start_ms: 0 });
+        }
+        save(ffmpeg, &wav, &doc.title, &chapters, total, dest, cancel)?;
+        progress(1.0);
+        Ok(vec![dest.to_path_buf()])
+    })();
+    let _ = std::fs::remove_file(&wav);
+    r.set_saving(&doc.id, false);
+    result
 }
 
 #[cfg(test)]

@@ -56,7 +56,7 @@ for (const lang of ["en", "ar"]) {
 
 // recordings that would go to OneDrive: the notice is shown again, and says so
 {
-  const synced = join(OUT, "record-dialogs-onedrive", "OneDrive");
+  const synced = join(OUT, "record-dialogs-synced", "OneDrive");
   mkdirSync(synced, { recursive: true });
   const home = makeHome("record-dialogs-onedrive", { save_dir: synced });
   writeFileSync(join(home, "recording.json"), JSON.stringify({ sources: "both", notice_shown: true }));

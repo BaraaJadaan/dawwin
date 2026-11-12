@@ -367,7 +367,7 @@ if (ONLY === "all" || ONLY === "translate") {
 
 // ---- 10. a folder OneDrive uploads: said where Record is
 if (ONLY === "all" || ONLY === "onedrive") {
-  const synced = join(OUT, "record-onedrive", "OneDrive - Contoso");
+  const synced = join(OUT, "record-synced", "OneDrive - Contoso");
   mkdirSync(synced, { recursive: true });
   const h = home("onedrive", {}, { save_dir: synced });
   const a = await open(h, port++, { DAWWIN_TEST_RECORD: TEST });

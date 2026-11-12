@@ -492,7 +492,8 @@ mod tests {
             let audio = read(name);
             let ranges = crate::language::first_speech(&audio.samples);
             let clip = Audio { id: format!("{}-language", audio.id), samples: crate::language::joined(&audio.samples, &ranges) };
-            let heard = e.language(&language.display().to_string(), &clip, &[(0, clip.samples.len())]).unwrap();
+            let pieces: Vec<_> = crate::language::pieces(clip.samples.len()).into_iter().map(|(a, b)| (e.language(&language.display().to_string(), &clip, &[(a, b)]).unwrap(), b - a)).collect();
+            let heard = crate::language::average(&pieces);
             e.forget(&clip.id);
             let d = crate::language::decide(&heard, &every).unwrap();
             println!("{name}: {} ({:.2}), next {:?}", d.language, heard[0].p, heard.get(1).map(|h| (&h.code, h.p)));

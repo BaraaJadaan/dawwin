@@ -1291,10 +1291,12 @@ fn detect_language(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &st
     }
     let clip = Audio { id: format!("{id}-language"), samples: language::joined(samples, &ranges) };
     let w = ensure_engine(core, engine, None)?;
-    let heard = w.language(&model.path, &clip, &[(0, clip.samples.len())]);
+    // a piece at a time, each by itself (see `language::pieces`)
+    let heard: Result<Vec<_>> = language::pieces(clip.samples.len()).into_iter().map(|(a, b)| Ok((w.language(&model.path, &clip, &[(a, b)])?, b - a))).collect();
     w.forget(&clip.id);
+    let heard = language::average(&heard?);
     let with_model = languages_with_a_model(core);
-    language::decide(&heard?, &with_model).ok_or_else(|| anyhow!(crate::tr!("There is too little speech in this recording to tell its language.")))
+    language::decide(&heard, &with_model).ok_or_else(|| anyhow!(crate::tr!("There is too little speech in this recording to tell its language.")))
 }
 
 /// Find the speakers of a finished transcript (a job from `Core::find_speakers`).

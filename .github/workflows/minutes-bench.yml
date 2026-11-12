@@ -3,20 +3,14 @@ name: Minutes bench
 # Which local models Dawwin offers for minutes: every candidate writes the minutes of the made-up
 # recordings in tools/bench-minutes/meetings through llama.cpp on a CPU, the way the app asks
 # (src-tauri/prompts), and score.py scores them against the hand-made answers. Run it from the
-# Actions tab; `models` picks some of the keys below.
+# Actions tab; `models` picks some of the keys below. Each model is the file at the revision that was
+# measured for 1.6.0 (for the ones Dawwin offers, the revision it downloads).
 on:
   workflow_dispatch:
     inputs:
       models:
         description: "Model keys, comma separated (empty: all)"
         default: ""
-  # until this file is on main, a push to the 1.6.0 branch is the only way to start it
-  push:
-    branches: [claude/dawwin-1-6-0-7a404a]
-    paths:
-      - tools/bench-minutes/**
-      - src-tauri/prompts/**
-      - .github/workflows/minutes-bench.yml
 
 env:
   LLAMA: b12237
@@ -29,38 +23,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { key: qwen35-0.8b, url: "unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q4_K_M.gguf" }
-          - { key: qwen35-0.8b-q8, url: "unsloth/Qwen3.5-0.8B-GGUF/resolve/main/Qwen3.5-0.8B-Q8_0.gguf" }
-          - { key: qwen35-2b, url: "unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q4_K_M.gguf" }
-          - { key: qwen35-2b-q8, url: "unsloth/Qwen3.5-2B-GGUF/resolve/main/Qwen3.5-2B-Q8_0.gguf" }
-          - { key: qwen35-4b, url: "unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf" }
-          - { key: qwen35-9b, url: "unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf" }
-          - { key: gemma4-e2b, url: "unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf" }
-          - { key: gemma4-e4b, url: "unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-Q4_K_M.gguf" }
-          - { key: gemma4-12b, url: "unsloth/gemma-4-12b-it-GGUF/resolve/main/gemma-4-12b-it-Q4_K_M.gguf" }
-          - { key: ministral3-3b, url: "mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/main/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf" }
-          - { key: ministral3-8b, url: "mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/main/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf" }
-          - { key: ministral3-14b, url: "mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/main/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf" }
-          - { key: granite42-3b, url: "ibm-granite/granite-4.2-3b-GGUF/resolve/main/granite-4.2-3b-Q4_K_M.gguf" }
-          - { key: granite42-8b, url: "ibm-granite/granite-4.2-8b-GGUF/resolve/main/granite-4.2-8b-Q4_K_M.gguf" }
-          - { key: phi4-mini, url: "bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/main/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf" }
-          - { key: allam-7b, url: "bartowski/ALLaM-AI_ALLaM-7B-Instruct-preview-GGUF/resolve/main/ALLaM-AI_ALLaM-7B-Instruct-preview-Q4_K_M.gguf" }
-          - { key: fanar1-9b, url: "mradermacher/Fanar-1-9B-Instruct-GGUF/resolve/main/Fanar-1-9B-Instruct.Q4_K_M.gguf" }
-          - { key: jais3-0.9b, url: "IFM/Jais-3-0.9B-GGUF/resolve/main/Jais-3-0.9B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
-          - { key: jais3-3.7b, url: "IFM/Jais-3-3.7B-GGUF/resolve/main/Jais-3-3.7B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
-          - { key: jais3-7b, url: "IFM/Jais-3-7B-GGUF/resolve/main/Jais-3-7B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
+          - { key: qwen35-0.8b, url: "unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf" }
+          - { key: qwen35-0.8b-q8, url: "unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q8_0.gguf" }
+          - { key: qwen35-2b, url: "unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q4_K_M.gguf" }
+          - { key: qwen35-2b-q8, url: "unsloth/Qwen3.5-2B-GGUF/resolve/f6d5376be1edb4d416d56da11e5397a961aca8ae/Qwen3.5-2B-Q8_0.gguf" }
+          - { key: qwen35-4b, url: "unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf" }
+          - { key: qwen35-9b, url: "unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf" }
+          - { key: gemma4-e2b, url: "unsloth/gemma-4-E2B-it-GGUF/resolve/0314792d7f1f7e229411f620751375812bb9faf2/gemma-4-E2B-it-Q4_K_M.gguf" }
+          - { key: gemma4-e4b, url: "unsloth/gemma-4-E4B-it-GGUF/resolve/bfc15c382204943c3a8fff0c750b94ae2364d7a3/gemma-4-E4B-it-Q4_K_M.gguf" }
+          - { key: gemma4-12b, url: "unsloth/gemma-4-12b-it-GGUF/resolve/fc034cfff751157913579611efad8462ac1be606/gemma-4-12b-it-Q4_K_M.gguf" }
+          - { key: ministral3-3b, url: "mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/eb599d408350ea2bb60452cb86be7c7b2fc28227/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf" }
+          - { key: ministral3-8b, url: "mistralai/Ministral-3-8B-Instruct-2512-GGUF/resolve/0102285ad796bd99af90f58de616092e5630e970/Ministral-3-8B-Instruct-2512-Q4_K_M.gguf" }
+          - { key: ministral3-14b, url: "mistralai/Ministral-3-14B-Instruct-2512-GGUF/resolve/74fac473c43357d7fb2671713608183cc72496d0/Ministral-3-14B-Instruct-2512-Q4_K_M.gguf" }
+          - { key: granite42-3b, url: "ibm-granite/granite-4.2-3b-GGUF/resolve/c40945d71cd90f249a56985e8155551a9188dc30/granite-4.2-3b-Q4_K_M.gguf" }
+          - { key: granite42-8b, url: "ibm-granite/granite-4.2-8b-GGUF/resolve/93f3f6a8938ee922b784cf4e5b4203cd3428df8f/granite-4.2-8b-Q4_K_M.gguf" }
+          - { key: phi4-mini, url: "bartowski/microsoft_Phi-4-mini-instruct-GGUF/resolve/7ff82c2aaa4dde30121698a973765f39be5288c0/microsoft_Phi-4-mini-instruct-Q4_K_M.gguf" }
+          - { key: allam-7b, url: "bartowski/ALLaM-AI_ALLaM-7B-Instruct-preview-GGUF/resolve/45e76a03c7eaab4ef74d9f4e8a2d77cadab55d1d/ALLaM-AI_ALLaM-7B-Instruct-preview-Q4_K_M.gguf" }
+          - { key: fanar1-9b, url: "mradermacher/Fanar-1-9B-Instruct-GGUF/resolve/63b1f77e1ef4f91bca3c8e1db4511f6f62620b58/Fanar-1-9B-Instruct.Q4_K_M.gguf" }
+          - { key: jais3-0.9b, url: "IFM/Jais-3-0.9B-GGUF/resolve/870b38e7b9c515cb733aa70bbef0d16b1c80771a/Jais-3-0.9B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
+          - { key: jais3-3.7b, url: "IFM/Jais-3-3.7B-GGUF/resolve/dbdeb53ba90fc21a20b39e35564dcad2e8f3955a/Jais-3-3.7B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
+          - { key: jais3-7b, url: "IFM/Jais-3-7B-GGUF/resolve/e171351744258b67bb6eb445e76d9d122bf542c0/Jais-3-7B-Q4_K_M.gguf", kwargs: '{"reasoning_effort": "low"}' }
           # the translation model Dawwin already downloads: expected not to do it well
-          - { key: milmmt46-4b, url: "mradermacher/MiLMMT-46-4B-v1.0-GGUF/resolve/main/MiLMMT-46-4B-v1.0.Q4_K_M.gguf" }
+          - { key: milmmt46-4b, url: "mradermacher/MiLMMT-46-4B-v1.0-GGUF/resolve/3d05b58ace3d89a89af0574cdc49c84567f33969/MiLMMT-46-4B-v1.0.Q4_K_M.gguf" }
     steps:
       - uses: actions/checkout@v4
       - name: Wanted?
         id: want
         run: |
           wanted="${{ inputs.models }}"
-          # a push runs only the models named in tools/bench-minutes/only.txt, when there is one
-          if [ -z "$wanted" ] && [ "${{ github.event_name }}" = "push" ] && [ -f tools/bench-minutes/only.txt ]; then
-            wanted=$(grep -v '^#' tools/bench-minutes/only.txt | tr -d ' \r' | grep . | paste -sd, -)
-          fi
           if [ -z "$wanted" ] || [[ ",$wanted," == *",${{ matrix.key }},"* ]]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
       - name: Room on the disk
         if: steps.want.outputs.run == 'true'

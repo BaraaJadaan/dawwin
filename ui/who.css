@@ -1,0 +1,31 @@
+/* What came with 1.4: speakers in the transcript, its little menus, words and names, the subtitle look. */
+
+/* the speaker's name where a turn starts, over the line, across the row */
+.seg .who {
+  grid-column: 1 / -1; justify-self: start; margin: 4px 0 -8px; padding: 1px 8px; border: 1px solid transparent;
+  border-radius: 6px; background: transparent; color: var(--accent); font: 600 13px/1.6 var(--ui-font); cursor: pointer;
+}
+.seg .who:hover { background: var(--accent-soft); border-color: var(--line); }
+.segments.no-stamps .seg .who { grid-column: 1; }
+
+.who-pop { max-height: min(420px, 70vh); overflow-y: auto; }
+.who-input { display: flex; flex-direction: column; gap: 6px; padding: 6px; min-width: 240px; }
+.who-input label { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.who-input .input { margin: 0; width: 100%; }
+
+#ctx-who:empty { display: none; }
+#ctx-who { display: flex; flex-direction: column; border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+
+#search-who { min-width: 0; max-width: 150px; }
+
+/* words and names */
+.word-list { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px 4px; }
+.word-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) auto; gap: 8px; align-items: center; }
+.word-row .input { margin: 0; min-width: 0; }
+
+/* the subtitle look */
+.look-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px 14px; padding: 14px 16px; }
+.look-grid label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.look-grid select.input { min-width: 0; width: 100%; }
+.look-preview { padding: 0 16px 14px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.look-preview video { width: min(100%, 640px); border-radius: 8px; background: #000; }

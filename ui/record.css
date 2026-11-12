@@ -1,0 +1,43 @@
+/* Recording a meeting (record.js): the Record bar, the levels, and "Me" / "Them" on the lines. */
+:root { --rec: #c2410c; --rec-soft: #fdebdf; --me: #0f766e; --them: #6d28d9; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --rec: #fb923c; --rec-soft: #3a2314; --me: #2bb5a6; --them: #a78bfa; }
+}
+:root[data-theme="dark"] { --rec: #fb923c; --rec-soft: #3a2314; --me: #2bb5a6; --them: #a78bfa; }
+
+.record-bar { width: min(980px, 100%); display: flex; flex-direction: column; gap: 8px; }
+.record-bar:empty { display: none; }
+.rec-idle, .rec-live, .rec-cutoff {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+}
+.rec-idle select.input { min-width: 0; flex: 0 1 auto; }
+.btn-record { background: var(--panel); border-color: var(--rec); color: var(--rec); font-weight: 600; gap: 8px; }
+.btn-record:hover { background: var(--rec-soft); }
+.rec-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--rec); flex: none; }
+.rec-dot.on { animation: rec-pulse 1.4s ease-in-out infinite; }
+@keyframes rec-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .rec-dot.on { animation: none; } }
+.rec-time { font: 600 15px/1 Consolas, "Cascadia Mono", monospace; min-width: 4.5em; }
+.rec-meters { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 160px; }
+.rec-meter { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
+.rec-meter-name { width: 3.2em; color: var(--muted); }
+.rec-meter-bar { flex: 1; height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; direction: ltr; }
+.rec-meter-bar span { display: block; height: 100%; background: var(--accent); border-radius: 99px; transition: width .1s linear; }
+.rec-warn, .rec-note { margin: 0; padding: 8px 12px; border-radius: 8px; font-size: 13.5px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.rec-warn { background: var(--warn-soft); color: var(--text); }
+.rec-note { background: var(--accent-soft); }
+.rec-warn select.input { min-width: 0; }
+.rec-cutoff { background: var(--warn-soft); border-color: transparent; }
+.rec-cutoff span { flex: 1; min-width: 200px; }
+.btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+.t-rec { display: flex; flex-direction: column; gap: 6px; }
+.t-rec .rec-live { padding: 6px 10px; }
+.t-progress.recording .progress, .t-progress.recording .t-progress-row { display: none; }
+
+/* whose line it is, in a recorded meeting */
+.seg .line { display: flex; gap: 10px; align-items: baseline; min-width: 0; }
+.seg .line .text { flex: 1; min-width: 0; }
+.seg .who { flex: none; font: 600 12.5px/1.2 var(--ui-font); color: var(--me); min-width: 2.6em; }
+.seg .who-them { color: var(--them); }

@@ -19,6 +19,65 @@ pub fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub fn no_window(_cmd: &mut Command) {}
 
+/// Kill a child and everything it started. The `ffmpeg.exe` Chocolatey or Scoop put on the PATH is
+/// a shim that runs the real one as its own child: killing the shim alone leaves that one running,
+/// holding the pipes and the half-written file until it has encoded everything.
+pub fn kill_tree(child: &mut std::process::Child) {
+    if matches!(child.try_wait(), Ok(None)) {
+        // its id cannot belong to another process while `child` holds its handle
+        #[cfg(windows)]
+        {
+            let mut cmd = Command::new("taskkill");
+            cmd.args(["/T", "/F", "/PID", &child.id().to_string()]);
+            cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            no_window(&mut cmd);
+            let _ = cmd.status();
+        }
+    }
+    let _ = child.kill();
+}
+
+/// Delete a half-written file that a process just killed may still hold for a moment (a killed
+/// tree ends one process at a time). Gives up after two seconds.
+pub fn remove_when_free(path: &Path) {
+    for _ in 0..40 {
+        match std::fs::remove_file(path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => return,
+        }
+    }
+}
+
+/// Run `work`, and kill `children` (with all they started) the moment `cancel` is set, even while
+/// `work` is blocked on one of their pipes: a stop must not wait for ffmpeg's next bytes, which on a
+/// slow machine can take seconds. A killed child closes its pipes, so `work` then ends too.
+pub fn killing_on_stop<T>(children: &[&std::sync::Mutex<std::process::Child>], cancel: &std::sync::atomic::AtomicBool, work: impl FnOnce() -> T) -> T {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct Done<'a>(&'a AtomicBool);
+    impl Drop for Done<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+        }
+    }
+    let finished = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            while !finished.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Relaxed) {
+                    for c in children {
+                        kill_tree(&mut c.lock().unwrap_or_else(|e| e.into_inner()));
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        });
+        // set however `work` ends, so the watcher ends with it
+        let _done = Done(&finished);
+        work()
+    })
+}
+
 /// While one of these lives, the computer does not go to sleep by itself: a long download or
 /// transcription should still be running when the user comes back.
 pub struct KeepAwake;
@@ -157,6 +216,12 @@ pub fn folder_size(dir: &Path) -> u64 {
 
 /// The speech engine ships in a folder next to the app.
 pub fn engine_exe() -> Option<PathBuf> {
+    // for trying the app with a stand-in engine (examples/fake_engine.rs); not in release builds
+    if cfg!(debug_assertions) {
+        if let Some(exe) = std::env::var_os("DAWWIN_TEST_ENGINE").map(PathBuf::from).filter(|p| p.is_file()) {
+            return Some(exe);
+        }
+    }
     let exe = std::env::current_exe().ok()?.parent()?.join("engine").join("dawwin-engine.exe");
     exe.is_file().then_some(exe)
 }
@@ -240,6 +305,25 @@ pub struct Settings {
     /// What transcribing a folder writes next to each recording; unset means text only
     #[serde(default)]
     pub folder_formats: Option<Vec<String>>,
+    /// How to write the words Dawwin keeps getting wrong (see `words`)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<crate::words::Entry>,
+    /// The speaker's name at the start of a subtitle where the speaker changes, in SRT and burned in
+    #[serde(default)]
+    pub names_in_srt: bool,
+    /// The speaker in WebVTT's voice tag; unset means yes
+    #[serde(default)]
+    pub names_in_vtt: Option<bool>,
+    /// How burned-in subtitles look
+    #[serde(default)]
+    pub look: crate::look::Look,
+    /// How large the interface is drawn: the webview's zoom, 1 as it comes
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zoom: Option<f64>,
+    /// Where the steps save the sound and the videos, and save dialogs open: unset means next
+    /// to the recording (see `saving`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_dir: Option<String>,
 }
 
 impl Settings {
@@ -287,6 +371,12 @@ impl Settings {
             Some("cpu") | Some("cpu-fast") | Some("cpu-exact") => "cpu",
             _ => "auto",
         }
+    }
+
+    /// Tell the exports whether subtitles name the speaker, and how burned-in ones look.
+    pub fn apply_to_subtitles(&self) {
+        crate::speakers::set_subtitle_names(self.names_in_srt, self.names_in_vtt.unwrap_or(true));
+        crate::look::set(self.look.clone());
     }
 
     pub fn folder_formats(&self) -> Vec<String> {

@@ -217,11 +217,7 @@ pub fn add_subtitles(ffmpeg: &Path, video: &Path, tracks: &[Track], dest: &Path,
 /// (Media Foundation, which uses whatever the computer has, or software), and x264 of a full ffmpeg.
 pub const H264_ENCODERS: &[&str] = &["h264_nvenc", "h264_amf", "h264_qsv", "h264_mf", "libx264"];
 
-/// How the subtitles look: Segoe UI (Windows' Arial breaks Arabic: ث before لا comes out as a box),
-/// a little larger than ffmpeg's default, with an outline and a soft shadow to read on any picture.
-/// `Encoding=-1` lets libass find each line's direction itself: without it a right-to-left line is
-/// laid out from the left, its full stop lands at the start and the Arabic around an English word swaps.
-const STYLE: &str = "FontName=Segoe UI,FontSize=18,Outline=1.6,Shadow=0.8,MarginV=18,Encoding=-1";
+// How the subtitles look is the user's setting: see `look`.
 
 /// What `ffmpeg -i` says about a video, as much as burning needs.
 #[derive(Debug, Default, PartialEq)]
@@ -229,8 +225,10 @@ struct Probe {
     duration_s: f64,
     /// Of the whole file, from its "Duration" line
     total_kbps: Option<u64>,
-    /// Of the first video stream
+    /// Of the first video stream: its size, its shorter side, and how it is coded
     pixels: u64,
+    short_side: u64,
+    video_codec: String,
     video_kbps: Option<u64>,
     /// The audio streams' codecs, and what their bitrates add up to where they say
     audio: Vec<String>,
@@ -262,11 +260,13 @@ fn parse_probe(text: &str) -> Probe {
                     continue;
                 }
                 seen_video = true;
+                p.video_codec = rest.split([' ', ',']).next().unwrap_or("").to_string();
                 for part in rest.split([',', ' ']) {
                     if let Some((w, h)) = part.split_once('x') {
                         if let (Ok(w), Ok(h)) = (w.parse::<u64>(), h.parse::<u64>()) {
                             if w > 0 && h > 0 && p.pixels == 0 {
                                 p.pixels = w * h;
+                                p.short_side = w.min(h);
                             }
                         }
                     }
@@ -295,24 +295,51 @@ fn probe(ffmpeg: &Path, video: &Path) -> Probe {
 /// needs. A picture that does not say (MKV, WebM) has the file's bitrate less its sound's. Only a
 /// floor against nonsense: a floor of 1,500 kb/s made a web video's copy three times its size.
 fn bitrate(p: &Probe) -> u64 {
-    let most = match p.pixels {
+    let most = most_kbps(p.pixels);
+    let own = p.video_kbps.or_else(|| p.total_kbps.map(|t| t.saturating_sub(p.audio_kbps)).filter(|k| *k > 0));
+    own.map_or(most, |k| (k * 5 / 4).clamp(300.min(most), most))
+}
+
+/// The bitrate a picture of this many pixels needs at most.
+fn most_kbps(pixels: u64) -> u64 {
+    match pixels {
         0..=500_000 => 2_500,
         500_001..=1_000_000 => 5_000,
         1_000_001..=2_100_000 => 8_000,
         2_100_001..=3_700_000 => 14_000,
         _ => 25_000,
-    };
-    let own = p.video_kbps.or_else(|| p.total_kbps.map(|t| t.saturating_sub(p.audio_kbps)).filter(|k| *k > 0));
-    own.map_or(most, |k| (k * 5 / 4).clamp(300.min(most), most))
+    }
+}
+
+/// The bitrate for the picture as it is encoded: enlarged for sharp text, by as much as its height
+/// grew (the enlarged picture has no more detail than before, only sharper letters), within what
+/// its new size needs at most.
+fn encode_kbps(p: &Probe, look: &crate::look::Look) -> u64 {
+    let k = bitrate(p);
+    if !look.sharpens(p.short_side) {
+        return k;
+    }
+    let grow = crate::look::SHARP_HEIGHT as f64 / p.short_side as f64;
+    let pixels = (p.pixels as f64 * grow * grow) as u64;
+    ((k as f64 * grow) as u64).min(most_kbps(pixels)).max(k)
 }
 
 /// The arguments for ffmpeg: the video, with `subtitles` (a file in the folder ffmpeg runs in) on
-/// the picture, encoded with `encoder`, into the MP4 `dest`.
-fn burn_arguments(video: &Path, subtitles: &str, encoder: &str, p: &Probe, dest: &Path) -> Vec<std::ffi::OsString> {
-    let mut a: Vec<std::ffi::OsString> = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i"].iter().map(Into::into).collect();
+/// the picture as `look` says, encoded with `encoder`, into the MP4 `dest`. With `clip` (from, how
+/// long), only that part, without sound: the preview of the look.
+fn burn_arguments(video: &Path, subtitles: &str, encoder: &str, p: &Probe, dest: &Path, look: &crate::look::Look, clip: Option<(f64, f64)>) -> Vec<std::ffi::OsString> {
+    let mut a: Vec<std::ffi::OsString> = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y"].iter().map(Into::into).collect();
+    if let Some((from, _)) = clip {
+        a.extend(["-ss".into(), format!("{from:.3}").into()]);
+    }
+    a.push("-i".into());
     a.push(video.into());
-    let filter = format!("subtitles={subtitles}:force_style='{STYLE}',format=nv12");
-    for x in ["-map", "0:v:0", "-map", "0:a?", "-vf", &filter, "-c:v", encoder] {
+    if let Some((_, len)) = clip {
+        a.extend(["-t".into(), format!("{len:.3}").into(), "-an".into()]);
+    }
+    let filter = format!("{},format=nv12", look.filter(subtitles, p.short_side));
+    let sound: &[&str] = if clip.is_some() { &[] } else { &["-map", "0:a?"] };
+    for x in ["-map", "0:v:0"].iter().chain(sound).chain(&["-vf", &filter, "-c:v", encoder]) {
         a.push(x.into());
     }
     match encoder {
@@ -320,13 +347,14 @@ fn burn_arguments(video: &Path, subtitles: &str, encoder: &str, p: &Probe, dest:
         "libx264" => a.extend(["-preset".into(), "faster".into()]),
         _ => {}
     }
-    let k = bitrate(p);
+    let k = encode_kbps(p, look);
     for x in ["-b:v".to_string(), format!("{k}k"), "-maxrate".into(), format!("{}k", k * 3 / 2), "-bufsize".into(), format!("{}k", k * 2)] {
         a.push(x.into());
     }
     // sound MP4 holds goes in as it is; the rest becomes AAC
     const KEPT: &[&str] = &["aac", "mp3", "ac3", "eac3", "alac", "flac", "opus"];
-    if p.audio.iter().all(|c| KEPT.contains(&c.as_str())) {
+    if clip.is_some() {
+    } else if p.audio.iter().all(|c| KEPT.contains(&c.as_str())) {
         a.extend(["-c:a".into(), "copy".into()]);
     } else {
         a.extend(["-c:a".into(), "aac".into(), "-b:a".into(), "192k".into()]);
@@ -354,13 +382,33 @@ pub fn burn_subtitles(ffmpeg: &Path, video: &Path, srt: &str, dest: &Path, scrat
     std::fs::create_dir_all(scratch)?;
     let name = scratch_name("burn", "srt");
     std::fs::write(scratch.join(&name), srt)?;
-    let result = burn_with_any(ffmpeg, video, &name, dest, scratch, cancel, on_progress);
+    let result = burn_with_any(ffmpeg, video, &name, dest, scratch, cancel, on_progress, &crate::look::current(), None);
     let _ = std::fs::remove_file(scratch.join(&name));
     result
 }
 
-fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scratch: &Path, cancel: &AtomicBool, on_progress: &mut dyn FnMut(f64)) -> Result<()> {
+/// One second of `video` from `at`, with the subtitles `srt` (timed from `at`) drawn on it as
+/// `look` says, into the MP4 `dest`: what the look's preview shows.
+pub fn burn_clip(ffmpeg: &Path, video: &Path, srt: &str, at: f64, look: &crate::look::Look, dest: &Path, scratch: &Path) -> Result<()> {
+    std::fs::create_dir_all(scratch)?;
+    let name = scratch_name("look", "srt");
+    std::fs::write(scratch.join(&name), srt)?;
+    let result = burn_with_any(ffmpeg, video, &name, dest, scratch, &AtomicBool::new(false), &mut |_| {}, look, Some((at, 1.0)));
+    let _ = std::fs::remove_file(scratch.join(&name));
+    result
+}
+
+/// Whether this ffmpeg reads AV1 pictures: Dawwin's second video build does, with dav1d.
+pub fn reads_av1(ffmpeg: &Path) -> bool {
+    crate::setup::ffmpeg_lists(ffmpeg, "-decoders").iter().any(|d| d == "libdav1d" || d == "libaom-av1")
+}
+
+#[allow(clippy::too_many_arguments)]
+fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scratch: &Path, cancel: &AtomicBool, on_progress: &mut dyn FnMut(f64), look: &crate::look::Look, clip: Option<(f64, f64)>) -> Result<()> {
     let p = probe(ffmpeg, video);
+    if p.video_codec == "av1" && !reads_av1(ffmpeg) {
+        bail!(crate::tr!("This video is AV1, which this ffmpeg cannot read. Update the video ffmpeg in Settings."));
+    }
     let has = crate::setup::ffmpeg_lists(ffmpeg, "-encoders");
     let encoders: Vec<&str> = H264_ENCODERS.iter().copied().filter(|e| has.iter().any(|h| h == e)).collect();
     if encoders.is_empty() {
@@ -369,8 +417,12 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
     let part = dest.with_extension("part.mp4");
     let mut why = String::new();
     for encoder in encoders {
+        // stopped already: start nothing that would then have to be killed
+        if cancel.load(Ordering::Relaxed) {
+            bail!("cancelled");
+        }
         let mut cmd = Command::new(ffmpeg);
-        cmd.args(burn_arguments(video, subtitles, encoder, &p, &part)).current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        cmd.args(burn_arguments(video, subtitles, encoder, &p, &part, look, clip)).current_dir(scratch).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         no_window(&mut cmd);
         let mut child = cmd.spawn().with_context(|| crate::tr!("could not start ffmpeg"))?;
         let mut err = child.stderr.take().unwrap();
@@ -379,35 +431,42 @@ fn burn_with_any(ffmpeg: &Path, video: &Path, subtitles: &str, dest: &Path, scra
             let _ = std::io::Read::read_to_string(&mut err, &mut s);
             s
         });
-        let mut moved = false;
-        let mut cancelled = false;
-        for line in std::io::BufRead::lines(std::io::BufReader::new(child.stdout.take().unwrap())).map_while(|l| l.ok()) {
-            if cancel.load(Ordering::Relaxed) {
-                cancelled = true;
-                let _ = child.kill();
-                break;
-            }
-            if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
-                if us > 0.0 {
-                    moved = true;
-                    if p.duration_s > 0.0 {
+        let progress = child.stdout.take().unwrap();
+        let child = std::sync::Mutex::new(child);
+        // frames the encoder has written: ffmpeg may report a time before the encoder even opens
+        let mut frames = 0u64;
+        crate::setup::killing_on_stop(&[&child], cancel, || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(progress)).map_while(|l| l.ok()) {
+                if cancel.load(Ordering::Relaxed) {
+                    break;
+                }
+                if let Some(n) = line.strip_prefix("frame=").and_then(|v| v.trim().parse::<u64>().ok()) {
+                    frames = frames.max(n);
+                }
+                if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
+                    if us > 0.0 && p.duration_s > 0.0 {
                         on_progress((us / 1e6 / p.duration_s).clamp(0.0, 1.0));
                     }
                 }
             }
+        });
+        let mut child = child.into_inner().unwrap_or_else(|e| e.into_inner());
+        if cancel.load(Ordering::Relaxed) {
+            crate::setup::kill_tree(&mut child);
+            let _ = child.wait();
+            // its stderr is not waited for: what it started may hold it open
+            crate::setup::remove_when_free(&part);
+            bail!("cancelled");
         }
         let status = child.wait()?;
         let stderr = err_thread.join().unwrap_or_default();
-        if cancelled || cancel.load(Ordering::Relaxed) {
-            let _ = std::fs::remove_file(&part);
-            bail!("cancelled");
-        }
+        let moved = frames > 0;
         if status.success() {
             std::fs::rename(&part, dest)?;
             on_progress(1.0);
             return Ok(());
         }
-        let _ = std::fs::remove_file(&part);
+        crate::setup::remove_when_free(&part);
         why = stderr.trim().to_string();
         // an encoder that could not even start (no such chip, an old driver): the next one
         if moved {
@@ -458,7 +517,8 @@ mod tests {
     #[test]
     fn burned_in_lines_find_their_own_direction() {
         // without it, libass lays an Arabic line out from the left: the full stop at the start
-        assert!(STYLE.split(',').any(|x| x == "Encoding=-1"), "{STYLE}");
+        let style = crate::look::Look::default().style();
+        assert!(style.split(',').any(|x| x == "Encoding=-1"), "{style}");
     }
 
     #[test]
@@ -501,7 +561,7 @@ mod tests {
     fn what_burning_needs_is_read_from_ffmpeg() {
         let p = parse_probe(PROBE);
         let audio = vec!["aac".into(), "vorbis".into()];
-        assert_eq!(p, Probe { duration_s: 62.5, total_kbps: Some(4521), pixels: 1920 * 1080, video_kbps: Some(4387), audio, audio_kbps: 128 + 128 });
+        assert_eq!(p, Probe { duration_s: 62.5, total_kbps: Some(4521), pixels: 1920 * 1080, short_side: 1080, video_codec: "h264".into(), video_kbps: Some(4387), audio, audio_kbps: 128 + 128 });
         assert_eq!(bitrate(&p), 5483, "a quarter above its own");
         assert_eq!(bitrate(&Probe { pixels: 1920 * 1080, video_kbps: Some(40_000), ..Default::default() }), 8_000, "no more than 1080p needs");
         assert_eq!(bitrate(&Probe { pixels: 1280 * 720, video_kbps: Some(800), ..Default::default() }), 1_000, "a web video stays about its size: no floor of 1,500");
@@ -515,13 +575,20 @@ mod tests {
         assert_eq!(film.audio_kbps, 320);
         assert_eq!(bitrate(&film), 1_250, "(1320 - 320) a quarter up");
         assert_eq!(bitrate(&Probe { pixels: 640 * 360, ..Default::default() }), 2_500, "nothing known: by its size");
+        // enlarged for sharp text: by as much as its height grew, within what 1080p needs
+        let small = Probe { pixels: 854 * 480, short_side: 480, video_kbps: Some(1000), ..Default::default() };
+        let sharp = crate::look::Look::default();
+        assert_eq!(encode_kbps(&small, &sharp), 2812, "1,250 times 1080/480");
+        assert_eq!(encode_kbps(&small, &crate::look::Look { sharp: false, ..sharp.clone() }), 1250);
+        assert_eq!(encode_kbps(&Probe { short_side: 1080, ..small }, &sharp), 1250, "a 1080p video is not enlarged");
+        assert_eq!(parse_probe("  Stream #0:0: Video: av1 (libdav1d) (Main), yuv420p(tv), 1280x720, 30 fps").video_codec, "av1");
     }
 
     #[test]
     fn burning_draws_the_subtitles_and_keeps_the_sound_mp4_can_hold() {
         let line = |audio: &[&str], enc: &str| {
             let p = Probe { duration_s: 10.0, pixels: 1280 * 720, video_kbps: Some(2000), audio: audio.iter().map(|s| s.to_string()).collect(), ..Default::default() };
-            burn_arguments(Path::new("in.mkv"), "burn-1.srt", enc, &p, Path::new("out.mp4")).iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
+            burn_arguments(Path::new("in.mkv"), "burn-1.srt", enc, &p, Path::new("out.mp4"), &crate::look::Look { sharp: false, ..Default::default() }, None).iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ")
         };
         let l = line(&["aac"], "h264_nvenc");
         assert!(l.contains("-map 0:v:0 -map 0:a? -vf subtitles=burn-1.srt:force_style='FontName=Segoe UI,"), "{l}");
@@ -530,6 +597,12 @@ mod tests {
         assert!(line(&["opus", "ac3"], "h264_mf").contains("-c:v h264_mf -b:v 2500k") && line(&["opus"], "h264_mf").contains("-c:a copy"));
         assert!(line(&["aac", "vorbis"], "h264_amf").contains("-c:a aac -b:a 192k"), "Vorbis does not go into an MP4");
         assert!(line(&[], "libx264").contains("-preset faster"));
+        // the look's preview: one second from a moment, no sound; a 480p video enlarged first
+        let p = Probe { duration_s: 10.0, pixels: 854 * 480, short_side: 480, video_kbps: Some(1000), audio: vec!["aac".into()], ..Default::default() };
+        let clip = burn_arguments(Path::new("in.mp4"), "look-1.srt", "h264_mf", &p, Path::new("look.mp4"), &crate::look::Look::default(), Some((12.0, 1.0)));
+        let clip = clip.iter().map(|a| a.to_string_lossy().into_owned()).collect::<Vec<_>>().join(" ");
+        assert!(clip.contains("-ss 12.000 -i in.mp4 -t 1.000 -an -map 0:v:0 -vf scale="), "{clip}");
+        assert!(!clip.contains("0:a?") && !clip.contains("-c:a"), "{clip}");
     }
 
     /// With every ffmpeg that can burn (Dawwin's video one, a full one): Arabic with an English word
@@ -556,7 +629,8 @@ mod tests {
             assert!(dest.is_file() && !dir.join(format!("out-{name}.part.mp4")).exists(), "{name}");
             assert_eq!(seen.last(), Some(&1.0), "{name}");
             let p = probe(&ffmpeg, &dest);
-            assert!((p.duration_s - 4.0).abs() < 0.3 && p.pixels == 320 * 180 && p.audio == ["aac"], "{name}: {p:?}");
+            // a picture this small is enlarged to 1080p for sharp text (on unless switched off)
+            assert!((p.duration_s - 4.0).abs() < 0.3 && p.pixels == 1920 * 1080 && p.audio == ["aac"], "{name}: {p:?}");
             assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|f| !f.file_name().to_string_lossy().ends_with(".srt")), "{name}: the subtitles file is gone");
 
             let stop = AtomicBool::new(true);

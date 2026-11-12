@@ -72,7 +72,22 @@ pub const FFMPEG_VIDEO: Tool = Tool {
     files: &["ffmpeg.exe"],
 };
 
-pub const TOOLS: [Tool; 3] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO];
+/// The voice for reading aloud: Dawwin's dawwin-voice.exe (voice/) with audio.cpp's official library
+/// for the processor (with the Microsoft runtime it needs). Comes with the first voice.
+pub const VOICE: Tool = Tool {
+    id: "voice",
+    file: "dawwin-voice-audio.cpp-v0.9.4.tar.xz",
+    size: 8_650_804,
+    sha256: "f3c59f5d9ec7ab04ad2639861e1fcff72340f57131c97c932b9beba77fcc9b4e",
+    folder: "voice",
+    exe: "dawwin-voice.exe",
+    files: &[
+        "dawwin-voice.exe", "audiocpp.dll", "msvcp140.dll", "msvcp140_1.dll", "msvcp140_2.dll", "msvcp140_atomic_wait.dll",
+        "msvcp140_codecvt_ids.dll", "vcomp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcruntime140_threads.dll",
+    ],
+};
+
+pub const TOOLS: [Tool; 4] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE];
 
 pub fn tool(id: &str) -> Option<Tool> {
     TOOLS.into_iter().find(|t| t.id == id)
@@ -367,7 +382,7 @@ mod tests {
             let started = std::time::Instant::now();
             unpack(&file, &root(&paths).join(t.folder)).unwrap();
             let exe = exe(&paths, &t).unwrap_or_else(|| panic!("{} has no {}", t.file, t.exe));
-            let flag = if t.id == "translator" { "--version" } else { "-version" };
+            let flag = if t.id == "translator" || t.id == "voice" { "--version" } else { "-version" };
             let out = std::process::Command::new(&exe).arg(flag).output().unwrap();
             let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
             println!("{}: unpacked in {:.1} s, {}", t.id, started.elapsed().as_secs_f64(), text.lines().next().unwrap_or(""));

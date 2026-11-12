@@ -401,12 +401,13 @@ fn main() {
         let build = unsafe { CStr::from_ptr((v.api.build_version)()) }.to_string_lossy().into_owned();
         eprintln!("audio.cpp {build}");
     }
+    // what the Tools workflow runs to see that it starts: its library must load too
     if args.iter().any(|a| a == "--version") {
         say(match &voice {
             Ok(_) => json!({ "ok": true }),
             Err(e) => json!({ "ok": false, "error": e }),
         });
-        return;
+        std::process::exit(if voice.is_ok() { 0 } else { 1 });
     }
     for line in std::io::stdin().lock().lines().map_while(|l| l.ok()) {
         let Ok(req) = serde_json::from_str::<Value>(&line) else { continue };

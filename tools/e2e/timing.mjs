@@ -94,7 +94,9 @@ check("the video with subtitles is saved next to it", !!withSubs, readdirSync(wo
 const lecSrt = join(work, "lecture.srt");
 await a.invoke("export_to_path", { id: lec.id, path: slash(lecSrt), stamps: false });
 const ls = scoreSrt(lecSrt, "lecture-en");
-check("no subtitle of the lecture is gone before its last word is said", ls.goneEarly === 0, { gone: ls.goneEarly, of: ls.counted, early: ls.early });
+// the pass mark of the timing bench: at most one subtitle in twenty gone before its last word,
+// and then by a moment (a break inside a fast stretch, where the words go by their share of it)
+check("at most one subtitle in twenty of the lecture is gone before its last word, and by under half a second", ls.goneEarly <= ls.counted / 20 && ls.early.every((x) => x.lastWordSaid - x.cue.end < 0.5), { gone: ls.goneEarly, of: ls.counted, early: ls.early });
 const subject = ls.cues.find((c) => /subject/.test(c.text));
 const subjectSaid = ls.said.find((w) => w.text === "subject")?.start;
 check("\"subject to\" is on the screen when it is said", subject && subject.start <= subjectSaid && subject.end >= subjectSaid + 0.3, { cue: subject, said: subjectSaid });

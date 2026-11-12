@@ -4,7 +4,7 @@ audio.cpp's own CLI with the same voice and text.
 
     program.py <folder with dawwin-voice.exe and the library> <audiocpp_cli.exe> <models dir> <out dir> [label]
 
-Exits non-zero when the program gives no sound.
+Exits non-zero when the program gives no sound on the processor build.
 """
 import json
 import os

@@ -35,7 +35,15 @@ pub struct VoiceModel {
     pub restricted: bool,
     /// Better on a GPU; else it is fast enough on the processor
     pub gpu: bool,
+    /// The model's own code for Arabic and for English; empty for a model that takes none
+    pub codes: [&'static str; 2],
     pub voices: &'static [Voice],
+}
+
+impl VoiceModel {
+    pub fn code(&self, lang: Lang) -> &'static str {
+        self.codes[if lang == Lang::Ar { 0 } else { 1 }]
+    }
 }
 
 const fn v(voice_id: &'static str, lang: Lang, woman: bool, number: u8) -> Voice {
@@ -55,6 +63,7 @@ pub const SUPERTONIC: VoiceModel = VoiceModel {
     license_url: "https://huggingface.co/Supertone/supertonic-3/blob/main/LICENSE",
     restricted: true,
     gpu: false,
+    codes: ["ar", "en"],
     voices: &[
         v("F1", Lang::Ar, true, 1), v("F2", Lang::Ar, true, 2), v("F3", Lang::Ar, true, 3), v("F4", Lang::Ar, true, 4), v("F5", Lang::Ar, true, 5),
         v("M1", Lang::Ar, false, 1), v("M2", Lang::Ar, false, 2), v("M3", Lang::Ar, false, 3), v("M4", Lang::Ar, false, 4), v("M5", Lang::Ar, false, 5),
@@ -77,6 +86,7 @@ pub const STAND_IN: VoiceModel = VoiceModel {
     license_url: "",
     restricted: false,
     gpu: true,
+    codes: ["ar", "en"],
     voices: &[v("ar-m", Lang::Ar, false, 1), v("ar-f", Lang::Ar, true, 1), v("en-m", Lang::En, false, 1), v("en-f", Lang::En, true, 1)],
 };
 

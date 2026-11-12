@@ -367,7 +367,7 @@ impl Reader {
             device = if p.device.is_empty() || p.device == "CPU" { "CPU".into() } else { format!("GPU · {}", p.device) };
             let out = dir.join(format!("{index}-{k}.wav"));
             let voice = serde_json::json!({ "voice_id": v.voice_id });
-            p.speak(&run.text, run.lang.code(), &voice, &out)?;
+            p.speak(&run.text, m.code(run.lang), &voice, &out)?;
             pieces.push(voice::read_wav(&out)?);
             let _ = std::fs::remove_file(&out);
         }

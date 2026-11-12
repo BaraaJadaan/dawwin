@@ -234,6 +234,11 @@ fn minutes_path(recording: &Path, ext: &str) -> PathBuf {
     (2..).map(|n| recording.with_file_name(format!("{stem} ({n}).minutes.{ext}"))).find(|p| !p.exists()).unwrap_or(first)
 }
 
+/// Whether a recording has none of its minutes files next to it.
+pub(crate) fn minutes_missing(recording: &Path, formats: &[String]) -> bool {
+    minutes_formats(formats).iter().all(|ext| !recording.with_extension(format!("minutes.{ext}")).exists())
+}
+
 fn write_next_to_recording(t: &Transcript, m: &Minutes, formats: &[String]) -> Result<()> {
     let recording = Path::new(&t.source_path);
     for ext in minutes_formats(formats) {
@@ -257,6 +262,8 @@ mod tests {
         assert_eq!(minutes_path(&rec, "md"), dir.join("lesson.minutes.md"));
         std::fs::write(dir.join("lesson.minutes.md"), "x").unwrap();
         assert_eq!(minutes_path(&rec, "md"), dir.join("lesson (2).minutes.md"), "nothing already there is overwritten");
+        assert!(!minutes_missing(&rec, &["srt".into()]), "lesson.minutes.md is there");
+        assert!(minutes_missing(&rec, &["txt".into()]), "lesson.minutes.txt is not");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

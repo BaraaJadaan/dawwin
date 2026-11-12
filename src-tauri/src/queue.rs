@@ -627,6 +627,10 @@ impl Core {
                         let _ = folder::write_outputs(&t, &missing);
                     }
                 }
+                // asked for now: its minutes too, when it has none next to it
+                if steps.minutes && minutes_job::minutes_missing(&rec, &formats) {
+                    let _ = self.write_minutes(id, None, true);
+                }
             } else {
                 todo.push(path);
             }

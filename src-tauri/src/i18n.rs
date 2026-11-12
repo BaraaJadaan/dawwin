@@ -63,6 +63,7 @@ static AR: &[(&str, &str)] = &[
     ("The model did not load in {} minutes: the graphics driver may be stuck.", "لم يُحمَّل النموذج خلال {} دقائق: ربما علق برنامج تشغيل الرسوميات."),
     ("Something went wrong in Dawwin while it worked on this: {}", "حدث خطأ في دَوِّن أثناء العمل على هذا: {}"),
     ("Dawwin's queue has stopped. Please start Dawwin again.", "توقفت قائمة المهام في دَوِّن. أعد تشغيل دَوِّن من فضلك."),
+    ("Where should Dawwin save its files?", "أين يحفظ دَوِّن ملفاته؟"),
     ("Another program keeps taking the translator's place. Close it and try again.", "برنامج آخر يأخذ مكان المترجم كل مرة. أغلقه وحاول من جديد."),
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
     // commands and dialogs

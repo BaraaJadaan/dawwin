@@ -249,6 +249,10 @@ pub struct Settings {
     /// How large the interface is drawn: the webview's zoom, 1 as it comes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub zoom: Option<f64>,
+    /// Where the steps save the sound and the videos, and save dialogs open: unset means next
+    /// to the recording (see `saving`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub save_dir: Option<String>,
 }
 
 impl Settings {

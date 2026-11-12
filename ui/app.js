@@ -229,6 +229,7 @@ function paintSteps() {
   menu.value = stepTarget();
   menu.disabled = !(s.transcribe && s.translate);
   for (const box of document.querySelectorAll(".step")) box.classList.toggle("on", !!box.querySelector("input:checked"));
+  if (typeof paintJobs === "function") paintJobs();
 }
 
 function wireSteps() {
@@ -658,6 +659,7 @@ function renderSettings() {
 
   // model
   renderModelRows(st);
+  paintSaving(st);
   const own = Object.values(st.families).filter((f) => f.found && !f.variant);
   $("set-custom").hidden = !own.length;
   $("set-custom-text").innerHTML = own.map((f) => tHtml("set.customModel", { path: ltr(f.path) })).join("<br>");
@@ -697,6 +699,24 @@ function renderSettings() {
 /** The tools as rows like the models': `family` keeps the two ffmpegs a choice of one. */
 function toolRows(st, ids) {
   return st.tools.filter((x) => ids.includes(x.id)).map((x) => ({ ...x, family: x.id.startsWith("ffmpeg") ? "tool-ffmpeg" : "tool-" + x.id, tool: true }));
+}
+
+/** Where the steps save files: next to the recording, or a folder of one's own. */
+function paintSaving(st) {
+  const own = !!st.save_dir;
+  $("set-save-where").value = own ? "own" : "next";
+  setText($("set-save-dir"), st.save_dir || "");
+  $("set-save-dir").hidden = !own;
+  $("set-save-change").hidden = !own;
+}
+
+function wireSaving() {
+  $("set-save-where").onchange = async () => {
+    const own = $("set-save-where").value === "own";
+    try { onState(await invoke(own ? "choose_save_dir" : "save_next_to_recording")); } catch (err) { toast(String(err)); }
+    paintSaving(S.snap.setup); // a dialog closed without a folder leaves it as it was
+  };
+  $("set-save-change").onclick = async () => { onState(await invoke("choose_save_dir")); paintSaving(S.snap.setup); };
 }
 
 function renderModelRows(st) {
@@ -1708,6 +1728,8 @@ function paintExportScope() {
   // subtitles into the video it was made from, when it is a video
   const ext = (S.current?.source_path || "").split(".").pop().toLowerCase();
   $("export-video").hidden = $("export-burn").hidden = !MEDIA.video.includes(ext);
+  // a video's sound is what is saved from it: said so
+  setText($("export-audio"), t(MEDIA.video.includes(ext) ? "exp.videoSound" : "exp.audio"));
   box.hidden = !exportView().language;
   for (const b of box.querySelectorAll("button")) {
     const on = b.dataset.scope === S.scope;
@@ -1926,6 +1948,7 @@ function wireEscape() {
 // ------------------------------------------------------------------ wiring
 
 function wire() {
+  wireSaving();
   wireZoom();
   wireEscape();
   wireListen();

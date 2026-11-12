@@ -185,6 +185,8 @@ pub struct SetupView {
     pub folder_formats: Vec<String>,
     /// How large the interface is drawn (Ctrl and plus, minus, zero)
     pub zoom: f64,
+    /// The folder of one's own the steps save into (see `saving`); none: next to the recording
+    pub save_dir: Option<String>,
     pub download: DownloadView,
     pub data_dir: String,
 }
@@ -356,6 +358,7 @@ impl Core {
             })
             .collect();
         let ffmpeg = ffmpeg.map(|p| p.display().to_string());
+        let save_dir = crate::saving::own_folder(&self.settings.lock().unwrap()).map(|d| d.display().to_string());
         let (families, run_on, ui_lang, check_updates, folder_formats, dir, zoom) = {
             let st = self.settings.lock().unwrap();
             let families: BTreeMap<String, ModelStatus> =
@@ -398,6 +401,7 @@ impl Core {
             st.check_updates = check_updates;
             st.folder_formats = folder_formats;
             st.zoom = zoom;
+            st.save_dir = save_dir;
             st.app_version = crate::updates::VERSION.into();
             st.repo_url = format!("https://github.com/{}", crate::updates::REPO);
             st.data_dir = self.paths.roaming.display().to_string();
@@ -822,6 +826,7 @@ impl Core {
             transcript: Some(transcript.to_string()),
             target: Some(language.to_string()),
             status: "queued".into(),
+            folder: self.snapshot().queue.iter().any(|j| j.id == transcript && j.folder),
             ..Default::default()
         };
         self.update(|s| s.queue.push(job));
@@ -1478,11 +1483,14 @@ fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobVie
 fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::transcript::View, burn: bool) -> Result<PathBuf> {
     let tracks = crate::video::tracks(t, view).map_err(|e| anyhow!(e))?;
     let source = PathBuf::from(&t.source_path);
+    // next to the recording, or in the folder of one's own; a folder run's next to the recording
+    let folder_run = core.snapshot().queue.iter().any(|j| j.id == id && j.folder);
+    let place = |dest: PathBuf| crate::saving::place(&core.settings.lock().unwrap(), dest, folder_run);
     core.update_job(id, |j| j.status = "saving_video".into());
     if burn {
         let ffmpeg = setup::burner(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Burning subtitles in needs the video ffmpeg. Download it in Settings.")))?;
         let srt = String::from_utf8(crate::transcript::export_view(t, "srt", false, view)?)?;
-        let dest = audio::unique_path(&crate::video::burned_dest(&source, &tracks));
+        let dest = audio::unique_path(&place(crate::video::burned_dest(&source, &tracks)));
         let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
         let started = Instant::now();
         core.update_job(id, |j| j.progress = 0.0);
@@ -1496,7 +1504,7 @@ fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::tran
         return Ok(dest);
     }
     let ffmpeg = setup::ffmpeg(&core.paths).ok_or_else(|| anyhow!(crate::tr!("Adding subtitles to a video needs ffmpeg. Download it in Settings.")))?;
-    let dest = audio::unique_path(&crate::video::default_dest(&source, &tracks, crate::video::output_ext(&ffmpeg, &source)));
+    let dest = audio::unique_path(&place(crate::video::default_dest(&source, &tracks, crate::video::output_ext(&ffmpeg, &source))));
     crate::video::add_subtitles(&ffmpeg, &source, &tracks, &dest, &core.paths.cache_dir())?;
     Ok(dest)
 }
@@ -1552,7 +1560,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         core.update_job(id, |j| j.status = "saving_audio".into());
         let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| job.title.clone());
         let name = if spans.is_some() { format!("{stem} ({}).m4a", crate::tr!("without silences")) } else { format!("{stem}.m4a") };
-        let dest = source.with_file_name(name);
+        let dest = crate::saving::place(&core.settings.lock().unwrap(), source.with_file_name(name), job.folder);
         let saved = audio::save_sound(&source, &dest, spans.as_deref(), &samples, ffmpeg.as_ref(), &cancel)?;
         core.update_job(id, |j| j.outputs.push(saved.display().to_string()));
     }

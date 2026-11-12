@@ -10,6 +10,7 @@ mod instance;
 mod models;
 mod net;
 mod queue;
+mod saving;
 mod script;
 mod setup;
 mod timing;
@@ -19,7 +20,7 @@ mod translate;
 mod updates;
 mod video;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -316,6 +317,25 @@ fn update_segment(core: C, id: String, index: usize, text: String) -> R<Option<t
     Ok(t.segments.get(index).cloned())
 }
 
+/// Save files from the steps, and open save dialogs, in a folder of one's own: chosen here.
+#[tauri::command]
+async fn choose_save_dir(app: AppHandle) -> R<Snapshot> {
+    let core = app.state::<Arc<Core>>().inner().clone();
+    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should Dawwin save its files?")).blocking_pick_folder() else {
+        return Ok(core.snapshot());
+    };
+    let dir = dir.into_path().map_err(|x| x.to_string())?;
+    core.change_settings(|s| s.save_dir = Some(dir.display().to_string())).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+/// Save files next to each recording again, as it comes.
+#[tauri::command]
+fn save_next_to_recording(core: C) -> R<Snapshot> {
+    core.change_settings(|s| s.save_dir = None).map_err(e)?;
+    Ok(core.snapshot())
+}
+
 /// How large the interface is drawn: the webview's own zoom, from half to twice the size, kept
 /// in the settings. The size it ended up at.
 #[tauri::command]
@@ -454,7 +474,7 @@ async fn export_transcript(app: AppHandle, id: String, format: String, stamps: b
         .set_title(crate::tr!("Export transcript"))
         .set_file_name(format!("{name}.{ext}"))
         .add_filter(label, &[ext]);
-    if let Some(dir) = PathBuf::from(&t.source_path).parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), Path::new(&t.source_path)) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
@@ -521,7 +541,7 @@ async fn export_audio(app: AppHandle, id: String, without_silences: bool) -> R<O
     let stem = source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| safe_name(&t.title));
     let name = if without_silences { format!("{} ({}).{ext}", safe_name(&stem), crate::tr!("without silences")) } else { format!("{}.{ext}", safe_name(&stem)) };
     let mut dlg = app.dialog().file().set_title(crate::tr!("Save the sound")).set_file_name(name).add_filter(crate::tr!("Sound"), &[ext]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
@@ -585,7 +605,7 @@ async fn export_video(app: AppHandle, id: String, view: Option<String>, language
         .set_title(crate::tr!("Save the video with its subtitles"))
         .set_file_name(format!("{} ({}).{ext}", safe_name(&stem), safe_name(&names)))
         .add_filter(crate::tr!("Video"), &[ext]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
@@ -621,7 +641,7 @@ async fn export_burned(app: AppHandle, id: String, view: Option<String>, languag
     let tracks = video::tracks(&t, &view)?;
     let name = video::burned_dest(&source, &tracks).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let mut dlg = app.dialog().file().set_title(crate::tr!("Save the video with its subtitles")).set_file_name(name).add_filter(crate::tr!("Video"), &["mp4"]);
-    if let Some(dir) = source.parent().filter(|d| d.is_dir()) {
+    if let Some(dir) = saving::dialog_folder(&core.settings.lock().unwrap(), &source) {
         dlg = dlg.set_directory(dir);
     }
     let Some(dest) = dlg.blocking_save_file() else { return Ok(None) };
@@ -763,6 +783,8 @@ pub fn run() {
             update_segment,
             fix_timing,
             set_zoom,
+            choose_save_dir,
+            save_next_to_recording,
             translation_targets,
             translate,
             update_translation,

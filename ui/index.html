@@ -70,6 +70,8 @@
           <h1 data-i18n="home.drop"></h1>
           <p><span data-i18n="home.or"></span> <span class="link" data-i18n="home.choose"></span> <span data-i18n="home.or"></span> <span class="link" id="home-folder" data-i18n="home.folder"></span><span data-i18n="home.formats"></span></p>
         </div>
+        <!-- the common jobs by name: each ticks its steps below -->
+        <div class="jobs" id="jobs" role="group" data-i18n-aria="jobs.label"></div>
         <!-- what happens to what is dropped: four steps, one after the other -->
         <div class="steps" id="steps">
           <section class="step" data-step="sound">
@@ -243,6 +245,21 @@
             </div>
           </section>
 
+          <section class="card group" id="set-saving">
+            <h2 data-i18n="set.saving"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="set.saveWhere"></h3>
+                <p class="muted small" id="set-save-dir" dir="ltr" hidden></p>
+              </div>
+              <select id="set-save-where" class="input select select-sm">
+                <option value="next" data-i18n="set.saveNext"></option>
+                <option value="own" data-i18n="set.saveOwn"></option>
+              </select>
+              <button class="btn btn-sm btn-ghost" id="set-save-change" data-i18n="setup.change" hidden></button>
+            </div>
+          </section>
+
           <section class="card group">
             <h2 data-i18n="set.updates"></h2>
             <div class="setting">
@@ -378,5 +395,6 @@
 
   <script src="i18n.js"></script>
   <script src="app.js"></script>
+  <script src="jobs.js"></script>
 </body>
 </html>

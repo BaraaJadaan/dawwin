@@ -176,6 +176,10 @@ select.input { width: auto; min-width: 200px; cursor: pointer; }
 .item .progress { margin-top: 7px; }
 .item.failed .sub { color: var(--danger); }
 
+/* ------------------------------------------------------------ the common jobs by name */
+.jobs { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 4px; }
+.jobs .job-choice[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); }
+
 /* ------------------------------------------------------------ progress */
 .progress { height: 6px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .progress .bar { height: 100%; width: 0; background: var(--accent); border-radius: 99px; transition: width .4s ease; }

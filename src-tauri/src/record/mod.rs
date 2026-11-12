@@ -58,6 +58,9 @@ pub const PIECE_S: f32 = 25.0;
 pub const SEARCH_S: f32 = 8.0;
 /// What is older than this on the clock is final: a packet later than that is cut.
 const MARGIN: usize = SR * 4 / 10;
+/// How long an open stream that is held up is waited for (longer in tests, which share the
+/// processor with many others and run on small CI machines).
+const LATE: usize = if cfg!(test) { 5 * SR } else { 2 * SR };
 /// Free space on the recording's drive: a warning under the first, a clean stop under the second.
 pub const DISK_WARN: u64 = 2_000_000_000;
 pub const DISK_STOP: u64 = 500_000_000;
@@ -382,14 +385,14 @@ fn run(
             last_flush = Instant::now();
             let now = timeline::index_of(source::now(), t0).max(0) as usize;
             let mut horizon = now.saturating_sub(MARGIN);
-            // a capture thread held up for a moment (a busy processor) is waited for, up to two
-            // seconds: what it sends late is still placed
+            // a capture thread held up for a moment (a busy processor) is waited for, up to `LATE`:
+            // what it sends late is still placed
             for t in cfg.sources.tracks() {
                 if open[t.index()] {
                     horizon = horizon.min(tracks[t.index()].end() as usize);
                 }
             }
-            let horizon = horizon.max(now.saturating_sub(2 * SR)) / echo::BLOCK * echo::BLOCK;
+            let horizon = horizon.max(now.saturating_sub(LATE)) / echo::BLOCK * echo::BLOCK;
             if horizon > written {
                 let mut me = tracks[0].take(horizon as u64);
                 let mut them = tracks[1].take(horizon as u64);

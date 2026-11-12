@@ -75,7 +75,8 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
   offered back at the next start. The PC does not sleep while it records, closing Dawwin asks first,
   and a disk running low is said before it is full.
 - Kept in `Documents\Dawwin` as an M4A of about 45 MB an hour (with ffmpeg; as a WAV without it), with
-  both sides to play back in Dawwin. The first time, Dawwin reminds you that recording a call may need
+  both sides to play back in Dawwin. When Documents is in OneDrive, as Windows 11 often sets it up, they
+  go to `Dawwin` in your user folder instead, so that a recording never leaves the computer. The first time, Dawwin reminds you that recording a call may need
   everyone's consent.
 
 ![Recording a meeting: the time, a level for Me and one for Them, Stop, and the text appearing with each line marked Me or Them.](docs/screenshots/record.png)

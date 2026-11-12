@@ -137,7 +137,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | Engine and translator logs | `%LOCALAPPDATA%\Dawwin\logs\engine.log`, `translate.log` |
 | Transcripts | `%APPDATA%\Dawwin\history\*.json` |
 | Settings | `%APPDATA%\Dawwin\settings.json`, and `recording.json` for recording |
-| Recordings of meetings | `Documents\Dawwin` |
+| Recordings of meetings | `Documents\Dawwin`, or `%USERPROFILE%\Dawwin` when Documents is in OneDrive |
 
 ## Adding a language
 

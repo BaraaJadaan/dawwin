@@ -4,7 +4,8 @@ name: Tools
 # ffmpeg in two sizes (tools/ffmpeg/build.sh), "audio", for reading and saving sound and adding
 # subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
 # llama.cpp's official server; and the voice, Dawwin's dawwin-voice.exe (voice/) with audio.cpp's official
-# library for the processor and VoxCPM 2's ready-made voices (voice/refs), and that library's GPU build. Each is built or taken, packed (tools/pack.py), and tried on Windows
+# library for the processor and VoxCPM 2's ready-made voices (voice/refs), and that library's GPU build; and
+# PDFium, for reading PDFs aloud, from pdfium-binaries' official Windows build. Each is built or taken, packed (tools/pack.py), and tried on Windows
 # with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
 # tag, the files go on that release, where the app downloads them from. With the id of an earlier
 # run, its files are tried and uploaded instead of new ones: the app pins their exact bytes.
@@ -108,6 +109,32 @@ jobs:
           name: pack-voice
           path: packs/
 
+  pdfium:
+    # PDFium for reading PDFs aloud (1.8.0): pdfium-binaries' official Windows build, pinned, with the
+    # licenses of what is inside it
+    if: inputs.from_run == ''
+    runs-on: ubuntu-24.04
+    env:
+      PDFIUM: chromium/8152
+      PDFIUM_SHA256: cee2b0e9990bc67c0721774932961b9dbf2766046c10eec925acd4cfba6fdfe3
+    steps:
+      - uses: actions/checkout@v4
+      - name: pdfium-binaries' Windows build, checked
+        run: |
+          curl -sSL --fail --retry 5 -o pdfium.tgz "https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM/\//%2F}/pdfium-win-x64.tgz"
+          echo "$PDFIUM_SHA256  pdfium.tgz" | sha256sum -c -
+          mkdir p pack && tar -xzf pdfium.tgz -C p
+          cp p/bin/pdfium.dll pack/
+          cp p/LICENSE pack/LICENSE-pdfium-binaries.txt
+          for f in p/licenses/*; do cp "$f" "pack/LICENSE-$(basename "$f")"; done
+          ls -l pack
+      - name: Pack
+        run: python3 tools/pack.py packs/dawwin-pdfium-chromium-8152.tar.xz pack | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-pdfium
+          path: packs/
+
   samples:
     # Files of the kinds people bring, made with Ubuntu's full ffmpeg: only for the test.
     runs-on: ubuntu-24.04
@@ -132,7 +159,7 @@ jobs:
           path: s/
 
   try:
-    needs: [ffmpeg, translator, voice, samples]
+    needs: [ffmpeg, translator, voice, pdfium, samples]
     if: ${{ !failure() && !cancelled() }}
     runs-on: windows-2022
     steps:

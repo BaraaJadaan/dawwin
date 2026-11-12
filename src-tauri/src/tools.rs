@@ -115,7 +115,23 @@ pub const VOICE_GPU: Tool = Tool {
     version: 1,
 };
 
-pub const TOOLS: [Tool; 5] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE, VOICE_GPU];
+/// PDFium, for reading PDFs aloud (1.8.0): pdfium-binaries' official Windows build (chromium/8152,
+/// BSD-3-Clause), with the licenses of the libraries inside it. Comes with the first PDF.
+pub const PDFIUM: Tool = Tool {
+    id: "pdfium",
+    file: "dawwin-pdfium-chromium-8152.tar.xz",
+    size: PDFIUM_SIZE,
+    sha256: PDFIUM_SHA256,
+    folder: "pdfium",
+    exe: "pdfium.dll",
+    files: &["pdfium.dll"],
+    version: 1,
+};
+// from the Tools run on the 1.8.0 branch: the release uploads that run's files (from_run)
+const PDFIUM_SIZE: u64 = 0;
+const PDFIUM_SHA256: &str = "";
+
+pub const TOOLS: [Tool; 6] = [TRANSLATOR, FFMPEG_AUDIO, FFMPEG_VIDEO, VOICE, VOICE_GPU, PDFIUM];
 
 pub fn tool(id: &str) -> Option<Tool> {
     TOOLS.into_iter().find(|t| t.id == id)
@@ -437,6 +453,13 @@ mod tests {
             // a library is not a program: that it unpacked whole is what can be checked here
             if t.id == "voice-gpu" {
                 println!("{}: unpacked in {:.1} s", t.id, started.elapsed().as_secs_f64());
+                continue;
+            }
+            // PDFium: it reads a made-up Arabic PDF in reading order
+            if t.id == "pdfium" {
+                let text = crate::screen::pdf::tests::read_made_pdf(exe.parent().unwrap());
+                println!("{}: unpacked in {:.1} s, reads «{}»", t.id, started.elapsed().as_secs_f64(), text);
+                assert!(text.starts_with("مرحبا، هذا Dawwin 1.8 للتجربة."), "pdfium read {text:?}");
                 continue;
             }
             let flag = if t.id == "translator" || t.id == "voice" { "--version" } else { "-version" };

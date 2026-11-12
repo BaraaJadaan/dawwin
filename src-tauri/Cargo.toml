@@ -35,8 +35,6 @@ sonora = "0.3"
 
 # 1.8.0, read anything on the screen: PDFs through pdfium.dll (a tool, downloaded with the first PDF)
 pdfium-render = { version = "0.9.5", default-features = false, features = ["pdfium_latest", "thread_safe"] }
-# pdfium-binaries comes as a .tgz
-flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
 # recording a meeting: the microphone and what the PC plays

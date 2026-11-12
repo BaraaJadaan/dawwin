@@ -385,7 +385,7 @@ pub async fn screen_install_pdfium(app: AppHandle) -> Result<(), String> {
         let stop = std::sync::atomic::AtomicBool::new(false);
         super::files::install_pdfium(&paths, &stop, &mut |e| {
             if let crate::models::Event::Progress { done } = e {
-                let _ = handle.emit("pdfium-progress", (done, super::files::PDFIUM_SIZE));
+                let _ = handle.emit("pdfium-progress", (done, crate::tools::PDFIUM.size));
             }
         })
         .map(|_| ())

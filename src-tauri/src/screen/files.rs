@@ -1,99 +1,46 @@
 //! The files 1.8.0 adds to Read aloud: PDF, EPUB and pictures of text, each as parts (pages or
-//! chapters) of text to read. PDFium comes as a tool, downloaded with the first PDF: the official
-//! Windows build of pdfium-binaries, pinned by size and SHA-256, unpacked with its licenses.
+//! chapters) of text to read. PDFium is a tool (`tools::PDFIUM`), downloaded with the first PDF.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::OnceLock;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::Serialize;
 
 use super::{epub, pdf};
-use crate::models::{self, Event, Finished};
+use crate::models::{Event, Finished};
 use crate::setup::Paths;
-
-/// pdfium-binaries, release chromium/8152 (2026-11-10): BSD-3-Clause, with the notices of the
-/// libraries inside it.
-pub const PDFIUM_URL: &str = "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F8152/pdfium-win-x64.tgz";
-pub const PDFIUM_SIZE: u64 = 4_037_307;
-pub const PDFIUM_SHA256: &str = "cee2b0e9990bc67c0721774932961b9dbf2766046c10eec925acd4cfba6fdfe3";
+use crate::tools::PDFIUM;
 
 /// Where pdfium.dll lives. Test builds can point elsewhere (`DAWWIN_TEST_PDFIUM`).
-pub fn pdfium_dir(paths: &Paths) -> PathBuf {
+pub fn pdfium_dir(paths: &Paths) -> Option<PathBuf> {
     #[cfg(debug_assertions)]
     if let Some(d) = std::env::var_os("DAWWIN_TEST_PDFIUM") {
-        return PathBuf::from(d);
+        return Some(PathBuf::from(d));
     }
-    paths.local.join("tools").join("pdfium")
+    crate::tools::exe(paths, &PDFIUM).and_then(|e| e.parent().map(Path::to_path_buf))
 }
 
 pub fn pdfium_installed(paths: &Paths) -> bool {
-    pdfium_dir(paths).join("pdfium.dll").is_file()
+    pdfium_dir(paths).is_some_and(|d| d.join("pdfium.dll").is_file())
 }
 
 /// Download, check and unpack PDFium. Paused, what arrived stays for the next time.
 pub fn install_pdfium(paths: &Paths, stop: &AtomicBool, on_event: &mut dyn FnMut(Event)) -> Result<Finished> {
-    let dir = pdfium_dir(paths);
-    let archive = dir.with_extension("tgz");
-    let job = models::Download { url: PDFIUM_URL.into(), dest: archive.clone(), size: PDFIUM_SIZE, sha256: PDFIUM_SHA256.into() };
-    if models::download(&job, stop, on_event)? == Finished::Paused {
-        return Ok(Finished::Paused);
-    }
-    let unpacked = unpack_pdfium(&archive, &dir);
-    let _ = std::fs::remove_file(&archive);
-    unpacked?;
-    Ok(Finished::Complete)
+    crate::tools::install(paths, &PDFIUM, stop, on_event)
 }
 
-/// From the .tgz: `bin/pdfium.dll`, `LICENSE` and `licenses/*`, nothing else, as plain files.
-fn unpack_pdfium(archive: &Path, dir: &Path) -> Result<()> {
-    let fresh = dir.with_extension("new");
-    let _ = std::fs::remove_dir_all(&fresh);
-    std::fs::create_dir_all(fresh.join("licenses"))?;
-    let result = (|| -> Result<()> {
-        let gz = flate2::read::GzDecoder::new(std::io::BufReader::new(std::fs::File::open(archive)?));
-        let mut tar = tar::Archive::new(gz);
-        for entry in tar.entries()? {
-            let mut entry = entry?;
-            if !entry.header().entry_type().is_file() {
-                continue;
-            }
-            let path = entry.path()?.to_string_lossy().replace('\\', "/");
-            let path = path.trim_start_matches("./");
-            let to = match path.split('/').collect::<Vec<_>>().as_slice() {
-                ["bin", "pdfium.dll"] => fresh.join("pdfium.dll"),
-                ["LICENSE"] => fresh.join("LICENSE.txt"),
-                ["licenses", name] if !name.is_empty() && !name.contains("..") => fresh.join("licenses").join(name),
-                _ => continue,
-            };
-            entry.set_preserve_mtime(false);
-            entry.unpack(&to).with_context(|| path.to_string())?;
-        }
-        if !fresh.join("pdfium.dll").is_file() {
-            return Err(anyhow!("the download has no pdfium.dll"));
-        }
-        Ok(())
-    })();
-    if let Err(e) = result {
-        let _ = std::fs::remove_dir_all(&fresh);
-        return Err(e);
-    }
-    if dir.exists() {
-        std::fs::remove_dir_all(dir).map_err(|_| anyhow!(crate::tr!("{} is in use. Close what uses it and try again.", dir.display())))?;
-    }
-    std::fs::rename(&fresh, dir)?;
-    Ok(())
-}
-
-static PDFIUM: OnceLock<pdfium_render::prelude::Pdfium> = OnceLock::new();
+/// PDFium, bound once a run.
+static BOUND: OnceLock<pdfium_render::prelude::Pdfium> = OnceLock::new();
 
 fn pdfium(paths: &Paths) -> Result<&'static pdfium_render::prelude::Pdfium> {
-    if let Some(p) = PDFIUM.get() {
+    if let Some(p) = BOUND.get() {
         return Ok(p);
     }
-    let p = pdf::pdfium(&pdfium_dir(paths))?;
-    Ok(PDFIUM.get_or_init(|| p))
+    let dir = pdfium_dir(paths).ok_or_else(|| anyhow!("PDFium is not installed"))?;
+    let p = pdf::pdfium(&dir)?;
+    Ok(BOUND.get_or_init(|| p))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -164,7 +111,7 @@ pub fn open(paths: &Paths, path: &Path) -> std::result::Result<Opened, Refused> 
     match kind(path) {
         Some(Kind::Pdf) => {
             if !pdfium_installed(paths) {
-                return Err(Refused::NeedsPdfium { size: PDFIUM_SIZE });
+                return Err(Refused::NeedsPdfium { size: PDFIUM.size });
             }
             let p = pdfium(paths).map_err(failed)?;
             let mut ocr_failed = None;
@@ -228,58 +175,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A .tgz laid out as pdfium-binaries' is: only the DLL and the licenses are taken.
-    #[test]
-    fn pdfium_is_unpacked_with_its_licenses_and_nothing_else() {
-        let dir = std::env::temp_dir().join(format!("dawwin-pdfium-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let tgz = dir.join("pdfium.tgz");
-        {
-            let gz = flate2::write::GzEncoder::new(std::fs::File::create(&tgz).unwrap(), flate2::Compression::fast());
-            let mut t = tar::Builder::new(gz);
-            for (name, body) in [("bin/pdfium.dll", "dll"), ("LICENSE", "BSD"), ("licenses/icu.txt", "ICU"), ("include/fpdfview.h", "h"), ("../evil.txt", "x")] {
-                let mut h = tar::Header::new_gnu();
-                h.set_size(body.len() as u64);
-                h.set_mode(0o644);
-                h.set_entry_type(tar::EntryType::Regular);
-                // written raw: the builder refuses ".." itself, a hostile archive would not
-                let bytes = name.as_bytes();
-                h.as_old_mut().name[..bytes.len()].copy_from_slice(bytes);
-                h.set_cksum();
-                t.append(&h, body.as_bytes()).unwrap();
-            }
-            t.into_inner().unwrap().finish().unwrap();
-        }
-        let out = dir.join("pdfium");
-        unpack_pdfium(&tgz, &out).unwrap();
-        let mut names: Vec<String> = walk(&out);
-        names.sort();
-        assert_eq!(names, ["LICENSE.txt", "licenses/icu.txt", "pdfium.dll"]);
-        assert!(!dir.join("evil.txt").exists());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    fn walk(d: &Path) -> Vec<String> {
-        let mut v = Vec::new();
-        for e in std::fs::read_dir(d).unwrap().flatten() {
-            let n = e.file_name().to_string_lossy().to_string();
-            if e.path().is_dir() {
-                v.extend(walk(&e.path()).into_iter().map(|x| format!("{n}/{x}")));
-            } else {
-                v.push(n);
-            }
-        }
-        v
-    }
-
     #[test]
     fn a_pdf_without_pdfium_asks_for_it() {
         let dir = std::env::temp_dir().join(format!("dawwin-files-pdf-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let paths = Paths { local: dir.clone(), roaming: dir.clone() };
         if std::env::var_os("DAWWIN_TEST_PDFIUM").is_none() {
-            assert_eq!(open(&paths, &dir.join("x.pdf")), Err(Refused::NeedsPdfium { size: PDFIUM_SIZE }));
+            assert_eq!(open(&paths, &dir.join("x.pdf")), Err(Refused::NeedsPdfium { size: PDFIUM.size }));
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -14,10 +14,11 @@ pub struct Keys {
     pub key: u16,
 }
 
-/// The default the spec proposes, then free-looking others to offer when it is taken. Ctrl+Shift+R
-/// is not among them: browsers reload with it.
-pub const DEFAULT: &str = "Ctrl+Alt+R";
-pub const OTHERS: &[&str] = &["Ctrl+Alt+S", "Ctrl+Alt+Q", "Ctrl+Shift+Space", "Ctrl+Alt+Shift+R", "Alt+Shift+S", "Ctrl+Alt+F9"];
+/// The default, then others to offer when it is taken. Not Ctrl+Alt+R, the spec's first idea: a
+/// program holds it on the maintainer's PC. Not Ctrl+Shift+R either: browsers reload with it.
+/// Ctrl+Alt with a letter is the last choice: on European keyboards it is AltGr, which types.
+pub const DEFAULT: &str = "Ctrl+Shift+Space";
+pub const OTHERS: &[&str] = &["Alt+Shift+S", "Ctrl+Alt+Shift+R", "Ctrl+Alt+F9", "Ctrl+Alt+S", "Ctrl+Alt+Q"];
 
 fn key_name(vk: u16) -> Option<String> {
     Some(match vk {
@@ -219,7 +220,7 @@ mod tests {
         assert_eq!(Keys::parse(" ctrl + alt + r ").unwrap().to_string(), "Ctrl+Alt+R");
         assert_eq!(Keys::parse("Alt+Ctrl+r").unwrap().to_string(), "Ctrl+Alt+R", "written in one order");
         let k = Keys::parse(DEFAULT).unwrap();
-        assert_eq!((k.key, k.modifiers()), (b'R' as u16, 0x4000 | 1 | 2));
+        assert_eq!((k.key, k.modifiers()), (0x20, 0x4000 | 2 | 4), "Ctrl+Shift+Space");
     }
 
     #[test]

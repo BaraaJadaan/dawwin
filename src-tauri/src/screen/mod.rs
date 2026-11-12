@@ -235,7 +235,7 @@ mod tests {
     fn settings_from_before_1_8_get_the_defaults() {
         let s: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(s, Settings::default());
-        assert!(!s.on && s.copy && !s.start_with_windows && s.shortcut == "Ctrl+Alt+R");
+        assert!(!s.on && s.copy && !s.start_with_windows && s.shortcut == "Ctrl+Shift+Space");
     }
 }
 

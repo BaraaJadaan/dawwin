@@ -95,7 +95,7 @@ pub fn read(p: &Pdfium, file: &Path, mut recognise: impl FnMut(&[u8], i32, i32) 
 
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     /// A PDF of made-up text written by hand: a standard font whose character map says which
@@ -157,6 +157,17 @@ mod tests {
         }
         out = ordered;
         out
+    }
+
+    /// The first line PDFium (from `dir`) reads of a made-up Arabic PDF kept in drawing order: the
+    /// Tools workflow's check of the packed DLL.
+    pub fn read_made_pdf(dir: &Path) -> String {
+        let p = pdfium(dir).unwrap();
+        let f = std::env::temp_dir().join(format!("dawwin-pdfium-check-{}.pdf", std::process::id()));
+        std::fs::write(&f, made_pdf(&line(".ةبرجتلل Dawwin 1.8 اذه ،ابحرم", 300.0, |k| k))).unwrap();
+        let pages = read(&p, &f, |_, _, _| Ok(String::new())).unwrap();
+        let _ = std::fs::remove_file(&f);
+        pages[0].text.lines().next().unwrap_or("").to_string()
     }
 
     /// Needs pdfium.dll: `DAWWIN_TEST_PDFIUM=<its folder> cargo test pdf -- --ignored`.

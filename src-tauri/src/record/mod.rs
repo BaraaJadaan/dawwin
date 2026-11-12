@@ -405,6 +405,11 @@ fn run(
     Ok(writer.frames)
 }
 
+/// Tests that play sound at clock speed run alone: next to the heavy ones, the made-up source can
+/// fall behind the clock as a starved capture thread would.
+#[cfg(test)]
+pub static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,6 +425,7 @@ mod tests {
     /// they were, across a long silence in which no packet came; the pieces cover each track.
     #[test]
     fn two_tracks_stay_on_one_clock_through_a_silence() {
+        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let d = dir("clock");
         let wav = d.join("r.wav");
         let n = SR * 3;
@@ -447,6 +453,7 @@ mod tests {
 
     #[test]
     fn the_pc_track_keeps_its_time_after_nothing_came_for_a_while() {
+        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let d = dir("gap");
         let wav = d.join("r.wav");
         let n = SR * 3;

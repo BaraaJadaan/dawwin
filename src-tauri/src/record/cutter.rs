@@ -143,6 +143,7 @@ mod tests {
 
     #[test]
     fn the_pieces_are_the_ones_a_whole_recording_is_cut_into() {
+        let _alone = super::super::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         for (seconds, seed) in [(7, 1), (25, 2), (26, 3), (100, 4), (191, 5)] {
             let a = speechy(seconds, seed);
             let offline = crate::audio::split_points(&a, 25.0, 8.0);

@@ -161,6 +161,7 @@ mod tests {
 
     #[test]
     fn the_canceller_takes_out_what_the_speakers_played() {
+        let _alone = super::super::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let mut x = 3u32;
         let mut rnd = move || {
             x = x.wrapping_mul(1103515245).wrapping_add(12345);

@@ -36,19 +36,29 @@ pub struct Spec {
     /// The model with its context, in bytes: on the GPU to run there, else in memory
     pub needs: u64,
     pub languages: &'static [&'static str],
+    /// How its chat format is told to answer at once, without thinking first (the
+    /// `chat_template_kwargs` the benchmark sent)
+    pub no_thinking: &'static str,
 }
 
-/// Provisional until the benchmark's results are in: the room is a part of ten minutes and its
-/// answer; what each needs is its file and about that much context and working memory more.
+const ENABLE_THINKING_OFF: &str = r#"{"enable_thinking": false}"#;
+/// Jais-3 thinks unless told to keep it low, and then it does not
+const REASONING_LOW: &str = r#"{"reasoning_effort": "low"}"#;
+
+/// The room is a part of ten minutes and its answer. What each needs is its file, its context
+/// cache for that room in 8 bits (layers × 2 × KV heads × head size × 16,384 × 1.06 bytes) and about
+/// half a gigabyte to work in.
 pub const MODELS: &[Spec] = &[
-    Spec { id: "min-gemma4-12b", context: 16_384, needs: 7_121_861_440 + 1_500_000_000, languages: &["ar", "en"] },
-    Spec { id: "min-qwen35-9b", context: 16_384, needs: 5_680_522_464 + 1_200_000_000, languages: &["ar", "en"] },
-    Spec { id: "min-qwen35-4b", context: 16_384, needs: 2_740_937_888 + 900_000_000, languages: &["ar", "en"] },
-    Spec { id: "min-qwen35-2b", context: 16_384, needs: 1_280_835_840 + 700_000_000, languages: &["ar", "en"] },
+    // 36 layers, 8 KV heads of 128
+    Spec { id: "min-jais3-7b", context: 16_384, needs: 5_592_226_016 + 1_283_000_000 + 450_000_000, languages: &["ar", "en"], no_thinking: REASONING_LOW },
+    // 26 layers, 8 KV heads of 128
+    Spec { id: "min-ministral3-3b", context: 16_384, needs: 2_147_023_008 + 927_000_000 + 400_000_000, languages: &["ar", "en"], no_thinking: ENABLE_THINKING_OFF },
+    // 28 layers, 8 KV heads of 64
+    Spec { id: "min-jais3-0.9b", context: 16_384, needs: 666_192_384 + 499_000_000 + 300_000_000, languages: &["ar", "en"], no_thinking: REASONING_LOW },
 ];
 
 pub fn model(id: &str) -> Spec {
-    MODELS.iter().copied().find(|s| s.id == id).unwrap_or(Spec { id: "", context: 16_384, needs: 0, languages: &["ar", "en"] })
+    MODELS.iter().copied().find(|s| s.id == id).unwrap_or(Spec { id: "", context: 16_384, needs: 0, languages: &["ar", "en"], no_thinking: ENABLE_THINKING_OFF })
 }
 
 // ---------------------------------------------------------------- what is kept
@@ -128,7 +138,8 @@ impl Minutes {
         self.written_ms > 0
     }
 
-    /// Any of it changed by hand: writing again would lose it.
+    /// Any of it changed by hand: writing again would lose it (the panel asks twice then).
+    #[cfg(test)]
     pub fn edited(&self) -> bool {
         self.summary_edited
             || self.decisions.iter().any(|d| d.edited)
@@ -883,6 +894,22 @@ mod tests {
         let spans = [(ls[0].start, ls[0].start), (ls[1].start, ls[2].start)];
         let combine = ask_combine(&notes, &spans, ls.last().unwrap().index + 1, "ar", "ar");
         assert_eq!(combine.messages, fixture["combine"]["messages"]);
+    }
+
+    /// Each model is told not to think the way the benchmark told it (the workflow's `kwargs`, else
+    /// `enable_thinking: false`), and each is one the benchmark measured.
+    #[test]
+    fn every_model_is_asked_as_it_was_measured() {
+        let workflow = include_str!("../../.github/workflows/minutes-bench.yml");
+        for spec in MODELS {
+            let key = spec.id.strip_prefix("min-").unwrap();
+            let line = workflow.lines().find(|l| l.contains(&format!("key: {key},"))).unwrap_or_else(|| panic!("{key} was not measured"));
+            let sent = line.split("kwargs: '").nth(1).map_or(r#"{"enable_thinking": false}"#, |k| k.split('\'').next().unwrap());
+            assert_eq!(serde_json::from_str::<Value>(spec.no_thinking).unwrap(), serde_json::from_str::<Value>(sent).unwrap(), "{key}");
+            let variant = crate::models::variant(spec.id).unwrap();
+            assert!(line.contains(variant.file) && line.contains(variant.repository), "{key}: the file measured is the one downloaded");
+            assert!(spec.needs > variant.size, "{key}");
+        }
     }
 
     #[test]

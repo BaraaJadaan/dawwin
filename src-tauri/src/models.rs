@@ -112,7 +112,7 @@ pub struct Variant {
     pub family: Family,
     /// The name on the transcripts it makes
     pub label: &'static str,
-    repository: &'static str,
+    pub(crate) repository: &'static str,
     /// The revision the checksum belongs to: it cannot change under the app.
     revision: &'static str,
     pub file: &'static str,
@@ -125,7 +125,7 @@ pub struct Variant {
 const COHERE_ARABIC: &str = "handy-computer/cohere-transcribe-arabic-07-2026-gguf";
 const COHERE_ARABIC_REVISION: &str = "11a54d6895f94cce78d0ece142b8e552e7822539";
 
-pub const VARIANTS: [Variant; 11] = [
+pub const VARIANTS: [Variant; 10] = [
     Variant {
         id: "q8",
         family: Family::Cohere,
@@ -207,50 +207,40 @@ pub const VARIANTS: [Variant; 11] = [
         size: 806_057_408,
         prompt: Some(Prompt::MiLMMT),
     },
-    // Minutes: the four places the maintainer's rule fills (see minutes::MODELS and tools/bench-minutes):
-    // the best, the best that fits an 8 GB GPU, the best for its size, and the smallest that is decent.
+    // Minutes: the places the maintainer's rule fills, from tools/bench-minutes (results-1.6.0.md):
+    // the best (Jais-3 7B, which with its context in 8 bits also fits an 8 GB GPU, so it fills the
+    // second place too), the best for its size, and the smallest that is still decent. All Apache 2.0.
     Variant {
-        id: "min-gemma4-12b",
+        id: "min-jais3-7b",
         family: Family::Minutes,
-        label: "Gemma 4 12B · Q4",
-        repository: "unsloth/gemma-4-12b-it-GGUF",
-        revision: "fc034cfff751157913579611efad8462ac1be606",
-        file: "gemma-4-12b-it-Q4_K_M.gguf",
-        sha256: "0a270ec9fe6b34f4a0d33992b6135117b484ebc4766ab76b51d4ae8c457e4c42",
-        size: 7_121_861_440,
+        label: "Jais-3 7B · Q4",
+        repository: "IFM/Jais-3-7B-GGUF",
+        revision: "e171351744258b67bb6eb445e76d9d122bf542c0",
+        file: "Jais-3-7B-Q4_K_M.gguf",
+        sha256: "a8caa7fecf38d064f216f66d3d59641c1fbefdca9756af0703f4a872ab852eeb",
+        size: 5_592_226_016,
         prompt: None,
     },
     Variant {
-        id: "min-qwen35-9b",
+        id: "min-ministral3-3b",
         family: Family::Minutes,
-        label: "Qwen3.5 9B · Q4",
-        repository: "unsloth/Qwen3.5-9B-GGUF",
-        revision: "3885219b6810b007914f3a7950a8d1b469d598a5",
-        file: "Qwen3.5-9B-Q4_K_M.gguf",
-        sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
-        size: 5_680_522_464,
+        label: "Ministral 3 3B · Q4",
+        repository: "mistralai/Ministral-3-3B-Instruct-2512-GGUF",
+        revision: "eb599d408350ea2bb60452cb86be7c7b2fc28227",
+        file: "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+        sha256: "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8",
+        size: 2_147_023_008,
         prompt: None,
     },
     Variant {
-        id: "min-qwen35-4b",
+        id: "min-jais3-0.9b",
         family: Family::Minutes,
-        label: "Qwen3.5 4B · Q4",
-        repository: "unsloth/Qwen3.5-4B-GGUF",
-        revision: "e87f176479d0855a907a41277aca2f8ee7a09523",
-        file: "Qwen3.5-4B-Q4_K_M.gguf",
-        sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
-        size: 2_740_937_888,
-        prompt: None,
-    },
-    Variant {
-        id: "min-qwen35-2b",
-        family: Family::Minutes,
-        label: "Qwen3.5 2B · Q4",
-        repository: "unsloth/Qwen3.5-2B-GGUF",
-        revision: "f6d5376be1edb4d416d56da11e5397a961aca8ae",
-        file: "Qwen3.5-2B-Q4_K_M.gguf",
-        sha256: "aaf42c8b7c3cab2bf3d69c355048d4a0ee9973d48f16c731c0520ee914699223",
-        size: 1_280_835_840,
+        label: "Jais-3 0.9B · Q4",
+        repository: "IFM/Jais-3-0.9B-GGUF",
+        revision: "870b38e7b9c515cb733aa70bbef0d16b1c80771a",
+        file: "Jais-3-0.9B-Q4_K_M.gguf",
+        sha256: "e56a4b769c397a1fd2620cf1eec94513debb1664092d0dfad4af01083c2ac3b0",
+        size: 666_192_384,
         prompt: None,
     },
 ];

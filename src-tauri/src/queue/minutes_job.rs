@@ -79,15 +79,16 @@ fn ensure_server<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProcess>, 
     if slot.is_none() {
         let exe = setup::translator_exe(&core.paths).ok_or_else(|| anyhow!(crate::tr!("The translator is not downloaded. Download it in Settings.")))?;
         let gpu = core.snapshot().engine.gpu;
-        *slot = Some(TranslatorProcess::spawn_with(&exe, &core.paths, model, cpu_only, gpu.as_deref(), context)?);
+        *slot = Some(TranslatorProcess::spawn_with(&exe, &core.paths, model, cpu_only, gpu.as_deref(), context, true)?);
     }
     let t = slot.as_mut().unwrap();
     t.wait_ready(cancel)?;
     Ok(t)
 }
 
-/// One request; `step` of `steps` tells the job how far the whole run is.
-fn ask(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, a: &minutes::Ask, cancel: &AtomicBool, step: usize, steps: usize, started: Instant) -> Result<Option<Value>> {
+/// One request to the model `spec`; `step` of `steps` tells the job how far the whole run is.
+#[allow(clippy::too_many_arguments)]
+fn ask(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, spec: &minutes::Spec, a: &minutes::Ask, cancel: &AtomicBool, step: usize, steps: usize, started: Instant) -> Result<Option<Value>> {
     let mut last = Instant::now();
     let mut on = |p: Progress| {
         if last.elapsed() < Duration::from_millis(500) {
@@ -104,7 +105,7 @@ fn ask(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, a: &minutes::Ask, 
             j.elapsed_s = spent;
         });
     };
-    let reply = w.ask_json(&a.messages, &a.schema, ANSWER_TOKENS, cancel, &mut on)?;
+    let reply = w.ask_json(&a.messages, &a.schema, spec.no_thinking, ANSWER_TOKENS, cancel, &mut on)?;
     let answer = serde_json::from_str::<Value>(&reply.content).ok().filter(minutes::is_answer);
     Ok(answer)
 }
@@ -152,10 +153,10 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     let source = t.language.clone();
     let steps = if parts.len() == 1 { 1 } else { parts.len() + 1 };
     let answer = if parts.len() == 1 {
-        ask(core, id, w, &minutes::ask_whole(&lines, &source, &language), &cancel, 0, 1, started)?
+        ask(core, id, w, &spec, &minutes::ask_whole(&lines, &source, &language), &cancel, 0, 1, started)?
     } else {
         for (n, &(a, b)) in parts.iter().enumerate().skip(draft.notes.len()) {
-            let note = ask(core, id, w, &minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), &cancel, n, steps, started)?;
+            let note = ask(core, id, w, &spec, &minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), &cancel, n, steps, started)?;
             // a part the model could not answer still counts, empty, so the rest goes on
             draft.notes.push(note.unwrap_or_else(|| serde_json::json!({ "kind": "other", "summary": "" })));
             let kept = draft.clone();
@@ -173,14 +174,14 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
             let mut fewer = Vec::new();
             let mut fewer_times = Vec::new();
             for (a, b) in groups {
-                let combined = ask(core, id, w, &minutes::ask_combine(&notes[a..b], &times[a..b], highest, &source, &language), &cancel, steps - 1, steps, started)?;
+                let combined = ask(core, id, w, &spec, &minutes::ask_combine(&notes[a..b], &times[a..b], highest, &source, &language), &cancel, steps - 1, steps, started)?;
                 fewer.push(combined.unwrap_or_else(|| minutes::merge_notes(&notes[a..b])));
                 fewer_times.push((times[a].0, times[b - 1].1));
             }
             notes = fewer;
             times = fewer_times;
         }
-        let last = ask(core, id, w, &minutes::ask_combine(&notes, &times, highest, &source, &language), &cancel, steps - 1, steps, started)?;
+        let last = ask(core, id, w, &spec, &minutes::ask_combine(&notes, &times, highest, &source, &language), &cancel, steps - 1, steps, started)?;
         Some(last.unwrap_or_else(|| minutes::merge_notes(&notes)))
     };
     let Some(answer) = answer else {

@@ -133,6 +133,7 @@ fn main() {
     let piece_ms = std::env::var("FAKE_MINUTES_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(60);
     eprintln!("device: {device}");
     eprintln!("context: {}", arg("--ctx-size").unwrap_or_default());
+    eprintln!("cache: {}", arg("--cache-type-k").unwrap_or_else(|| "f16".into()));
     let listener = TcpListener::bind(format!("127.0.0.1:{port}")).expect("port");
     let started = Instant::now();
     let mut lines = 0usize;
@@ -182,7 +183,7 @@ fn main() {
             let user = req["messages"].as_array().and_then(|m| m.last()).and_then(|m| m["content"].as_str()).unwrap_or_default().to_string();
             let schema_ok = req["response_format"]["json_schema"]["schema"]["properties"]["kind"].is_object();
             let task = user.lines().rev().find(|l| l.starts_with("Write ")).unwrap_or("").to_string();
-            eprintln!("minutes request: {task} (schema: {schema_ok})");
+            eprintln!("minutes request: {task} (schema: {schema_ok}, {})", req["chat_template_kwargs"]);
             lines += 1;
             if crash_after.is_some_and(|n| lines > n) {
                 eprintln!("fake GPU driver crash");

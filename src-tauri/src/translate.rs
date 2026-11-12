@@ -206,11 +206,13 @@ impl TranslatorProcess {
     /// [`TranslatorProcess::wait_ready`] waits for it.
     pub fn spawn(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>) -> Result<Self> {
         // one line at a time, and a line is short: 30 seconds of speech
-        Self::spawn_with(exe, paths, model, cpu_only, gpu, 4096)
+        Self::spawn_with(exe, paths, model, cpu_only, gpu, 4096, false)
     }
 
     /// The same, with room for `context` tokens: the minutes read ten minutes of a transcript at once.
-    pub fn spawn_with(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>, context: u32) -> Result<Self> {
+    /// `cache_8bit` keeps that room's cache in 8 bits, half its size and as good, so that a 7B model
+    /// and 16k of context fit a GPU with 8 GB (it needs flash attention, which every device has here).
+    pub fn spawn_with(exe: &Path, paths: &Paths, model: &str, cpu_only: bool, gpu: Option<&str>, context: u32, cache_8bit: bool) -> Result<Self> {
         let device = if cpu_only { None } else { choose_device(&list_devices(exe), gpu).cloned() };
         let port = free_port()?;
         let key = random_key();
@@ -218,6 +220,9 @@ impl TranslatorProcess {
         let mut cmd = Command::new(exe);
         cmd.args(["--model", model, "--host", "127.0.0.1", "--port", &port.to_string(), "--api-key", &key]);
         cmd.args(["--ctx-size", &context.to_string(), "--parallel", "1", "--threads", &threads.to_string(), "--no-ui"]);
+        if cache_8bit {
+            cmd.args(["--flash-attn", "on", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]);
+        }
         // one device; how much of the model fits on it, llama.cpp works out by itself
         cmd.args(["--device", device.as_ref().map_or("none", |(id, _)| id.as_str())]);
         cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -345,10 +350,12 @@ impl TranslatorProcess {
     }
 
     /// Ask the model, in its own chat format, for JSON held to `schema` (its text, sent as it is so
-    /// that its fields keep their order), greedily and without thinking, as `tools/bench-minutes`
-    /// measured. The answer comes as it is written: `on` hears how far it is. A stop ends the
-    /// server, which is the one way to end a request that is still reading its prompt.
-    pub fn ask_json(&mut self, messages: &Value, schema: &str, max_tokens: u32, stop: &AtomicBool, on: &mut dyn FnMut(Progress)) -> Result<JsonReply> {
+    /// that its fields keep their order), greedily and without thinking (`no_thinking`: how its chat
+    /// format is told so), as `tools/bench-minutes` measured. The answer comes as it is written:
+    /// `on` hears how far it is. A stop ends the server, which is the one way to end a request that
+    /// is still reading its prompt.
+    pub fn ask_json(&mut self, messages: &Value, schema: &str, no_thinking: &str, max_tokens: u32, stop: &AtomicBool, on: &mut dyn FnMut(Progress)) -> Result<JsonReply> {
+        let no_thinking: Value = serde_json::from_str(no_thinking).unwrap_or_else(|_| json!({ "enable_thinking": false }));
         let mut body = json!({
             "messages": messages,
             "max_tokens": max_tokens,
@@ -357,7 +364,7 @@ impl TranslatorProcess {
             "cache_prompt": false,
             "stream": true,
             "return_progress": true,
-            "chat_template_kwargs": { "enable_thinking": false },
+            "chat_template_kwargs": no_thinking,
         })
         .to_string();
         body.pop();

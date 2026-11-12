@@ -119,7 +119,7 @@ def cut(lines, part_seconds, part_chars=12000):
                     continue
                 gap = lines[i][0] - lines[i - 1][0]
                 score = gap + (2.0 if lines[i][1] != lines[i - 1][1] else 0.0)
-                if score > best_score:
+                if score >= best_score:
                     best, best_score = i, score
             last = best
         spans.append((first, last))

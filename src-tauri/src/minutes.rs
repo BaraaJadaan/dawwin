@@ -430,7 +430,8 @@ pub fn cut(lines: &[Line], part_s: f64, part_chars: usize) -> Vec<(usize, usize)
                 }
                 let gap = (lines[i].start - lines[i - 1].end).max(0.0);
                 let score = gap + if lines[i].speaker != lines[i - 1].speaker { 2.0 } else { 0.0 };
-                if score > best.1 {
+                // of places as good, the latest: parts as long as they may be
+                if score >= best.1 {
                     best = (i, score);
                 }
             }
@@ -921,6 +922,9 @@ mod tests {
         // text that is too much for one part is cut sooner
         let dense: Vec<Line> = (0..20).map(|i| Line { index: i, start: i as f64, end: i as f64 + 0.9, speaker: None, text: "x".repeat(1000) }).collect();
         assert!(cut(&dense, 600.0, 4000).iter().all(|(a, b)| b - a <= 4));
+        // with nothing to tell the places apart, a part is as long as it may be
+        let even: Vec<Line> = (0..240).map(|i| Line { index: i, start: i as f64 * 10.0, end: i as f64 * 10.0 + 9.0, speaker: None, text: "x".repeat(40) }).collect();
+        assert_eq!(cut(&even, 600.0, 12_000).len(), 4);
         // one pass when it fits
         assert_eq!(plan(&ls[..40]), vec![(0, 40)]);
         assert!(plan(&ls).len() >= 3);

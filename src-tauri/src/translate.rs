@@ -408,7 +408,8 @@ impl TranslatorProcess {
             let chunk = match rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(Ok(chunk)) => chunk,
                 Ok(Err(detail)) => {
-                    if !self.alive() {
+                    // a server that crashed drops the connection a moment before it is gone
+                    if self.exits_within(Duration::from_secs(2)) {
                         return Err(EngineFailed(crate::tr!("the translator exited. Last output:
 {}", self.last_lines(12))).into());
                     }
@@ -443,6 +444,18 @@ impl TranslatorProcess {
             }
         }
         Ok(reply)
+    }
+
+    /// Whether it ends within `wait`.
+    fn exits_within(&mut self, wait: Duration) -> bool {
+        let started = Instant::now();
+        while started.elapsed() < wait {
+            if !self.alive() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        !self.alive()
     }
 
     pub fn shutdown(mut self) {

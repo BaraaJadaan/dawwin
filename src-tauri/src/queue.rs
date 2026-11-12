@@ -963,7 +963,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     core.update(|s| s.engine.state = "off".into());
                 }
                 if let Err(err) = minutes_job::run(&core, &mut translator, &id) {
-                    let on_gpu = translator.as_mut().is_some_and(|t| !t.cpu_only && t.alive());
+                    let on_gpu = translator.as_ref().is_some_and(|t| !t.cpu_only);
                     let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
                     if err.is::<EngineFailed>() && on_gpu && !cancelled && !core.translator_gpu_failed.swap(true, Ordering::SeqCst) {
                         // the rest of it again, on the CPU: the notes done are kept

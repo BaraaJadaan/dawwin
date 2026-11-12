@@ -578,7 +578,7 @@ async function exportMinutes(fmt) {
       const box = $("minutes").querySelector(".minutes-progress");
       if (box) box.replaceWith(minutesProgress(now));
       else renderMinutes();
-    } else if (prev?.setup.download.active || snap.setup.download.active) renderMinutes();
+    } else if (prev?.setup.download.active || snap.setup.download.active || !!prev?.setup.families.minutes?.found !== !!snap.setup.families.minutes?.found) renderMinutes();
   };
 }
 

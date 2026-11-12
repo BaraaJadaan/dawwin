@@ -14,8 +14,10 @@
 //!
 //!   load:       {"model": <.gguf file>} -> where it runs
 //!   transcribe: {"path": <raw little-endian f32, 16 kHz mono>, "ranges": [[start, end], ...],
-//!                "language": "ar" | "da" | ...} -> {"texts": [...], "stopped": [...]}, one per range.
-//!                `stopped`: the model looped or ran out of tokens, so the text ends early.
+//!                "language": "ar" | "da" | ..., "phrases": false} -> {"texts": [...], "stopped": [...]},
+//!                one per range. `stopped`: the model looped or ran out of tokens, so the text ends
+//!                early. With "phrases" (Whisper, which times its phrases), also
+//!                "phrases": [[[from_s, to_s, text], ...], ...], in seconds from each range's start.
 //!
 //! `--cpu` keeps the GPU driver out of the process altogether.
 
@@ -150,21 +152,35 @@ impl Engine {
         let usable: Vec<usize> = (0..pcm.len()).filter(|&i| pcm[i].len() >= MIN_SAMPLES).collect();
         let mut texts = vec![String::new(); pcm.len()];
         let mut stopped = vec![false; pcm.len()];
+        let want_phrases = req.get("phrases").and_then(Value::as_bool).unwrap_or(false);
+        let mut phrases: Vec<Vec<Value>> = vec![Vec::new(); pcm.len()];
         if !usable.is_empty() {
             let options = RunOptions {
                 language: Some(language.to_string()),
-                timestamps: TimestampKind::None,
+                timestamps: if want_phrases { TimestampKind::Segment } else { TimestampKind::None },
                 ..RunOptions::default()
             };
             let batch: Vec<&[f32]> = usable.iter().map(|&i| pcm[i].as_slice()).collect();
             let results = session.run_batch(&batch, &options)?;
             for (&i, result) in usable.iter().zip(results) {
+                if let Ok(t) = &result {
+                    phrases[i] = t
+                        .segments
+                        .iter()
+                        .filter(|s| !s.text.trim().is_empty())
+                        .map(|s| json!([s.t0_ms as f64 / 1000.0, s.t1_ms as f64 / 1000.0, s.text.trim()]))
+                        .collect();
+                }
                 let (text, ended_early) = outcome(result)?;
                 texts[i] = text;
                 stopped[i] = ended_early;
             }
         }
-        Ok(json!({ "texts": texts, "stopped": stopped }))
+        let mut reply = json!({ "texts": texts, "stopped": stopped });
+        if want_phrases {
+            reply["phrases"] = json!(phrases);
+        }
+        Ok(reply)
     }
 }
 

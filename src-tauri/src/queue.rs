@@ -1433,7 +1433,7 @@ fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobVie
     if !source.is_file() {
         return Err(anyhow!(crate::tr!("The recording is not at {} any more.", source.display())));
     }
-    let Some((_, model)) = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &t.language) else {
+    let Some((family, model)) = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &t.language) else {
         return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
     };
     let w = ensure_engine(core, engine, Some(&model.path))?;
@@ -1446,7 +1446,7 @@ fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobVie
     core.update_job(id, |j| j.status = "timing".into());
     let audio = Audio { id: id.to_string(), samples };
     let mut segments = t.segments.clone();
-    let result = timing::pass(w, &audio, &mut segments, &t.language, &cancel, |f| {
+    let result = timing::pass(w, &audio, &mut segments, &t.language, family == Family::Whisper, &cancel, |f| {
         let spent = started.elapsed().as_secs_f64();
         core.update_job(id, |j| {
             j.progress = f;
@@ -1640,7 +1640,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                     };
                 }
                 if time_words && failure.is_none() {
-                    if let Err(e) = timing::pass(w, &audio, &mut lines, &job.language, &cancel, |_| {}) {
+                    if let Err(e) = timing::pass(w, &audio, &mut lines, &job.language, family == Family::Whisper, &cancel, |_| {}) {
                         failure = Some(e);
                     }
                 }
@@ -1805,7 +1805,7 @@ mod tests {
     }
 
     fn said(text: &str) -> Recognized {
-        Recognized { text: text.to_string(), stopped: false }
+        Recognized { text: text.to_string(), stopped: false, ..Default::default() }
     }
 
     impl Engine for Fake {
@@ -1867,7 +1867,7 @@ mod tests {
     fn text_that_stopped_early_is_read_again_so_the_rest_of_the_audio_is_not_lost() {
         let audio = Audio { id: "x".into(), samples: vec![0.1; 20 * SR] };
         let mut e = Fake { calls: vec![], replies: VecDeque::from(vec![vec![said("أول نص"), said("ثاني نص")]]) };
-        let stopped = Recognized { text: "أول".to_string(), stopped: true };
+        let stopped = Recognized { text: "أول".to_string(), stopped: true, ..Default::default() };
         let segs = fix_loops(&mut e, &audio, (0, 20 * SR), stopped, "ar", 0).unwrap();
         assert_eq!(e.calls.len(), 1);
         assert_eq!(segs.iter().map(|s| s.text.as_str()).collect::<Vec<_>>(), ["أول نص", "ثاني نص"]);
@@ -1936,7 +1936,7 @@ mod tests {
     fn a_short_piece_that_stopped_early_keeps_its_text_and_is_flagged() {
         let audio = Audio { id: "x".into(), samples: vec![0.1; 3 * SR] };
         let mut e = Fake { calls: vec![], replies: VecDeque::new() };
-        let stopped = Recognized { text: "طيب".to_string(), stopped: true };
+        let stopped = Recognized { text: "طيب".to_string(), stopped: true, ..Default::default() };
         let segs = fix_loops(&mut e, &audio, (0, 3 * SR), stopped, "ar", 0).unwrap();
         assert!(e.calls.is_empty());
         assert_eq!(segs[0].text, "طيب");

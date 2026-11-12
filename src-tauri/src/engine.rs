@@ -42,6 +42,9 @@ pub struct Recognized {
     pub text: String,
     /// The model looped or ran out of tokens: the text ends before the audio does
     pub stopped: bool,
+    /// The phrases with their times, from a model that gives them (Whisper), when asked:
+    /// (from, to) in seconds from the start of the piece, and the phrase's text
+    pub phrases: Vec<(f32, f32, String)>,
 }
 
 pub trait Engine: Send {
@@ -55,6 +58,10 @@ pub trait Engine: Send {
     fn forget(&mut self, audio_id: &str);
     /// The stop of the job it works for: waiting for the engine ends soon after it is set.
     fn watch(&mut self, _stop: Option<Arc<AtomicBool>>) {}
+    /// The same as `transcribe`, with the times of the phrases where the model gives them.
+    fn transcribe_phrases(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>> {
+        self.transcribe(audio, ranges, language)
+    }
 }
 
 /// Loading a model takes a minute at most, even from a slow disk on the CPU. One that takes this
@@ -336,28 +343,11 @@ impl Engine for EngineProcess {
     }
 
     fn transcribe(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>> {
-        self.ensure_loaded()?;
-        let path = self.raw_file(audio)?;
-        let id = self.send(json!({
-            "cmd": "transcribe",
-            "path": path,
-            "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
-            "language": language,
-        }))?;
-        let v = self.wait(id, None)?;
-        let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
-        let stopped = v.get("stopped").and_then(|t| t.as_array());
-        if texts.len() != ranges.len() {
-            bail!("engine returned {} texts for {} chunks", texts.len(), ranges.len());
-        }
-        Ok(texts
-            .iter()
-            .enumerate()
-            .map(|(i, t)| Recognized {
-                text: without_markers(t.as_str().unwrap_or("")),
-                stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
-            })
-            .collect())
+        self.run(audio, ranges, language, false)
+    }
+
+    fn transcribe_phrases(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str) -> Result<Vec<Recognized>> {
+        self.run(audio, ranges, language, true)
     }
 
     fn watch(&mut self, stop: Option<Arc<AtomicBool>>) {
@@ -373,6 +363,44 @@ impl Engine for EngineProcess {
                 true
             }
         });
+    }
+}
+
+impl EngineProcess {
+    fn run(&mut self, audio: &Audio, ranges: &[(usize, usize)], language: &str, phrases: bool) -> Result<Vec<Recognized>> {
+        self.ensure_loaded()?;
+        let path = self.raw_file(audio)?;
+        let id = self.send(json!({
+            "cmd": "transcribe",
+            "path": path,
+            "ranges": ranges.iter().map(|(a, b)| [*a, *b]).collect::<Vec<_>>(),
+            "language": language,
+            "phrases": phrases,
+        }))?;
+        let v = self.wait(id, None)?;
+        let timed = v.get("phrases").and_then(|t| t.as_array());
+        let texts = v.get("texts").and_then(|t| t.as_array()).ok_or_else(|| anyhow!("engine reply has no texts"))?;
+        let stopped = v.get("stopped").and_then(|t| t.as_array());
+        if texts.len() != ranges.len() {
+            bail!("engine returned {} texts for {} chunks", texts.len(), ranges.len());
+        }
+        Ok(texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| Recognized {
+                text: without_markers(t.as_str().unwrap_or("")),
+                stopped: stopped.and_then(|s| s.get(i)).and_then(|s| s.as_bool()).unwrap_or(false),
+                phrases: timed
+                    .and_then(|p| p.get(i))
+                    .and_then(|p| p.as_array())
+                    .map(|p| {
+                        p.iter()
+                            .filter_map(|x| Some((x.get(0)?.as_f64()? as f32, x.get(1)?.as_f64()? as f32, without_markers(x.get(2)?.as_str()?))))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect())
     }
 }
 

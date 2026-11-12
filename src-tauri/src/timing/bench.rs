@@ -254,6 +254,8 @@ pub fn run() {
     std::fs::create_dir_all(paths.logs_dir()).unwrap();
     let mut engine = EngineProcess::spawn(&exe, &paths, &model, std::env::var("DAWWIN_TIMING_CPU").is_ok()).unwrap();
     let info = engine.ensure_loaded().unwrap();
+    // a model that times its phrases is heard once a line (see `pass`)
+    let phrases = crate::models::check_file(Path::new(&model)).is_ok_and(|f| f == crate::models::Family::Whisper);
     println!("model {} on {} {}", Path::new(&model).file_name().unwrap().to_string_lossy(), info.device, info.gpu.unwrap_or_default());
 
     let mut names: Vec<String> = std::fs::read_dir(&dir)
@@ -275,7 +277,7 @@ pub fn run() {
         let transcribe_s = t0.elapsed().as_secs_f64();
         let mut timed = guessed.clone();
         let t1 = Instant::now();
-        super::pass(&mut engine, &audio, &mut timed, &truth.language, &AtomicBool::new(false), |_| {}).unwrap();
+        super::pass(&mut engine, &audio, &mut timed, &truth.language, phrases, &AtomicBool::new(false), |_| {}).unwrap();
         let pass_s = t1.elapsed().as_secs_f64();
         engine.forget(&audio.id);
         let eval = Eval::new(&truth, &guessed, truth_pauses(&clean));

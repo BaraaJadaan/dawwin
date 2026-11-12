@@ -67,19 +67,24 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   the processor), never spread over several. Why MiLMMT-46: we measured ten open translation models
   on WMT24++, see `tools/bench-translate` and the **Translation bench** workflow.
 - **Minutes.** The translator's server runs a minutes model too (Jais-3 or Ministral 3, see **Minutes
-  bench**), with room for 16,384 tokens whose cache is kept in 8 bits (flash attention on), so that the
-  7B model fits a GPU with 8 GB; it takes its turn with the speech engine and the translator. It is asked
-  through `/v1/chat/completions`, greedily and without thinking (each model's chat format is told so its
-  own way: `no_thinking` in `minutes::MODELS`), for JSON held to the schema in
+  bench**), with room for 16,384 tokens whose cache is kept in 8 bits on a GPU (flash attention on), so
+  that the 7B model fits one with 8 GB (in 16 bits on the processor, where that is faster); it takes
+  its turn with the speech engine and the translator. It is asked through `/v1/chat/completions`,
+  greedily and without thinking (each model's chat format is told so its own way: `no_thinking` in
+  `minutes::MODELS`), for JSON held to the schema in
   `src-tauri/prompts/minutes-schema.json` (line numbers limited to the transcript's), never for free text.
   A recording up to about 12 minutes goes in one pass. A longer one is cut into parts of at most ten
   minutes, where the speaker changes or pauses longest in a part's last quarter; each part becomes notes,
   saved in the transcript's file as they come so that a stopped run continues, and the notes become the
-  minutes in one more pass (a few parts at a time when there are many). The answer is checked: line
-  numbers that are not lines go, an owner who is neither a speaker nor said in the transcript goes, and
-  only a meeting keeps decisions and actions. Speakers' names are read from the transcript's file
-  loosely, so transcripts with and without speakers both work. The benchmark (`tools/bench-minutes`)
-  reads the same prompts, and a test checks that the app asks exactly what was measured.
+  minutes in one more pass (a few parts at a time when there are many; notes too long to go two
+  together are merged without the model, so it always ends; limits count letters, not bytes). The
+  answer is checked: line numbers that are not lines go, an owner who is neither a speaker nor said in
+  the transcript goes, and only a meeting keeps decisions and actions. Speakers' names are read from the transcript's file
+  loosely, so transcripts with and without speakers both work, and the minutes change only their own
+  field of the file (`history::modify_minutes`), keeping fields this version does not know. While a run
+  is under way, its minutes cannot be corrected: the run replaces them. The benchmark
+  (`tools/bench-minutes`) reads the same prompts, and a test checks that the app asks exactly what was
+  measured, of the file at the revision measured.
 - **Subtitles.** `captions.rs` follows the rules Netflix and the BBC give their subtitlers: two lines
   of 42 characters at most, between 5/6 of a second and 7 seconds on screen, 17 characters a second
   (20 for English), two frames between subtitles, gaps under half a second closed, and breaks where a

@@ -247,8 +247,9 @@ the topics, and whether the minutes are in the language asked for. Score out of 
 Most of the lower scores in Arabic are minutes written in English when Arabic was asked for. Qwen3.5 4B
 finds as much as the best, but its summaries of the Arabic meetings say nothing ("no one attended").
 Dawwin offers the best (Jais-3 7B, which also fits a GPU with 8 GB, its context kept in 8 bits), the best
-for its size (Ministral 3 3B) and the smallest that is still usable (Jais-3 0.9B). The models, the
-scoring and all the numbers are in [tools/bench-minutes](tools/bench-minutes).
+for its size (Ministral 3 3B) and the smallest that is still usable (Jais-3 0.9B). With the context in
+8 bits, as on a GPU, they scored 87.6, 77.9 and 70.7. The models, the scoring and all the numbers are in
+[tools/bench-minutes](tools/bench-minutes/results-1.6.0.md).
 
 ## Building from source
 

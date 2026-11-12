@@ -32,8 +32,8 @@ and things "we'll think about" that are not decisions. The answers list them und
 `run.py` starts llama.cpp's server (the build Dawwin downloads) with the model and asks it, through
 `/v1/chat/completions`, with the prompts and the JSON schema in `src-tauri/prompts` that the app uses
 (a test in the app checks it asks the same, from `same_as_app.json`). Greedy decoding, thinking off,
-room for 16,384 tokens with their cache in 8 bits, as the app keeps it (`BENCH_CACHE=f16` keeps it in
-16 bits, as the first run of all the models did). Each model writes the minutes of every recording in its own language, three
+room for 16,384 tokens with their cache in 8 bits, as the app keeps it on a GPU (`BENCH_CACHE=f16` keeps
+it in 16 bits, as the app does on the processor and the first run of all the models did). Each model writes the minutes of every recording in its own language, three
 in the other language (two Arabic meetings in English, the English sprint in Arabic), and two meetings
 in parts of three minutes, notes first and then the minutes from the notes, the way a long recording
 goes in the app.
@@ -65,7 +65,7 @@ is written, which was read by hand for the finalists.
 ## Running it
 
 From the Actions tab: **Minutes bench**, with model keys to run some of them. The table is in the
-`results` artifact. Locally, against Dawwin's stand-in server (no model needed):
+`results` artifact. The runs that chose 1.6.0's models are in [results-1.6.0.md](results-1.6.0.md). Locally, against Dawwin's stand-in server (no model needed):
 
 ```bash
 cargo build --example fake_translator --manifest-path src-tauri/Cargo.toml

@@ -16,7 +16,9 @@ use crate::audio::{self, SR};
 use crate::engine::{Audio, Engine, EngineFailed, EngineInfo, EngineProcess, OutOfMemory, Recognized};
 use crate::folder;
 use crate::history;
+use crate::language;
 use crate::models::{self, Family};
+use crate::speakers;
 use crate::setup::{self, KeepAwake, ModelStatus, Paths, Settings};
 use crate::timing;
 use crate::tools;
@@ -27,7 +29,7 @@ pub(crate) const MAX_CHUNK_S: f32 = 30.0;
 pub(crate) const SEARCH_S: f32 = 8.0;
 /// Free the GPU after this long with nothing to do.
 const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
-const ACTIVE_JOB: &[&str] = &["queued", "decoding", "loading", "transcribing", "timing", "translating", "saving_audio", "saving_video"];
+const ACTIVE_JOB: &[&str] = &["queued", "decoding", "detecting", "loading", "transcribing", "timing", "speakers", "translating", "saving_audio", "saving_video"];
 /// Save a translation that is under way at least this often, so closing the app keeps it.
 const TRANSLATION_SAVE: Duration = Duration::from_secs(10);
 
@@ -39,6 +41,8 @@ pub struct Steps {
     pub remove_silence: bool,
     pub save_audio: bool,
     pub transcribe: bool,
+    /// Tell the speakers apart, after transcribing
+    pub speakers: bool,
     /// The language to translate into
     pub translate: Option<String>,
     pub video: bool,
@@ -48,7 +52,7 @@ pub struct Steps {
 
 impl Default for Steps {
     fn default() -> Self {
-        Steps { remove_silence: false, save_audio: false, transcribe: true, translate: None, video: false, burn: false }
+        Steps { remove_silence: false, save_audio: false, transcribe: true, speakers: false, translate: None, video: false, burn: false }
     }
 }
 
@@ -62,14 +66,16 @@ pub struct JobView {
     /// The files it saved: the sound, the video with subtitles
     pub outputs: Vec<String>,
     /// "translate" for translating a finished transcript, "burn" for burning subtitles into its
-    /// video, "timing" for placing its words in time; empty for transcribing a recording
+    /// video, "timing" for placing its words in time, "speakers" for finding who speaks in it; empty
+    /// for transcribing a recording
     pub kind: String,
     /// What a translation translates: the transcript's id, and the language it goes into
     pub transcript: Option<String>,
     pub target: Option<String>,
     /// Where a translation runs: "GPU · …" or "CPU"
     pub device: Option<String>,
-    /// queued | decoding | loading | transcribing | timing | translating | done | failed | cancelled
+    /// queued | decoding | detecting (the language) | loading | transcribing | timing | speakers
+    /// (telling them apart) | translating | saving_audio | saving_video | done | failed | cancelled
     pub status: String,
     pub progress: f64,
     pub eta_s: Option<f64>,
@@ -157,6 +163,8 @@ pub struct ToolView {
     pub partial: u64,
     /// The one the app uses
     pub active: bool,
+    /// An older build of it is installed than the one the app pins: download it again to update
+    pub outdated: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Default)]
@@ -220,6 +228,8 @@ enum Msg {
     /// A job someone waits for: it runs before the jobs sent before it that have not started
     Priority(String),
     Translate(String),
+    /// Find who speaks in a finished transcript
+    Speakers(String),
     Probe,
     /// Stop the engine so the next one starts with new settings (another model, GPU or CPU)
     Restart,
@@ -260,6 +270,7 @@ impl Core {
         let (tx, rx) = mpsc::channel();
         let settings = Settings::load(&paths);
         crate::i18n::set(settings.ui_lang.as_deref().unwrap_or("en"));
+        settings.apply_to_subtitles();
         let core = Arc::new(Core {
             app,
             paths,
@@ -306,7 +317,7 @@ impl Core {
 
     fn send(&self, m: Msg) {
         let undelivered = self.tx.lock().unwrap().send(m).err().map(|e| e.0);
-        if let Some(Msg::Job(id) | Msg::Priority(id) | Msg::Translate(id)) = undelivered {
+        if let Some(Msg::Job(id) | Msg::Priority(id) | Msg::Translate(id) | Msg::Speakers(id)) = undelivered {
             self.update_job(&id, |j| {
                 j.status = "failed".into();
                 j.error = Some(crate::tr!("Dawwin's queue has stopped. Please start Dawwin again."));
@@ -358,6 +369,7 @@ impl Core {
                     on_disk: exe.is_some(),
                     partial: tools::partial(&self.paths, t),
                     active: exe.is_some() && (t.id == tools::TRANSLATOR.id || exe == ffmpeg),
+                    outdated: tools::outdated(&self.paths, t),
                 }
             })
             .collect();
@@ -422,6 +434,7 @@ impl Core {
         {
             let mut st = self.settings.lock().unwrap();
             f(&mut *st);
+            st.apply_to_subtitles();
             st.save(&self.paths)?;
         }
         self.refresh_setup();
@@ -840,6 +853,43 @@ impl Core {
         Ok(id)
     }
 
+    /// Find who speaks in a finished transcript, as a job in the queue: its recording is heard
+    /// again by the speaker model, and its lines get their speakers (see `speakers`).
+    pub fn find_speakers(&self, transcript: &str) -> Result<String> {
+        if self.is_live(transcript) {
+            return Err(anyhow!(crate::tr!("This transcript is still being written. Find its speakers when it is done.")));
+        }
+        let t = history::load(&self.paths.history_dir(), transcript)?;
+        if !setup::model_status(&self.paths, &self.settings.lock().unwrap(), Family::Speakers).found {
+            return Err(anyhow!(crate::tr!("Telling speakers apart needs its model. Download it in Settings.")));
+        }
+        if !Path::new(&t.source_path).is_file() {
+            return Err(anyhow!(crate::tr!("The recording is not at {} any more.", t.source_path)));
+        }
+        let running = self.snapshot().queue.into_iter().find(|j| j.kind == "speakers" && j.transcript.as_deref() == Some(transcript) && ACTIVE_JOB.contains(&j.status.as_str()));
+        if let Some(j) = running {
+            return Ok(j.id);
+        }
+        self.update(|s| s.queue.retain(|j| !(j.kind == "speakers" && j.transcript.as_deref() == Some(transcript))));
+        let n = self.counter.fetch_add(1, Ordering::SeqCst);
+        let id = format!("{}-{:03}", now_ms(), n % 1000);
+        self.cancels.lock().unwrap().insert(id.clone(), Arc::new(AtomicBool::new(false)));
+        let job = JobView {
+            id: id.clone(),
+            title: t.title.clone(),
+            path: t.source_path.clone(),
+            language: t.language.clone(),
+            kind: "speakers".into(),
+            steps: Steps { transcribe: false, speakers: true, ..Default::default() },
+            transcript: Some(transcript.to_string()),
+            status: "queued".into(),
+            ..Default::default()
+        };
+        self.update(|s| s.queue.push(job));
+        self.send(Msg::Speakers(id.clone()));
+        Ok(id)
+    }
+
     /// Burn a transcript's subtitles (`view`: its own, its translation's, or both) into its video,
     /// saved as `dest`: a job in the list, which runs at once on a thread of its own, since it does
     /// not need the speech engine.
@@ -1009,6 +1059,26 @@ impl Core {
     pub fn is_live(&self, id: &str) -> bool {
         self.live.lock().unwrap().contains_key(id)
     }
+
+    /// Whether the speakers of a transcript are being found: its lines may be split when that ends,
+    /// so an edit that names a line by its place waits.
+    pub fn finding_speakers(&self, id: &str) -> bool {
+        self.snapshot().queue.iter().any(|j| j.kind == "speakers" && j.transcript.as_deref() == Some(id) && ACTIVE_JOB.contains(&j.status.as_str()))
+    }
+
+    /// An edit of line `index` that was made on the line starting at `start`: refused when the
+    /// lines moved since (split when the speakers were found), so it never lands on another line.
+    pub fn check_line(&self, id: &str, index: usize, start: Option<f64>) -> Result<()> {
+        if self.finding_speakers(id) {
+            return Err(anyhow!(crate::tr!("Dawwin is finding the speakers of this transcript. Edit it when that is done.")));
+        }
+        let Some(start) = start else { return Ok(()) };
+        let t = self.transcript(id)?;
+        if !speakers::same_line(&t, index, start) {
+            return Err(anyhow!(crate::tr!("This transcript changed meanwhile. It is shown again as it is now.")));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- engine thread
@@ -1167,6 +1237,24 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         if !t.alive() {
                             translator = None;
                         }
+                    }
+                }
+                core.cancels.lock().unwrap().remove(&id);
+            }
+            Msg::Speakers(id) => {
+                if let Some(t) = translator.take() {
+                    t.shutdown();
+                }
+                let res = run_speakers(&core, &mut engine, &id);
+                if let Some(e) = engine.as_mut() {
+                    e.watch(None);
+                }
+                if let Err(err) = res {
+                    let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
+                    end_in_error(&core, &id, err, cancelled);
+                    if engine.as_mut().is_some_and(|e| !e.alive()) {
+                        engine = None;
+                        core.update(|s| s.engine.state = "off".into());
                     }
                 }
                 core.cancels.lock().unwrap().remove(&id);
@@ -1526,6 +1614,82 @@ fn subtitle_video(core: &Arc<Core>, id: &str, t: &Transcript, view: &crate::tran
     Ok(dest)
 }
 
+/// Who speaks when in `audio`, by the speaker model on the disk.
+fn find_turns(core: &Arc<Core>, w: &mut dyn Engine, audio: &Audio) -> Result<Vec<speakers::Turn>> {
+    let model = setup::model_status(&core.paths, &core.settings.lock().unwrap(), Family::Speakers);
+    if !model.found {
+        return Err(anyhow!(crate::tr!("Telling speakers apart needs its model. Download it in Settings.")));
+    }
+    w.speakers(&model.path, audio)
+}
+
+/// The languages a recording can be transcribed in with the models on the disk.
+fn languages_with_a_model(core: &Arc<Core>) -> Vec<&'static str> {
+    let st = core.settings.lock().unwrap();
+    let found: Vec<Family> = Family::ALL.into_iter().filter(|f| models::transcribes(*f) && setup::model_status(&core.paths, &st, *f).found).collect();
+    models::languages().filter(|l| models::models_for(l).iter().any(|v| found.contains(&v.family))).collect()
+}
+
+/// Which language a recording is in: its first half minute of speech, heard by the language model.
+fn detect_language(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str, samples: &[f32]) -> Result<language::Decision> {
+    let model = setup::model_status(&core.paths, &core.settings.lock().unwrap(), Family::Language);
+    if !model.found {
+        return Err(anyhow!(crate::tr!("Detecting the language needs its model. Download it in Settings.")));
+    }
+    let ranges = language::first_speech(samples);
+    if ranges.is_empty() {
+        return Err(anyhow!(crate::tr!("There is no speech in this recording.")));
+    }
+    let clip = Audio { id: format!("{id}-language"), samples: language::joined(samples, &ranges) };
+    let w = ensure_engine(core, engine, None)?;
+    // a piece at a time, each by itself (see `language::pieces`)
+    let heard: Result<Vec<_>> = language::pieces(clip.samples.len()).into_iter().map(|(a, b)| Ok((w.language(&model.path, &clip, &[(a, b)])?, b - a))).collect();
+    w.forget(&clip.id);
+    let heard = language::average(&heard?);
+    let with_model = languages_with_a_model(core);
+    language::decide(&heard, &with_model).ok_or_else(|| anyhow!(crate::tr!("There is too little speech in this recording to tell its language.")))
+}
+
+/// Find the speakers of a finished transcript (a job from `Core::find_speakers`).
+fn run_speakers(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Result<()> {
+    let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
+    if job.status != "queued" {
+        return Ok(());
+    }
+    let Some(transcript) = job.transcript.clone() else { return Ok(()) };
+    let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
+    let started = Instant::now();
+    let _awake = KeepAwake::new();
+    core.update_job(id, |j| j.status = "decoding".into());
+    let t = history::load(&core.paths.history_dir(), &transcript)?;
+    let source = PathBuf::from(&t.source_path);
+    if !source.is_file() {
+        return Err(anyhow!(crate::tr!("The recording is not at {} any more.", source.display())));
+    }
+    let samples = audio::decode(&source, setup::ffmpeg(&core.paths).as_ref(), &cancel)?;
+    let audio = Audio { id: id.to_string(), samples };
+    core.update_job(id, |j| {
+        j.status = "speakers".into();
+        j.duration_s = audio.samples.len() as f64 / SR as f64;
+    });
+    let w = ensure_engine(core, engine, None)?;
+    // a stop ends the speaker model's run at once (see `Engine::watch`)
+    w.watch(Some(cancel.clone()));
+    let turns = find_turns(core, w, &audio);
+    w.forget(id);
+    let turns = turns?;
+    // the times of the lines are the original recording's, and so are these
+    history::modify(&core.paths.history_dir(), &transcript, |t| speakers::give_speakers(t, &turns))?;
+    let _ = core.app.emit("history-changed", &transcript);
+    core.update_job(id, |j| {
+        j.status = "done".into();
+        j.progress = 1.0;
+        j.elapsed_s = started.elapsed().as_secs_f64();
+        j.saved = true;
+    });
+    Ok(())
+}
+
 fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Result<()> {
     let Some(job) = core.snapshot().queue.into_iter().find(|j| j.id == id) else { return Ok(()) };
     if job.status != "queued" {
@@ -1546,7 +1710,11 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     core.update_job(id, |j| j.status = "decoding".into());
 
     let mut model_in_use = None;
-    if steps.transcribe {
+    // "Detect the language": the model is known once the recording is heard
+    let auto = job.language == language::AUTO;
+    let mut spoken = job.language.clone();
+    let words = core.settings.lock().unwrap().words.clone();
+    if steps.transcribe && !auto {
         let found = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &job.language);
         let Some((family, model)) = found else {
             return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
@@ -1561,6 +1729,26 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     let samples = audio::decode(&source, ffmpeg.as_ref(), &cancel)?;
     let duration_s = samples.len() as f64 / SR as f64;
     core.update_job(id, |j| j.duration_s = duration_s);
+
+    if steps.transcribe && auto {
+        core.update_job(id, |j| j.status = "detecting".into());
+        let d = detect_language(core, engine, id, &samples)?;
+        if !d.has_model {
+            // said on the job, and offered: the model for the language it is in
+            let offer = models::models_for(&d.language).first().map(|v| v.id);
+            let _ = core.app.emit("language-needs-model", serde_json::json!({ "id": id, "language": d.language, "name": d.name, "model": offer }));
+            let name = if models::known_language(&d.language) { models::language_name(&d.language).to_string() } else { d.name.clone() };
+            return Err(anyhow!(crate::tr!("This recording is in {}, and there is no model for it yet. Download one in Settings.", name)));
+        }
+        spoken = d.language;
+        core.update_job(id, |j| j.language = spoken.clone());
+        let found = setup::model_for(&core.paths, &core.settings.lock().unwrap(), &spoken);
+        let Some((family, model)) = found else {
+            return Err(anyhow!(crate::tr!("There is no model for this language yet. Choose one in Settings.")));
+        };
+        ensure_engine(core, engine, Some(&model.path))?.start_loading()?;
+        model_in_use = Some((family, model));
+    }
 
     // the long silences out: from the sound saved, and from what the model has to read
     let spans = if steps.remove_silence {
@@ -1604,6 +1792,8 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
     w.watch(Some(cancel.clone()));
     let info = w.ensure_loaded()?;
     show_loaded(core, &info);
+    // a model that takes hints hears the user's words right in the first place
+    w.set_vocabulary(if family == Family::Whisper { crate::words::hints(&words) } else { Vec::new() });
     let device = match &info.gpu {
         Some(g) if info.device == "gpu" => format!("GPU · {g}"),
         _ => "CPU".into(),
@@ -1618,7 +1808,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         source_path: job.path.clone(),
         created_ms: now_ms(),
         duration_s,
-        language: job.language.clone(),
+        language: spoken.clone(),
         elapsed_s: 0.0,
         device,
         model: models::variant(&model.variant).map_or(family.label(), |v| v.label).to_string(),
@@ -1628,6 +1818,8 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         outputs_listed: false,
         segments: Vec::new(),
         translations: Vec::new(),
+        speakers: Vec::new(),
+        detected: auto.then(|| spoken.clone()),
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -1644,12 +1836,12 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         }
         let take = &chunks[i..(i + batch).min(chunks.len())];
         let ranges: Vec<(usize, usize)> = take.iter().copied().filter(|(a, b)| !audio::is_silent(&audio.samples[*a..*b])).collect();
-        let texts = if ranges.is_empty() { Ok(vec![]) } else { w.transcribe(&audio, &ranges, &job.language) };
+        let texts = if ranges.is_empty() { Ok(vec![]) } else { w.transcribe(&audio, &ranges, &spoken) };
         match texts {
             Ok(texts) => {
                 let mut lines: Vec<Segment> = Vec::new();
                 for (r, got) in ranges.iter().zip(texts) {
-                    match fix_loops(w, &audio, *r, got, &job.language, 0) {
+                    match fix_loops(w, &audio, *r, got, &spoken, 0) {
                         Ok(s) => lines.extend(s.into_iter().filter(|s| !s.text.trim().is_empty())),
                         Err(e) => {
                             failure = Some(e);
@@ -1658,16 +1850,19 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
                     };
                 }
                 if time_words && failure.is_none() {
-                    if let Err(e) = timing::pass(w, &audio, &mut lines, &job.language, &cancel, |_| {}) {
+                    if let Err(e) = timing::pass(w, &audio, &mut lines, &spoken, &cancel, |_| {}) {
                         failure = Some(e);
                     }
                 }
                 for s in lines {
                     // the times of the original recording, whatever the model was given
-                    let s = match &spans {
+                    let mut s = match &spans {
                         Some(sp) => to_original(s, sp),
                         None => s,
                     };
+                    if !words.is_empty() {
+                        s.text = crate::words::apply(&s.text, &words);
+                    }
                     let _ = core.app.emit("segment", serde_json::json!({ "id": id, "segment": &s }));
                     t.segments.push(s.clone());
                     if let Some(lt) = core.live.lock().unwrap().get_mut(id) {
@@ -1704,12 +1899,35 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
             }
         }
     }
+    // who said what: the speaker model hears what the speech model heard, and the times go back
+    // to the original recording like every other time
+    let stopped_in_text = cancel.load(Ordering::SeqCst);
+    let mut speakers_error = None;
+    if steps.speakers && failure.is_none() && !stopped_in_text && !t.segments.is_empty() {
+        core.update_job(id, |j| {
+            j.status = "speakers".into();
+            j.eta_s = None;
+        });
+        match find_turns(core, w, &audio) {
+            Ok(mut turns) => {
+                if let Some(sp) = &spans {
+                    for x in turns.iter_mut() {
+                        x.start = audio::original_time(sp, x.start, false);
+                        x.end = audio::original_time(sp, x.end, true);
+                    }
+                }
+                speakers::give_speakers(&mut t, &turns);
+            }
+            Err(_) if cancel.load(Ordering::SeqCst) => {}
+            Err(e) => speakers_error = Some(crate::tr!("Transcribed, but the speakers could not be told apart: {}", format!("{e:#}"))),
+        }
+    }
     w.forget(id);
     core.live.lock().unwrap().remove(id);
 
     let cancelled = cancel.load(Ordering::SeqCst);
     t.elapsed_s = t_start.elapsed().as_secs_f64();
-    t.partial = cancelled || failure.is_some();
+    t.partial = stopped_in_text || failure.is_some();
     t.timed = time_words && !t.partial;
     // the sound it saved, if any: a folder run never takes it for a recording
     t.outputs = core.snapshot().queue.into_iter().find(|j| j.id == id).map(|j| j.outputs).unwrap_or_default();
@@ -1738,7 +1956,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         }
     }
     // the next steps: a translation (which then does the video), or straight to the video
-    let mut next_error = None;
+    let mut next_error = speakers_error;
     if saved && !cancelled {
         if let Some(language) = steps.translate.as_deref().filter(|l| *l != t.language) {
             if let Err(e) = core.translate_then(id, language, steps.video, steps.burn) {
@@ -1796,6 +2014,7 @@ pub(crate) fn fix_loops(w: &mut dyn Engine, audio: &Audio, (a, b): (usize, usize
         words: Vec::new(),
         pauses: audio::pauses(&audio.samples, a, b),
         heard: Vec::new(),
+        speaker: None,
     };
     if !got.stopped && find_loop(&got.text).is_none() {
         return Ok(vec![seg(a, b, got.text, None)]);
@@ -1893,7 +2112,7 @@ mod tests {
     }
 
     fn line(text: &str) -> Segment {
-        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] }
+        Segment { start: 0.0, end: 1.0, text: text.into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![], speaker: None }
     }
 
     fn saved_transcript(name: &str, lines: &[&str]) -> (PathBuf, Transcript) {
@@ -1916,6 +2135,8 @@ mod tests {
             outputs_listed: false,
             segments: lines.iter().map(|l| line(l)).collect(),
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         };
         history::save(&dir, &t).unwrap();
         (dir, t)

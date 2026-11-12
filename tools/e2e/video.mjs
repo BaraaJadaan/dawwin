@@ -206,7 +206,8 @@ check("a 90 s test video and a 40 s one in 720p are made", existsSync(meeting) &
   const burned = join(burnDir, "meeting (Arabic, burned in).mp4");
   check("the video is saved next to the original", existsSync(burned), readdirSync(burnDir));
   const info = probe(burned);
-  check("an H.264 MP4 of the same size and length, with no subtitle track", /Video: h264/.test(info) && /1280x720/.test(info) && /Duration: 00:00:(39|40)/.test(info) && !/Subtitle:/.test(info), info.split("\n").filter((l) => /Duration|Stream/.test(l)).map((l) => l.trim()));
+  // a 720p picture is enlarged to 1080p before the text is drawn: Sharp text on small videos, on by default (1.4)
+  check("an H.264 MP4 of the same length, enlarged to 1080p for sharp text, with no subtitle track", /Video: h264/.test(info) && /1920x1080/.test(info) && /Duration: 00:00:(39|40)/.test(info) && !/Subtitle:/.test(info), info.split("\n").filter((l) => /Duration|Stream/.test(l)).map((l) => l.trim()));
   if (existsSync(burned)) ffmpeg(["-ss", "8", "-i", burned, "-frames:v", "1", join(OUT, "video-burn-frame-steps.png")]);
 
   // the export menu: translated, both languages burned in

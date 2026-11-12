@@ -202,7 +202,8 @@ async function until(a, expr, ms = 120000) {
   const took = (Date.now() - t0) / 1000;
   let info = "";
   try { execFileSync(FFMPEG, ["-hide_banner", "-i", out], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }); } catch (e) { info = String(e.stderr); }
-  check("Dawwin's ffmpeg burns the subtitles in", existsSync(out) && /Video: h264/.test(info) && /1280x720/.test(info), { took, error: await a.ev(`S.snap.queue.find(j=>j.id===${JSON.stringify(jid)})?.error||null`) });
+  // the 720p video enlarged to 1080p for sharp text (on by default since 1.4)
+  check("Dawwin's ffmpeg burns the subtitles in", existsSync(out) && /Video: h264/.test(info) && /1920x1080/.test(info), { took, error: await a.ev(`S.snap.queue.find(j=>j.id===${JSON.stringify(jid)})?.error||null`) });
   if (existsSync(out)) ffmpeg(["-ss", "3", "-i", out, "-frames:v", "1", join(OUT, "tools-burned-frame.png")]);
 
   // deleting the video one: two presses, then the small one again

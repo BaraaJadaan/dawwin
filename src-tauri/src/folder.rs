@@ -200,8 +200,10 @@ mod tests {
             timed: false,
             outputs: vec![],
             outputs_listed: false,
-            segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![] }],
+            segments: vec![Segment { start: 0.0, end: 5.0, text: "نص الدرس".into(), flag: None, edited: false, voice: vec![], words: vec![], pauses: vec![], heard: vec![], speaker: None }],
             translations: vec![],
+            speakers: Vec::new(),
+            detected: None,
         }
     }
 

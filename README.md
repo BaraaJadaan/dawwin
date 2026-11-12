@@ -23,8 +23,9 @@ subscription, no limit on hours.
 ## What people use it for
 
 - **Business meetings.** Record on Zoom, Teams or Google Meet, drop the video on the window, and get
-  the meeting as text you can search, correct and send as a Word document. Requirement meetings in
-  Arabic full of English terms ("الـ dashboard", "الـ API") come out as they were said.
+  the meeting as text you can search, correct and send as a Word document, with who said what.
+  Requirement meetings in Arabic full of English terms ("الـ dashboard", "الـ API") come out as they
+  were said, and the names of your company and products the way you write them.
 - **Colleagues who speak another language.** Translate the transcript and share it on its own, or as a
   bilingual document with each line and its translation under it.
 - **Videos, courses and YouTube.** Subtitles timed the way professional ones are. Translate them to
@@ -56,6 +57,34 @@ subscription, no limit on hours.
 - Save the sound and the videos next to the recording, or in a folder of your own (new in 1.3.2).
 
 ![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text, Translation and Video.](docs/screenshots/home.png)
+
+**Who said what** (new in 1.4)
+
+- Tick **Tell speakers apart**, and each line gets its speaker, named where the speaker changes. Up to
+  four people are told apart, on the processor, in a small part of the recording's length; one
+  download of 139 MB, offered when you tick it.
+- Click "Speaker 2" and type "Sami": every line of that speaker says Sami. Merge two speakers that are
+  one person, or give one line to someone else, or to someone new. A line that holds two people's
+  words is split where the speaker changes, when there is a pause there.
+- Names go into every export: "Sami:" before each turn in Word, text and Markdown, a speaker column in
+  CSV and TSV, a speaker on each line of JSON, the voice tag of WebVTT, and, if you want it, the name
+  at the start of a subtitle when the speaker changes. A translation keeps the same speakers.
+- Search within one speaker's lines. **More ▾ → Find the speakers** does it for an older transcript.
+
+![A meeting in Arabic with the speakers' names where the speaker changes, and a speaker's menu open: Rename, Same person as Speaker 2, Search their lines.](docs/screenshots/speakers.png)
+
+**The language, and your words** (new in 1.4)
+
+- **Detect the language**, at the top of the language menu: Dawwin listens to the first half minute of
+  speech of each recording, so a folder in several languages is fine. A recording in a language you
+  have no model for says which one it is and offers its model; the transcript says what was heard, and
+  **More ▾ → Transcribe again in** fixes a wrong guess in one press. One download of 27 MB.
+- **Words and names** in Settings: how to write the words Dawwin keeps getting wrong ("Thmanyah", not
+  "ثمانية"), with the wrong forms they come out as if you know them. Every new transcript writes them
+  your way, as whole words, whatever their diacritics or Latin case (another spelling is listed as
+  a wrong form, so a name never replaces a word that only looks like it); an "All languages" (Whisper) model also
+  hears them better. Select a word in a transcript and right-click → **Always write it like this…**, or
+  **More ▾ → Apply my words** on an older one. Save the list to a file and load it on another PC.
 
 **Transcribe**
 
@@ -110,6 +139,11 @@ subscription, no limit on hours.
   English words in it in their place, and the picture is encoded again on the graphics chip (NVIDIA,
   AMD or Intel, or Windows' own encoder): about 5 seconds for a minute of 1080p video on an RTX 4060
   laptop. The new file is about the size of the original. The list on the side shows how far it is.
+- **Subtitle look** (new in 1.4) in Settings: the size of the text in four steps, its font (those of
+  your PC that draw Arabic correctly), white or yellow, an outline or a dark box behind it, at the
+  bottom or the top, with a preview on a second of your own video. **Sharp text on small videos**
+  enlarges a video under 1080p before drawing the text, so it is as sharp as on a 1080p one; the file
+  gets about three times larger (on by default, and it says so on hover).
 - Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.2 MB
   for burning in. Both are in **Settings**, to download or delete by hand.
 
@@ -259,7 +293,7 @@ the model folder, if you chose another place for it).
 
 ## License
 
-[MIT](LICENSE). Five things are not part of this repository and have their own terms:
+[MIT](LICENSE). Six things are not part of this repository and have their own terms:
 
 - **The speech models**: Cohere publishes its model under Apache-2.0, NVIDIA publishes Canary under CC
   BY 4.0, and OpenAI publishes Whisper under the MIT license. Dawwin downloads GGUF conversions of
@@ -272,6 +306,16 @@ the model folder, if you chose another place for it).
   Dawwin downloads GGUF conversions of the [12B](https://huggingface.co/mradermacher/MiLMMT-46-12B-v1.0-GGUF),
   the [4B](https://huggingface.co/mradermacher/MiLMMT-46-4B-v1.0-GGUF) and the
   [1B](https://huggingface.co/mradermacher/MiLMMT-46-1B-v1.0-GGUF) made by mradermacher.
+- **Who said what, and the language**: NVIDIA publishes
+  [Streaming Sortformer 4spk v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1)
+  under the [NVIDIA Open Model License](https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/):
+  commercial use is allowed, NVIDIA's Trustworthy AI terms apply, and whoever passes the model on gives
+  its license and the notice "Licensed by NVIDIA Corporation under the NVIDIA Open Model License" with
+  it. SpeechBrain publishes [VoxLingua107 ECAPA-TDNN](https://huggingface.co/speechbrain/lang-id-voxlingua107-ecapa)
+  under Apache-2.0. Dawwin downloads the GGUF conversions of
+  [the speaker model](https://huggingface.co/handy-computer/diar_streaming_sortformer_4spk-v2.1-gguf) and
+  [the language model](https://huggingface.co/handy-computer/lang-id-voxlingua107-ecapa-gguf) made by
+  transcribe.cpp, from their pages, which carry both licenses.
 - **The engines**: [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) and
   [llama.cpp](https://github.com/ggml-org/llama.cpp), both under the MIT license.
 - **ffmpeg**: Dawwin's own builds of [FFmpeg](https://ffmpeg.org), under the LGPL 2.1, made by

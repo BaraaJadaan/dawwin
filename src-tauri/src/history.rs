@@ -152,6 +152,8 @@ mod tests {
             outputs_listed: false,
             segments: vec![],
             translations: vec![],
+            speakers: vec![],
+            detected: None,
         }
     }
 

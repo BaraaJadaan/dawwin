@@ -2,23 +2,29 @@
 
 mod audio;
 mod captions;
+mod cmds;
 mod engine;
 mod folder;
+mod fonts;
 mod history;
 pub mod i18n;
 mod instance;
+mod language;
+mod look;
 mod models;
 mod net;
 mod queue;
 mod saving;
 mod script;
 mod setup;
+mod speakers;
 mod timing;
 mod tools;
 mod transcript;
 mod translate;
 mod updates;
 mod video;
+mod words;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -198,7 +204,8 @@ async fn pick_folder(app: AppHandle) -> Option<String> {
 }
 
 fn spoken(language: &str) -> String {
-    if models::known_language(language) { language } else { "ar" }.to_string()
+    // "auto": Dawwin finds it (see `language`)
+    if models::known_language(language) || language == language::AUTO { language } else { "ar" }.to_string()
 }
 
 #[derive(serde::Serialize)]
@@ -297,12 +304,14 @@ fn edit(core: &Core, id: &str, f: impl FnOnce(&mut Transcript)) -> R<Transcript>
     if core.is_live(id) {
         return Err(crate::tr!("This transcript is still being written. Edit it when it is done."));
     }
+    core.check_line(id, 0, None).map_err(e)?;
     history::modify(&core.paths.history_dir(), id, f).map(|(t, _)| t).map_err(e)
 }
 
 /// Correct a line: the line as it is now, with its words placed in time again.
 #[tauri::command]
-fn update_segment(core: C, id: String, index: usize, text: String) -> R<Option<transcript::Segment>> {
+fn update_segment(core: C, id: String, index: usize, text: String, start: Option<f64>) -> R<Option<transcript::Segment>> {
+    core.check_line(&id, index, start).map_err(e)?;
     let t = edit(&core, &id, |t| {
         if let Some(s) = t.segments.get_mut(index) {
             if s.text != text {
@@ -377,7 +386,8 @@ fn translate(core: C, id: String, language: String) -> R<String> {
 }
 
 #[tauri::command]
-fn update_translation(core: C, id: String, language: String, index: usize, text: String) -> R<()> {
+fn update_translation(core: C, id: String, language: String, index: usize, text: String, start: Option<f64>) -> R<()> {
+    core.check_line(&id, index, start).map_err(e)?;
     edit(&core, &id, |t| {
         let count = t.segments.len();
         let from = t.segments.get(index).map(|s| s.text.clone());
@@ -812,6 +822,20 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            cmds::find_speakers,
+            cmds::rename_speaker,
+            cmds::merge_speakers,
+            cmds::give_line,
+            cmds::get_extras,
+            cmds::set_words,
+            cmds::always_write,
+            cmds::apply_words,
+            cmds::save_words,
+            cmds::load_words,
+            cmds::set_subtitle_names,
+            cmds::set_look,
+            cmds::preview_look,
+            cmds::subtitle_fonts,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

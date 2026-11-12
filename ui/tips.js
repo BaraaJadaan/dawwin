@@ -28,6 +28,15 @@ const TIPS = [
   ["run-on", "tip.runOn"],
   ["set-save-where", "tip.saveWhere"],
   ["home-folder", "tip.folder"],
+  // what came with 1.4 (strings in who.js)
+  ["step-speakers", "tip.speakers", true],
+  ["spoken", "tip.spoken"],
+  ["search-who", "tip.searchWho"],
+  ["btn-more", "tip.more"],
+  ["words-add", "tip.words"],
+  ["look-font", "tip.font"],
+  ["look-sharp", "tip.sharp", true],
+  ["look-preview", "tip.look"],
 ];
 /** The export formats, by their button's data-fmt. */
 const FORMAT_TIPS = ["docx", "txt", "md", "srt", "vtt", "csv", "tsv", "json"];

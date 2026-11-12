@@ -101,6 +101,8 @@ fn transcript(language: &str, segments: Vec<Segment>) -> Transcript {
         outputs_listed: false,
         segments,
         translations: vec![],
+        speakers: vec![],
+        detected: None,
     }
 }
 

@@ -175,8 +175,13 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   down. Each track is cut as it arrives exactly where `audio::split_points` would cut it (25 s), pieces
   without speech never reach the model (it invents a line on near-silence), and a "me" line that only
   says what "them" said at the same time is dropped. More than two minutes behind, live text stops and
-  the rest is transcribed from the file after Stop. Measurements: `tools/record-trial`. Debug builds
-  take made-up tracks instead of the devices (`DAWWIN_TEST_RECORD="me=<file>|them=<file>"`).
+  the rest is transcribed from the file after Stop. "Me" and "Them" are the transcript's speakers 1
+  and 2 from the first line (`Segment::track` says which track a line is from); with Tell speakers
+  apart, the speaker model hears the "them" channel alone after Stop and only those lines are told
+  apart (`meeting::split_them`); Find the speakers and the timing pass on a meeting also hear each line
+  on its own channel. With Detect the language, the first piece with speech is heard by the language
+  model before anything is transcribed. Measurements: `tools/record-trial`. Debug builds take made-up
+  tracks instead of the devices (`DAWWIN_TEST_RECORD="me=<file>|them=<file>"`, see `tools/e2e`).
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 - **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event
   that brings the first window forward, and quits before it touches the cache, a download or the GPU. Leftover audio in the
@@ -192,7 +197,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | Engine and translator logs | `%LOCALAPPDATA%\Dawwin\logs\engine.log`, `translate.log` |
 | Transcripts | `%APPDATA%\Dawwin\history\*.json` |
 | Settings | `%APPDATA%\Dawwin\settings.json`, and `recording.json` for recording |
-| Recordings of meetings | `Documents\Dawwin`, or `%USERPROFILE%\Dawwin` when Documents is in OneDrive |
+| Recordings of meetings | The folder chosen in Settings; else `Documents\Dawwin`, or `%USERPROFILE%\Dawwin` when Documents is in OneDrive |
 
 ## Adding a language
 

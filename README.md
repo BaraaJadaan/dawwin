@@ -95,8 +95,11 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
   a Zoom, Meet or Teams call, a call in the browser, a webinar or a video. It listens to the PC, not to
   one program, so it works with any of them, and nothing joins the call. Dawwin's own sound is left out.
 - The text appears while people speak, about half a minute behind, each line marked **Me** or **Them**.
-  Press Stop and the transcript is ready within moments: nothing is transcribed twice. The steps
-  ticked on the start page, such as a translation, follow.
+  With **Tell speakers apart** ticked, the others are told apart by voice once you press Stop (Speaker 2,
+  Speaker 3…, to rename like any speaker). **Detect the language** works here too: the first words
+  spoken decide. Press Stop and the transcript is ready within moments: nothing is transcribed twice.
+  The other steps ticked on the start page, such as a translation, follow, and Fix the timing, Follow
+  words and subtitles hear each side on its own.
 - With laptop speakers instead of headphones, the microphone hears the others too: echo cancellation
   (WebRTC's, in Rust) takes them out of your track, so their words are not written twice.
 - Record both sides, the microphone alone (a lecture in a room) or the PC's sound alone (a webinar).
@@ -106,10 +109,12 @@ said. Nothing leaves your computer: no account, no upload, no subscription, no l
 - The recording survives a crash, a power cut or a forced close up to the last second or so, and is
   offered back at the next start. The PC does not sleep while it records, closing Dawwin asks first,
   and a disk running low is said before it is full.
-- Kept in `Documents\Dawwin` as an M4A of about 45 MB an hour (with ffmpeg; as a WAV without it), with
-  both sides to play back in Dawwin. When Documents is in OneDrive, as Windows 11 often sets it up, they
-  go to `Dawwin` in your user folder instead, so that a recording never leaves the computer. The first time, Dawwin reminds you that recording a call may need
-  everyone's consent.
+- Kept as an M4A of about 45 MB an hour (with ffmpeg; as a WAV without it), with both sides to play back
+  in Dawwin: in the folder chosen in Settings (**Where the sound, the videos and the recordings are saved**), or else in `Documents\Dawwin`.
+  When Documents is in OneDrive, as Windows 11 often sets it up, they go to `Dawwin` in your user folder
+  instead, so that a recording never leaves the computer; a folder you choose inside OneDrive is said
+  plainly next to Record. The first time, Dawwin reminds you that recording a call may need everyone's
+  consent.
 
 ![Recording a meeting: the time, a level for Me and one for Them, Stop, and the text appearing with each line marked Me or Them.](docs/screenshots/record.png)
 

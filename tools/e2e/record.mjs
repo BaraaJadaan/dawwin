@@ -157,7 +157,9 @@ if (ONLY === "all" || ONLY === "meeting") {
   const timed = await a.invoke("get_transcript", { id });
   const wordsOf = (s) => (s.words || []).map((w) => w[1]);
   const myTimes = timed.segments.filter((s) => s.track === "me").flatMap(wordsOf);
-  check("Fix the timing works on a meeting", fj.status === "done" && timed.timed && timed.segments.filter((s) => s.text.trim()).every((s) => (s.words || []).length > 0), { status: fj.status, timed: timed.timed });
+  // a line with pauses in it is heard again in stretches (one without keeps its estimated times)
+  const heardAgain = (track) => timed.segments.some((s) => s.track === track && (s.words || []).length > 0);
+  check("Fix the timing works on a meeting, both tracks", fj.status === "done" && timed.timed && heardAgain("me") && heardAgain("them"), { status: fj.status, timed: timed.timed });
   check("Me's words are placed where Me speaks", myTimes.length > 0 && myTimes.every((x) => x >= OWN - 0.5 && x <= OWN_END + 0.5), [Math.min(...myTimes), Math.max(...myTimes)]);
   await a.ev(`openTranscript(${JSON.stringify(id)})`);
   await sleep(1200);
@@ -380,6 +382,41 @@ if (ONLY === "all" || ONLY === "onedrive") {
   const b = await open(home("not-onedrive"), port++, { DAWWIN_TEST_RECORD: TEST });
   check("a folder outside OneDrive is not flagged", (await b.invoke("record_setup")).synced === false);
   b.close();
+}
+
+// ---- the pictures of How to use (ui/guide/<lang>/record.webp) and the README (docs/screenshots/
+// record.png): a meeting being recorded, its levels and its lines. Writes into the repository; not
+// part of "all":  node tools/e2e/record.mjs pictures
+if (ONLY === "pictures") {
+  const { REPO } = await import("./lib.mjs");
+  const h = home("pictures", {}, { model_files: { speakers: SPEAKERS, language: LANGUAGE } });
+  const a = await open(h, port++, { DAWWIN_TEST_RECORD: TEST });
+  const box = (sel, maxH) => a.ev(`(()=>{const r=document.querySelector(${JSON.stringify(sel)}).getBoundingClientRect();return {x:r.left,y:r.top,width:r.width,height:Math.min(r.height,${maxH})}})()`);
+  for (const lang of ["en", "ar"]) {
+    await a.call("Emulation.setDeviceMetricsOverride", { width: 1200, height: 820, deviceScaleFactor: 1, mobile: false });
+    await a.ev(`setUiLang(${JSON.stringify(lang)})`);
+    await a.ev(`showView('home')`);
+    await sleep(600);
+    const id = await a.invoke("start_recording", { language: "en", steps: STEPS });
+    await a.ev(`openTranscript(${JSON.stringify(id)})`);
+    for (let i = 0; i < 400; i++) {
+      await sleep(250);
+      if ((await a.ev(`[...document.querySelectorAll('#segments .seg .who')].map((b) => b.textContent)`)).length >= 3) break;
+    }
+    await a.ev(`document.getElementById('toast').hidden = true`);
+    const r = await a.call("Page.captureScreenshot", { format: "webp", quality: 85, clip: { ...(await box("#main", 470)), scale: 1 } });
+    writeFileSync(join(REPO, "ui", "guide", lang, "record.webp"), Buffer.from(r.result.data, "base64"));
+    if (lang === "en") {
+      await a.call("Emulation.setDeviceMetricsOverride", { width: 1500, height: 1000, deviceScaleFactor: 1, mobile: false });
+      await sleep(800);
+      await a.shot(join(REPO, "docs", "screenshots", "record.png"));
+    }
+    await a.invoke("stop_recording");
+    for (let i = 0; i < 240; i++) { await sleep(500); if (!(await a.ev(`S.snap.queue.some((j) => j.kind === 'record' && ACTIVE.has(j.status))`))) break; }
+  }
+  await a.ev(`setUiLang('en')`);
+  check("the pictures are made", true);
+  a.close();
 }
 
 finish();

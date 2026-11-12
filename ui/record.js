@@ -36,8 +36,11 @@ Object.assign(I18N.en.s, {
   "rec.needFfmpeg": "The recording is kept as a WAV, five times larger than an M4A. Download ffmpeg ({size}) to keep recordings small.",
   "job.recording": "Recording · {dur}",
   "job.waitRecording": "Waiting for the recording to end",
+  // recordings go to the folder of one's own too
+  "set.saveWhere": "Where the sound, the videos and the recordings are saved",
+  "tip.saveWhere": "Where the steps save the sound and the videos, where meetings are recorded, and where save dialogs open. A folder's recordings keep their files next to them.",
   "guide.recordTitle": "Record a meeting",
-  "guide.recordText": "Press Record on the start page to record your microphone and everything the PC plays, such as a Zoom, Meet or Teams call or a video, with nothing joining the call. Choose the microphone alone for a lecture in a room, or the PC's sound alone for a webinar. The text appears while people speak, each line marked Me or Them, and the recording is kept in Documents\\Dawwin (or in Dawwin in your user folder when Documents is in OneDrive, so that it is not uploaded). Tell the others before you record a call.",
+  "guide.recordText": "Press Record on the start page to record your microphone and everything the PC plays, such as a Zoom, Meet or Teams call or a video, with nothing joining the call. Choose the microphone alone for a lecture in a room, or the PC's sound alone for a webinar. The text appears while people speak, each line marked Me or Them; with Tell speakers apart ticked, the others are told apart by voice after Stop. The recording is kept in the folder chosen in Settings, or in Documents\\Dawwin (in Dawwin in your user folder when Documents is in OneDrive, so that it is not uploaded). Tell the others before you record a call.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -73,8 +76,10 @@ Object.assign(I18N.ar.s, {
   "rec.needFfmpeg": "حُفظ التسجيل بصيغة WAV، وهي أكبر بخمس مرات من M4A. نزّل ffmpeg ‏({size}) لتبقى التسجيلات صغيرة.",
   "job.recording": "جارٍ التسجيل · {dur}",
   "job.waitRecording": "في انتظار انتهاء التسجيل",
+  "set.saveWhere": "مكان حفظ الصوت والفيديوهات والتسجيلات",
+  "tip.saveWhere": "أين تحفظ الخطوات الصوت والفيديوهات، وأين تُسجَّل الاجتماعات، وأين تُفتح نوافذ الحفظ. تسجيلات المجلد تبقى ملفاتها بجانبها.",
   "guide.recordTitle": "سجّل اجتماعًا",
-  "guide.recordText": "اضغط «سجّل» في صفحة البدء لتسجيل ميكروفونك وكل ما يشغّله الحاسوب، مثل مكالمة Zoom أو Meet أو Teams أو فيديو، دون أن ينضم أي شيء إلى المكالمة. اختر الميكروفون وحده لمحاضرة في قاعة، أو صوت الحاسوب وحده لندوة عبر الإنترنت. يظهر النص أثناء الكلام وكل سطر موسوم بـ«أنا» أو «هم»، ويُحفظ التسجيل في المستندات داخل مجلد Dawwin (أو في مجلد Dawwin داخل مجلد المستخدم إن كانت المستندات داخل OneDrive، كي لا يُرفع). أخبر الآخرين قبل أن تسجّل مكالمة.",
+  "guide.recordText": "اضغط «سجّل» في صفحة البدء لتسجيل ميكروفونك وكل ما يشغّله الحاسوب، مثل مكالمة Zoom أو Meet أو Teams أو فيديو، دون أن ينضم أي شيء إلى المكالمة. اختر الميكروفون وحده لمحاضرة في قاعة، أو صوت الحاسوب وحده لندوة عبر الإنترنت. يظهر النص أثناء الكلام وكل سطر موسوم بـ«أنا» أو «هم»، ومع «تمييز المتحدثين» يُميَّز الآخرون بأصواتهم بعد الإيقاف. يُحفظ التسجيل في المجلد المختار في الإعدادات، أو في المستندات داخل مجلد Dawwin (أو في مجلد Dawwin داخل مجلد المستخدم إن كانت المستندات داخل OneDrive، كي لا يُرفع). أخبر الآخرين قبل أن تسجّل مكالمة.",
 });
 
 const REC = {

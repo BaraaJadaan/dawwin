@@ -19,7 +19,7 @@ no private data. Only the processes they start are ever stopped.
 | `DAWWIN_E2E_OUT` | Where the data folders and samples go (default `tools/e2e/out`, ignored by git). |
 | `DAWWIN_E2E_PORT` | The first debugging port (default 9400). |
 | `DAWWIN_APP` | Another build of the app. |
-| `DAWWIN_E2E_SPEAKERS`, `DAWWIN_E2E_LANGUAGE` | The speaker model (`diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf`) and the language model (`lang-id-voxlingua107-ecapa-Q8_0.gguf`), for `speakers.mjs`. |
+| `DAWWIN_E2E_SPEAKERS`, `DAWWIN_E2E_LANGUAGE` | The speaker model (`diar_streaming_sortformer_4spk-v2.1-Q8_0.gguf`) and the language model (`lang-id-voxlingua107-ecapa-Q8_0.gguf`), for `speakers.mjs` and `record.mjs`. |
 
 A script without what it needs says so and is skipped.
 
@@ -38,6 +38,8 @@ A script without what it needs says so and is skipped.
 | `video.mjs` | A video's subtitles as tracks with Dawwin's small ffmpeg (English first, the picture and sound copied, an MKV with SRT tracks); without ffmpeg or the translator, each step and export offering its download, and the app refusing without it; burned in with Dawwin's ffmpeg for video from the steps and from the export menu, how far it is, and one stopped half way leaving nothing. |
 | `tools.mjs` | The tool downloads from a local stand-in for the release and Hugging Face: the small ffmpeg paused and resumed, ffmpeg for video from the offer burning in makes, burning in with it, deleting it, a damaged download refused, and the translator coming before the first translation model. Needs the release's `dawwin-ffmpeg-*.tar.xz` themselves in `DAWWIN_E2E_TOOLS`; without the translator's pack there, a stand-in of its size is served. Needs no GPU. |
 | `speakers.mjs` | Who said what: a recording of two of Windows' voices transcribed with Detect the language and Tell speakers apart; rename, merge, a line given to someone new, every export, names in subtitles, search within one speaker, words and names, the subtitle look's preview and sharp text on a 480p video, Find the speakers on a transcript without them, and the clicks on a made-up meeting (the name's menu, the right-click menu, Always write it like this…). |
+| `record.mjs` | Recording a meeting, with two made-up tracks played at clock speed through the debug builds' test sound source (`DAWWIN_TEST_RECORD`; no sound device is used and nothing is recorded from the PC): live text, Me and the others told apart, Detect the language, the echo of the speakers not written twice, the clock across 24 s of silence, the M4A in the folder chosen in Settings, Fix the timing and Find the speakers on a meeting, a PC too slow to keep up, a forced close and the recording offered back, the engine missing, Cancel after Stop, a microphone that sends nothing and another chosen in its menu, the disk running low, one source alone, a translation after it, a folder in OneDrive. `node tools/e2e/record.mjs <case>` runs one case. Needs the speaker and language models. |
+| `record-dialogs.mjs` | The native dialogs of recording, read and answered through UI Automation (`dialog.ps1`, `closewin.ps1`): the notice before the first recording in English and Arabic, and again when the recordings would go to OneDrive; closing Dawwin while it records. Run `record.mjs` first (it makes the tracks). |
 | `pictures.mjs` | The pictures of How to use and the README, in English and Arabic, from made-up data (it writes into the repository). |
 | `twice.mjs` | One Dawwin per data folder: started again on the same folder while it transcribes, it quits at once with no window, and the first one's job, audio and engine carry on; another data folder opens beside it; the folder opens again once the first is closed. |
 
@@ -54,4 +56,12 @@ node tools/e2e/video.mjs
 node tools/e2e/tools.mjs
 node tools/e2e/twice.mjs
 node tools/e2e/speakers.mjs
+node tools/e2e/record.mjs
+node tools/e2e/record-dialogs.mjs
 ```
+
+Debug builds also take, for `record.mjs`: `DAWWIN_TEST_ENGINE_DELAY_MS` (each piece of a recording
+takes this much longer), `DAWWIN_TEST_RECORD_BEHIND_S` (live text stops this far behind, 120 s
+otherwise), `DAWWIN_TEST_DISK_FREE` (the free space the recorder sees) and `DAWWIN_TEST_ONEDRIVE` (a
+folder taken for OneDrive's). The measurements behind the recorder are a program of their own,
+`tools/record-trial`.

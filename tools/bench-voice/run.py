@@ -91,6 +91,8 @@ METRIC = re.compile(r"metrics\[([^\]]+)\]\.(\w+)\s*[=:]?\s*(-?[0-9.]+)")
 
 
 def run_sequence(args, cand, model_arg, requests, outdir):
+    # the CLI runs in its own folder (where its libraries are): every path it gets is absolute
+    outdir, model_arg = os.path.abspath(outdir), os.path.abspath(model_arg)
     os.makedirs(outdir, exist_ok=True)
     seq = os.path.join(outdir, "requests.json")
     with open(seq, "w", encoding="utf-8") as f:
@@ -189,6 +191,7 @@ def main_bench(args):
     results = open(os.path.join(out, "results.jsonl"), "a", encoding="utf-8")
     deadline = time.time() + args.budget_min * 60
     model_arg = model_dir
+    spoke_once = False
     for kind, lang, sex, voice, passage, extra in jobs_for(cand, args.sexes.split(",")):
         if time.time() > deadline:
             print("budget spent: stopping", flush=True)
@@ -219,6 +222,10 @@ def main_bench(args):
             print("retrying with the model file", flush=True)
             model_arg = model_file
             r = run_sequence(args, cand, model_arg, reqs, outdir)
+        if r["exit"] != 0 and not any(s["audio_s"] for s in r["sentences"]) and not spoke_once:
+            print(r["log_tail"], flush=True)
+            sys.exit(f"{args.candidate}: the first passage gave no sound")
+        spoke_once = spoke_once or any(s["audio_s"] for s in r["sentences"])
         r.update({"candidate": args.candidate, "kind": kind, "lang": lang, "sex": sex, "voice": vlabel, "passage": pid,
                   "texts": [q["text"] for q in reqs], "langs": [q.get("language", "") for q in reqs]})
         results.write(json.dumps(r, ensure_ascii=False) + "\n")

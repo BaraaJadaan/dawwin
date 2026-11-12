@@ -69,8 +69,11 @@ fn match_at(text: &[char], i: usize, written: &[char]) -> Option<usize> {
 fn sentences(text: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
-    for (i, c) in text.char_indices() {
-        if matches!(c, '.' | '!' | '?' | '؟' | '\n' | '؛') {
+    let mut chars = text.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        // a full stop inside "1.8" ends nothing
+        let next_is_space = chars.peek().map_or(true, |(_, n)| n.is_whitespace());
+        if matches!(c, '\n' | '؛') || (matches!(c, '.' | '!' | '?' | '؟') && next_is_space) {
             let end = i + c.len_utf8();
             out.push(&text[start..end]);
             start = end;

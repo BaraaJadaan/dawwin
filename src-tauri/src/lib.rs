@@ -9,6 +9,8 @@ pub mod i18n;
 mod instance;
 mod models;
 mod queue;
+mod screen;
+mod selection;
 mod setup;
 mod tools;
 mod transcript;
@@ -673,8 +675,15 @@ pub fn run() {
             }
             let core = Core::start(app.handle().clone())?;
             app.manage(core);
+            // read anything on the screen: the shortcut and the notification area. Started by
+            // Windows with the shortcut on, Dawwin waits there without its window.
+            screen::app::start(app.handle());
+            if !screen::app::start_hidden(app.handle()) {
+                screen::app::show_main(app.handle());
+            }
             Ok(())
         })
+        .on_window_event(screen::app::on_window_event)
         .invoke_handler(tauri::generate_handler![
             get_state,
             refresh_setup,
@@ -729,6 +738,16 @@ pub fn run() {
             reveal,
             open_log,
             media_formats,
+            screen::app::screen_state,
+            screen::app::screen_set_on,
+            screen::app::screen_set_shortcut,
+            screen::app::screen_set_copy,
+            screen::app::screen_set_start_with_windows,
+            screen::app::screen_set_say,
+            screen::app::player_action,
+            screen::app::screen_open_file,
+            screen::app::screen_install_pdfium,
+            screen::app::screen_read_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

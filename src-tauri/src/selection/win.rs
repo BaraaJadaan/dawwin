@@ -453,6 +453,7 @@ impl Clipboard {
     }
 
     /// Put these formats on the clipboard (tests and the trial), out of clipboard history.
+    #[allow(dead_code)]
     pub fn set(formats: &[(u32, Vec<u8>)]) -> bool {
         let owner = Owner::new();
         let c = Clipboard { formats: formats.iter().map(|(f, b)| (*f, Data::Bytes(b.clone()))).collect(), sequence: 0 };
@@ -464,6 +465,7 @@ impl Clipboard {
 
     /// The formats Windows makes up from others (text in other code pages, bitmaps from DIBs),
     /// and the history marks, left out when two clipboards are compared.
+    #[allow(dead_code)]
     pub fn essentials(&self) -> Vec<(u32, Data)> {
         let marks = ["CanIncludeInClipboardHistory", "CanUploadToCloudClipboard", "ExcludeClipboardContentFromMonitorProcessing"].map(format_id);
         self.formats.iter().filter(|(f, _)| ![1, 7, 16, 17].contains(f) && !marks.contains(f)).cloned().collect()

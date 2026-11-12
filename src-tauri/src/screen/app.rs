@@ -340,3 +340,43 @@ pub fn player_action(app: AppHandle, action: String) {
         _ => {}
     }
 }
+
+// ---- the files of 1.8.0 in Read aloud ----
+
+/// A PDF, an e-book or a picture of text, as its pages or chapters. Refused with a reason the
+/// interface acts on (PDFium to download, a Windows language to add).
+#[tauri::command]
+pub async fn screen_open_file(app: AppHandle, path: String) -> Result<super::files::Opened, super::files::Refused> {
+    let paths = app.state::<Arc<Core>>().paths.clone();
+    tauri::async_runtime::spawn_blocking(move || super::files::open(&paths, std::path::Path::new(&path)))
+        .await
+        .map_err(|e| super::files::Refused::Failed { message: e.to_string() })?
+}
+
+/// Download PDFium (about 4 MB), with "pdfium-progress" events of the bytes so far.
+#[tauri::command]
+pub async fn screen_install_pdfium(app: AppHandle) -> Result<(), String> {
+    let paths = app.state::<Arc<Core>>().paths.clone();
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let stop = std::sync::atomic::AtomicBool::new(false);
+        super::files::install_pdfium(&paths, &stop, &mut |e| {
+            if let crate::models::Event::Progress { done } = e {
+                let _ = handle.emit("pdfium-progress", (done, super::files::PDFIUM_SIZE));
+            }
+        })
+        .map(|_| ())
+        .map_err(|e| format!("{e:#}"))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Read a text aloud: a file's, from Read aloud. Its place may be kept; a selection's never is.
+#[tauri::command]
+pub fn screen_read_text(app: AppHandle, text: String, path: Option<String>) -> Result<(), String> {
+    let s = settings(&app);
+    let text = super::say::apply(&text, &s.say);
+    let origin = path.map_or(super::Origin::Selection, |p| super::Origin::File(p.into()));
+    app.state::<Screen>().reader.read(text, origin).map_err(|e| format!("{e:#}"))
+}

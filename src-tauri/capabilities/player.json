@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "player",
+  "description": "The small player of read anything on the screen (1.8.0)",
+  "windows": ["player"],
+  "permissions": ["core:default"]
+}

@@ -240,6 +240,9 @@ pub struct Settings {
     /// What transcribing a folder writes next to each recording; unset means text only
     #[serde(default)]
     pub folder_formats: Option<Vec<String>>,
+    /// Read anything on the screen (1.8.0): the shortcut, Start with Windows, say it like this
+    #[serde(default)]
+    pub screen: crate::screen::Settings,
 }
 
 impl Settings {

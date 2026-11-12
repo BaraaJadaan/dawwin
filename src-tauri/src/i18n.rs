@@ -20,7 +20,7 @@ pub fn lang() -> &'static str {
 /// filled from `args`, in order.
 pub fn tr(en: &str, args: &[String]) -> String {
     let template = match lang() {
-        "ar" => AR.iter().find(|(e, _)| *e == en).map(|(_, a)| *a).unwrap_or(en),
+        "ar" => AR.iter().chain(crate::screen::AR).find(|(e, _)| *e == en).map(|(_, a)| *a).unwrap_or(en),
         _ => en,
     };
     let mut out = String::with_capacity(template.len() + 16);

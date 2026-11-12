@@ -5,6 +5,7 @@
 //!
 //!   trial-pdf <folder with the PDFs and expected.json> <folder with pdfium.dll>
 
+#[path = "../../../../src-tauri/src/screen/layout.rs"]
 mod layout;
 
 use std::path::{Path, PathBuf};

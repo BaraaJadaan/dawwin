@@ -17,15 +17,16 @@ maintainer's PC. No InDesign or LibreOffice file was tried: neither program is h
 
 Errors are character errors against the text the PDF was made from, white space ignored (lines
 break differently), in per cent; "letters only" leaves the diacritics out. "Positions" is PDFium's
-characters put in order by where they sit on the page (`src/layout.rs`), with PDFium's own word
-spaces.
+characters put in order by where they sit on the page (the app's `src-tauri/src/screen/layout.rs`):
+rows by height, cut into lines at gaps wider than a word space, each line from visual into reading
+order, with PDFium's own word spaces.
 
 | PDF | PDFium as it comes | PDFium, positions | pdf_oxide 0.3.78 |
 | --- | --- | --- | --- |
-| Chrome, print to PDF | 40.2 % (letters only 40.0 %) | **5.5 % (5.2 %)** | 67.3 % (64.9 %) |
-| Word, Save as PDF, with a table | 38.1 % (35.3 %) | **22.5 % (22.0 %)** | 70.4 % (69.0 %) |
-| Old file in visual order, presentation forms | 8.3 % (5.2 %) | **7.8 % (4.7 %)** | 71.6 % (70.9 %) |
-| Logical order, letters not joined (looks wrong on screen too) | 69.6 % | 69.8 % | 77.1 % |
+| Chrome, print to PDF | 40.2 % (letters only 40.0 %) | **1.5 % (1.0 %)** | 67.3 % (64.9 %) |
+| Word, Save as PDF, with a table | 38.1 % (35.3 %) | **12.9 % (12.4 %)** | 70.4 % (69.0 %) |
+| Old file in visual order, presentation forms | 8.3 % (5.2 %) | **6.8 % (3.6 %)** | 71.6 % (70.9 %) |
+| Logical order, letters not joined (looks wrong on screen too) | 69.6 % | 69.1 % | 77.1 % |
 | Scan (a picture only) | no text | no text | no text |
 
 The scan, drawn at 2000 pixels wide and read by Windows' own OCR (`Windows.Media.Ocr`, Arabic):
@@ -45,11 +46,13 @@ gives nonsense for the Arabic (74 %): the language must be chosen per picture.
   release yet.)
 - **PDFium's own order is not enough.** Chrome writes some words' glyphs in drawing order, and
   PDFium gives them back reversed ("ةبرجت" for "تجربة"). Ordering each line's characters by their
-  place on the page and then from visual into reading order fixes that (40 % to 5 %) and halves the
-  damage in Word's file. What stays wrong in Word's file is in the file itself: its character map
-  says "عىل" for "على" and "واإلنجليزية" for "والإنجليزية", which Acrobat copies the same way.
-  So the app uses PDFium with the position ordering of `src/layout.rs`.
+  place on the page and then from visual into reading order fixes that (40 % to 1.5 %) and cuts
+  Word's file from 38 % to 13 %. Most of what stays wrong in Word's file is in the file itself: its
+  character map says "عىل" for "على" and "واإلنجليزية" for "والإنجليزية" (not checked against
+  Acrobat, which is not on this PC).
+  So the app uses PDFium with the position ordering of `layout.rs`.
 - **Ligatures kept as one** (`Rules::ligatures`) helps the visual-order file and hurts Word's: off.
+  Rows grouped tightly by height (`Rules::tight_lines`) split lines of Chrome's file: off.
 - **A scan** needs its words turned round per line after OCR (`ocr::logical`): Windows' OCR gives an
   Arabic line's words from left to right. PDFium draws the page slightly better than Windows' own
   renderer for OCR; since the app has PDFium anyway, it draws with PDFium.

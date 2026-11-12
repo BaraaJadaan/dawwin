@@ -62,13 +62,19 @@ impl Cluster {
     }
 }
 
-/// Which of the rules are used (the trial compares them).
+/// Which of the rules are used. `CHOSEN` is what the app uses; the trial (tools/trials/pdf)
+/// compares the others.
 #[derive(Clone, Copy, Debug)]
 pub struct Rules {
     pub ligatures: bool,
     pub tight_lines: bool,
     pub pdfium_spaces: bool,
     pub gap_spaces: bool,
+}
+
+impl Rules {
+    /// Best on the trial's PDFs: PDFium's own word spaces, lines by height, ligatures not kept whole.
+    pub const CHOSEN: Rules = Rules { ligatures: false, tight_lines: false, pdfium_spaces: true, gap_spaces: false };
 }
 
 pub fn text(glyphs: &[Glyph], r: Rules) -> String {
@@ -92,20 +98,40 @@ pub fn text(glyphs: &[Glyph], r: Rules) -> String {
         }
         clusters.push(Cluster { chars: vec![g.ch], marks: vec![], left: g.left, right: g.right, bottom: g.bottom, top: g.top, first: i, last: i, space_before: g.space_before });
     }
-    // lines: a cluster joins a line whose middle is at its own height, near it across the page
-    let mut lines: Vec<Vec<Cluster>> = Vec::new();
+    // rows: a cluster joins the row whose first cluster is at its own height
+    let mut rows: Vec<Vec<Cluster>> = Vec::new();
     for c in clusters {
-        let line = lines.iter_mut().rev().find(|l| {
+        let row = rows.iter_mut().rev().find(|l| {
             let m = &l[0];
-            let (left, right) = l.iter().fold((f64::MAX, f64::MIN), |(a, b), x| (a.min(x.left), b.max(x.right)));
-            let height = if r.tight_lines { (c.cy() - m.cy()).abs() < 0.35 * m.h() } else { c.cy() >= m.bottom - 0.15 * m.h() && c.cy() <= m.top + 0.15 * m.h() };
-            height && c.left <= right + 3.0 * c.h() && c.right >= left - 3.0 * c.h()
+            if r.tight_lines {
+                (c.cy() - m.cy()).abs() < 0.35 * m.h()
+            } else {
+                c.cy() >= m.bottom - 0.15 * m.h() && c.cy() <= m.top + 0.15 * m.h()
+            }
         });
-        match line {
+        match row {
             Some(l) => l.push(c),
-            None => lines.push(vec![c]),
+            None => rows.push(vec![c]),
         }
     }
+    // lines: a row cut where a gap is wider than a word space can be (columns, a table's cells),
+    // kept in the order the file has them, which is the reading order of columns
+    let mut lines: Vec<Vec<Cluster>> = Vec::new();
+    for mut row in rows {
+        row.sort_by(|a, b| a.cx().total_cmp(&b.cx()));
+        let mut heights: Vec<f64> = row.iter().map(Cluster::h).collect();
+        heights.sort_by(f64::total_cmp);
+        let size = heights[heights.len() / 2];
+        let mut current: Vec<Cluster> = Vec::new();
+        for c in row {
+            if current.last().is_some_and(|p: &Cluster| c.left - p.right > 1.5 * size) {
+                lines.push(std::mem::take(&mut current));
+            }
+            current.push(c);
+        }
+        lines.push(current);
+    }
+    lines.sort_by_key(|l| l.iter().map(|c| c.first).min().unwrap_or(0));
     // each diacritic on the nearest letter at its height
     for (_, m) in marks {
         let (mx, my) = ((m.left + m.right) / 2.0, (m.bottom + m.top) / 2.0);
@@ -157,7 +183,9 @@ fn line_text(mut l: Vec<Cluster>, r: Rules) -> String {
             // neighbours on the page that were neighbours in the text, with a space between there
             let (x, y) = if p.last < c.first { (p, c) } else { (c, p) };
             let found = y.space_before && (y.first == x.last + 1 || y.first == x.last + 2);
-            if (r.pdfium_spaces && found) || (r.gap_spaces && c.left - p.right > 0.1 * size) || c.left - p.right > 0.3 * size {
+            let gap = c.left - p.right;
+            let script_changes = is_rtl(c.lead()) != is_rtl(p.lead()) && (c.lead().is_alphanumeric() && p.lead().is_alphanumeric());
+            if (r.pdfium_spaces && found) || (r.gap_spaces && gap > 0.1 * size) || (script_changes && gap > 0.08 * size) || gap > 0.3 * size {
                 visual.push(Piece::Space);
             }
         }
@@ -247,5 +275,51 @@ fn mirror(c: char) -> char {
         '«' => '»',
         '»' => '«',
         c => c,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Glyphs of one line laid out as a PDF draws them: left to right on the page, 10 units each.
+    fn drawn(visual: &str, y: f64, spaces_at: &[usize]) -> Vec<Glyph> {
+        visual
+            .chars()
+            .enumerate()
+            .filter(|(_, c)| *c != ' ')
+            .map(|(i, ch)| Glyph { ch, left: i as f64 * 10.0, right: i as f64 * 10.0 + 10.0, bottom: y, top: y + 12.0, space_before: spaces_at.contains(&i) })
+            .collect()
+    }
+
+    #[test]
+    fn a_right_to_left_line_drawn_left_to_right_comes_back_in_reading_order() {
+        // "النسخة الجديدة Dawwin 1.8" on the page: the Arabic at the right, the rest at the left
+        let g = drawn("Dawwin 1.8 ةديدجلا ةخسنلا", 0.0, &[]);
+        assert_eq!(text(&g, Rules::CHOSEN), "النسخة الجديدة Dawwin 1.8");
+    }
+
+    #[test]
+    fn glyphs_in_any_order_in_the_file_sit_where_they_are_drawn() {
+        let mut g = drawn("ملاعلا ابحرم", 0.0, &[]);
+        g.reverse();
+        g.swap(0, 3);
+        assert_eq!(text(&g, Rules::CHOSEN), "مرحبا العالم");
+    }
+
+    #[test]
+    fn lines_by_their_height_and_diacritics_on_their_letter() {
+        let mut g = drawn("بتك", 100.0, &[]);
+        g.extend(drawn("English", 80.0, &[]));
+        // a fatha above the middle letter, written last in the file
+        g.push(Glyph { ch: '\u{064E}', left: 12.0, right: 18.0, bottom: 109.0, top: 115.0, space_before: false });
+        assert_eq!(text(&g, Rules::CHOSEN), "كتَب\nEnglish");
+    }
+
+    #[test]
+    fn brackets_turn_round_in_right_to_left_text() {
+        // "(نص)" drawn right to left: the opening bracket at the right, drawn as ')'
+        let g = drawn("(صن)", 0.0, &[]);
+        assert_eq!(text(&g, Rules::CHOSEN), "(نص)");
     }
 }

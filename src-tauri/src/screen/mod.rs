@@ -4,7 +4,14 @@
 //! Everything here hands its text to one seam, `Reader` ("this text, read aloud"), which the
 //! reader of 1.7.0 fills. What is read from another program is never stored and never logged.
 
+pub mod app;
 pub mod autostart;
+pub mod epub;
+pub mod files;
+pub mod layout;
+pub mod markup;
+pub mod ocr;
+pub mod pdf;
 pub mod say;
 pub mod shortcut;
 
@@ -245,4 +252,16 @@ pub static AR: &[(&str, &str)] = &[
     ("Quit Dawwin", "أغلق دَوِّن"),
     ("{} is used by another program. Choose other keys.", "يستخدم برنامج آخر {}. اختر مفاتيح أخرى."),
     ("That is not a shortcut Dawwin can use. Use Ctrl, Alt or Win with a letter, a number or F1 to F24.", "هذا ليس اختصارًا يستطيع دَوِّن استخدامه. استخدم Ctrl أو Alt أو Win مع حرف أو رقم أو F1 إلى F24."),
+    // files
+    ("Page {}", "الصفحة {}"),
+    ("Chapter {}", "الفصل {}"),
+    ("This PDF is locked with a password.", "ملف PDF هذا مقفل بكلمة مرور."),
+    ("This PDF is damaged, or is not a PDF.", "ملف PDF هذا تالف، أو ليس ملف PDF."),
+    ("This PDF could not be opened.", "تعذّر فتح ملف PDF هذا."),
+    ("This e-book is damaged, or is not an EPUB.", "هذا الكتاب الإلكتروني تالف، أو ليس ملف EPUB."),
+    ("This e-book has no chapters to read.", "لا فصول في هذا الكتاب الإلكتروني لتُقرأ."),
+    ("Dawwin cannot read this kind of file aloud.", "لا يستطيع دَوِّن قراءة هذا النوع من الملفات بصوت عالٍ."),
+    ("Windows cannot read Arabic in pictures yet. Add Arabic in Windows Settings, Time & language, Language & region, then try again.", "لا يستطيع ويندوز قراءة العربية في الصور بعد. أضف العربية من إعدادات ويندوز، الوقت واللغة، اللغة والمنطقة، ثم حاول مرة أخرى."),
+    ("Windows cannot read English in pictures yet. Add English in Windows Settings, Time & language, Language & region, then try again.", "لا يستطيع ويندوز قراءة الإنجليزية في الصور بعد. أضف الإنجليزية من إعدادات ويندوز، الوقت واللغة، اللغة والمنطقة، ثم حاول مرة أخرى."),
+    ("The picture could not be read: {}", "تعذّرت قراءة الصورة: {}"),
 ];

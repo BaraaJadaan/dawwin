@@ -213,7 +213,7 @@ mod tests {
 
     #[test]
     fn shortcuts_are_read_and_written_the_same_way() {
-        for s in ["Ctrl+Alt+R", "Ctrl+Shift+Space", "Alt+Shift+S", "Ctrl+Alt+F9", "Win+Alt+7", "Ctrl+Alt+Shift+R"] {
+        for s in ["Ctrl+Alt+R", "Ctrl+Shift+Space", "Alt+Shift+S", "Ctrl+Alt+F9", "Alt+Win+7", "Ctrl+Alt+Shift+R"] {
             assert_eq!(Keys::parse(s).unwrap().to_string(), s);
         }
         assert_eq!(Keys::parse(" ctrl + alt + r ").unwrap().to_string(), "Ctrl+Alt+R");

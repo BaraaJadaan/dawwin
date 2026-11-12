@@ -24,6 +24,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
 | `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
+| `src-tauri/src/record/` | Recording a meeting: the microphone and what the PC plays (WASAPI) as two tracks on one clock, a WAV that survives a crash, echo cancellation, and pieces for the engine as the sound arrives. |
+| `src-tauri/src/queue/meeting.rs` | The recording as a job: live text, "me" and "them", the rest after Stop, recovery, the M4A. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
 | `src-tauri/src/instance.rs` | One Dawwin per data folder: started again, it brings the open window forward and quits. |
 | `src-tauri/src/i18n.rs`, `ui/i18n.js` | Messages in English and Arabic. |
@@ -107,6 +109,19 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   that has libass. The **Tools** workflow builds and packs them (`tools/pack.py`), tries them on Windows
   with the app's own unpacking on files of the kinds people bring, runs the app's own sound and video
   tests on them, and, run by hand with a tag, puts them on that release.
+- **Recording a meeting.** "Them" is process loopback in exclude mode on Dawwin's own process tree
+  (everything the PC plays but Dawwin and its WebView2, on whatever device), with loopback of the
+  default output device plus a silent stream as the fallback; "me" is the chosen or default microphone,
+  opened again when it goes or the default changes. Every packet is placed on one timeline by its
+  capture timestamp, holes become silence, and what is older than 400 ms is written: a 16 kHz
+  two-channel WAV (left me, right them) whose header is rewritten every second, with a journal beside
+  it. The microphone goes through WebRTC's echo cancellation (the `sonora` crate) with "them" as the
+  reference: without it the model writes the others' words out again from the speakers, even 20 dB
+  down. Each track is cut as it arrives exactly where `audio::split_points` would cut it (25 s), pieces
+  without speech never reach the model (it invents a line on near-silence), and a "me" line that only
+  says what "them" said at the same time is dropped. More than two minutes behind, live text stops and
+  the rest is transcribed from the file after Stop. Measurements: `tools/record-trial`. Debug builds
+  take made-up tracks instead of the devices (`DAWWIN_TEST_RECORD="me=<file>|them=<file>"`).
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 - **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event
   that brings the first window forward, and quits before it touches the cache, a download or the GPU. Leftover audio in the
@@ -121,7 +136,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | The translator and ffmpeg | `%LOCALAPPDATA%\Dawwin\tools` |
 | Engine and translator logs | `%LOCALAPPDATA%\Dawwin\logs\engine.log`, `translate.log` |
 | Transcripts | `%APPDATA%\Dawwin\history\*.json` |
-| Settings | `%APPDATA%\Dawwin\settings.json` |
+| Settings | `%APPDATA%\Dawwin\settings.json`, and `recording.json` for recording |
+| Recordings of meetings | `Documents\Dawwin` |
 
 ## Adding a language
 

@@ -1613,7 +1613,7 @@ function onState(snap) {
     // the job just finished: reload it from history so it can be edited and played
     if (before && ACTIVE.has(before.status) && j && !ACTIVE.has(j.status)) {
       openTranscript(S.current.id);
-    } else if (j && ACTIVE.has(j.status) && !S.current.duration_s && j.duration_s) {
+    } else if (j && ACTIVE.has(j.status) && (!S.current.duration_s || j.kind === "record") && j.duration_s && Math.floor(j.duration_s) !== Math.floor(S.current.duration_s || 0)) {
       S.current.duration_s = j.duration_s;
       renderMeta();
     }

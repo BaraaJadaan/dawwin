@@ -245,6 +245,9 @@ enum Msg {
     RemoveTool(tools::Tool),
     /// A meeting being recorded, or one found after a crash (see `meeting`)
     Record(String),
+    /// Read aloud wants the GPU for its voice: the engine and the translator, idle, let go of it,
+    /// and say so (one at work keeps it until its job is done)
+    FreeGpu(std::sync::mpsc::Sender<()>),
 }
 
 pub struct Core {
@@ -321,6 +324,14 @@ impl Core {
     /// for says so, rather than wait for ever.
     pub fn app(&self) -> &AppHandle {
         &self.app
+    }
+
+    /// Read aloud is about to load a voice on the GPU: the speech engine and the translator, idle,
+    /// let go of it first. False when one is at work and keeps it (the voice then waits).
+    pub fn free_gpu_for_voice(&self) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.send(Msg::FreeGpu(tx));
+        rx.recv_timeout(Duration::from_secs(15)).is_ok()
     }
 
     fn send(&self, m: Msg) {
@@ -1171,8 +1182,20 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
         };
         last_used = Instant::now();
         // a voice reading aloud on the GPU gives it back first: they take turns, as these two do
-        crate::reading::let_go_of_gpu(&core.app);
+        if !matches!(msg, Msg::FreeGpu(_)) {
+            crate::reading::let_go_of_gpu(&core.app);
+        }
         match msg {
+            Msg::FreeGpu(done) => {
+                if let Some(e) = engine.take() {
+                    e.shutdown();
+                    core.update(|s| s.engine.state = "off".into());
+                }
+                if let Some(t) = translator.take() {
+                    t.shutdown();
+                }
+                let _ = done.send(());
+            }
             Msg::Probe => match ensure_engine(&core, &mut engine, None).and_then(|e| e.probe()) {
                 Ok(v) => {
                     // it found the GPU: no process stays behind for nothing; a job starts one

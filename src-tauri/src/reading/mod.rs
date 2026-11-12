@@ -39,6 +39,8 @@ pub struct Sentence {
     pub text: String,
     pub block: usize,
     pub kind: Kind,
+    /// Who says it, in a transcript whose speakers were told apart
+    pub speaker: Option<u32>,
     #[serde(skip)]
     pub pause: f32,
 }
@@ -56,6 +58,8 @@ pub struct Doc {
     pub title: String,
     pub lang: Lang,
     pub sentences: Vec<Sentence>,
+    /// The people who speak in it, in the order they first speak, with their names
+    pub speakers: Vec<(u32, String)>,
 }
 
 /// Blocks into sentences, each with its pause and its runs of one language.
@@ -75,31 +79,57 @@ pub fn sentences_of(blocks: &[Block]) -> (Lang, Vec<Sentence>) {
                 (_, true) => PAUSE_PARAGRAPH,
                 _ => PAUSE_SENTENCE,
             };
-            out.push(Sentence { text: s, block: bi, kind: b.kind, pause });
+            out.push(Sentence { text: s, block: bi, kind: b.kind, speaker: b.speaker, pause });
         }
     }
     (lang, out)
 }
 
-/// A transcript, or its translation: lines run on into a paragraph until a pause of two seconds.
-pub fn transcript_blocks(t: &crate::transcript::Transcript) -> Vec<Block> {
-    lines_to_blocks(t.segments.iter().map(|s| (s.start, s.end, s.text.as_str())))
+/// A transcript, or its translation: lines run on into a paragraph until a pause of two seconds, or
+/// until someone else speaks; with its speakers' names, in the order they first speak.
+pub fn transcript_blocks(t: &crate::transcript::Transcript) -> (Vec<Block>, Vec<(u32, String)>) {
+    let blocks = lines_to_blocks(t.segments.iter().map(|s| (s.start, s.end, s.text.as_str(), s.speaker)));
+    let mut speakers: Vec<(u32, String)> = Vec::new();
+    for id in blocks.iter().filter_map(|b| b.speaker) {
+        if !speakers.iter().any(|(s, _)| *s == id) {
+            speakers.push((id, t.speaker_name(id)));
+        }
+    }
+    (blocks, speakers)
 }
 
-fn lines_to_blocks<'a>(lines: impl Iterator<Item = (f64, f64, &'a str)>) -> Vec<Block> {
+fn lines_to_blocks<'a>(lines: impl Iterator<Item = (f64, f64, &'a str, Option<u32>)>) -> Vec<Block> {
     let mut out = Vec::new();
     let mut para = String::new();
-    let mut last_end: Option<f64> = None;
-    for (start, end, text) in lines {
-        if last_end.is_some_and(|e| start - e >= 2.0) && !para.trim().is_empty() {
-            out.push(Block { kind: Kind::Paragraph, text: std::mem::take(&mut para).trim().to_string() });
+    let mut last: Option<(f64, Option<u32>)> = None;
+    for (start, end, text, speaker) in lines {
+        if text.trim().is_empty() {
+            continue;
+        }
+        if let Some((e, who)) = last {
+            if (start - e >= 2.0 || who != speaker) && !para.trim().is_empty() {
+                out.push(Block { kind: Kind::Paragraph, text: std::mem::take(&mut para).trim().to_string(), speaker: who });
+            }
         }
         para.push(' ');
         para.push_str(text.trim());
-        last_end = Some(end);
+        last = Some((end, speaker));
     }
     if !para.trim().is_empty() {
-        out.push(Block { kind: Kind::Paragraph, text: para.trim().to_string() });
+        out.push(Block { kind: Kind::Paragraph, text: para.trim().to_string(), speaker: last.and_then(|(_, w)| w) });
+    }
+    out
+}
+
+/// Minutes: each heading, then its points.
+pub fn minutes_blocks(m: &crate::minutes::Minutes) -> Vec<Block> {
+    let mut out = Vec::new();
+    for (k, (heading, points)) in crate::minutes::for_reading(m).into_iter().enumerate() {
+        out.push(Block { kind: Kind::Heading, text: heading.to_string(), speaker: None });
+        for p in points.into_iter().filter(|p| !p.trim().is_empty()) {
+            // the summary is prose; the rest are points
+            out.push(Block { kind: if k == 0 { Kind::Paragraph } else { Kind::Item }, text: p.trim().to_string(), speaker: None });
+        }
     }
     out
 }
@@ -222,17 +252,24 @@ impl Reader {
             .or_else(|| voices::default_voice(&self.paths, lang).and_then(|k| voices::find_voice(&k)))
     }
 
+    /// The voice of a speaker: the first to speak has the voice chosen for the language, the others
+    /// another voice of the same model each, a woman's after a man's and the other way round.
+    fn voice_for_speaker(&self, lang: Lang, rank: usize) -> Option<(voices::VoiceModel, voices::Voice)> {
+        let (m, base) = self.voice_for(lang)?;
+        Some((m, voices::for_speaker(&m, &base, rank)))
+    }
+
     /// What decides how a sentence sounds: a sentence made with other voices is made again.
     fn signature(&self) -> String {
         [Lang::Ar, Lang::En].iter().map(|&l| self.voice_for(l).map_or("-".to_string(), |(m, v)| voices::voice_key(&m, &v))).collect::<Vec<_>>().join("|")
     }
 
-    pub fn open(&self, key: String, title: String, blocks: Vec<Block>) -> Result<Arc<Doc>> {
+    pub fn open(&self, key: String, title: String, blocks: Vec<Block>, speakers: Vec<(u32, String)>) -> Result<Arc<Doc>> {
         let (lang, sentences) = sentences_of(&blocks);
         if sentences.is_empty() {
             return Err(anyhow!(crate::tr!("There is nothing to read in it.")));
         }
-        let doc = Arc::new(Doc { id: short_hash(&key), key, title, lang, sentences });
+        let doc = Arc::new(Doc { id: short_hash(&key), key, title, lang, sentences, speakers });
         self.docs.lock().unwrap().insert(doc.id.clone(), doc.clone());
         Ok(doc)
     }
@@ -401,7 +438,8 @@ impl Reader {
         let mut device = String::new();
         let program_dir = crate::tools::exe(&self.paths, &crate::tools::VOICE).and_then(|e| e.parent().map(Path::to_path_buf)).unwrap_or_default();
         for (k, run) in spoken(&s.text, doc.lang).iter().enumerate() {
-            let (m, v) = self.voice_for(run.lang).ok_or_else(|| anyhow!(crate::tr!("There is no voice for {} yet. Choose one in Settings.", lang_name(run.lang))))?;
+            let rank = s.speaker.and_then(|id| doc.speakers.iter().position(|(w, _)| *w == id)).unwrap_or(0);
+            let (m, v) = self.voice_for_speaker(run.lang, rank).ok_or_else(|| anyhow!(crate::tr!("There is no voice for {} yet. Choose one in Settings.", lang_name(run.lang))))?;
             let gpu = m.gpu && !self.no_gpu.load(Ordering::SeqCst) && crate::setup::Settings::load(&self.paths).run_on() != "cpu";
             // the speech engine and the translator have the GPU while they work: a voice that
             // needs it waits, and says so; one on the processor reads on
@@ -413,6 +451,12 @@ impl Reader {
             }
             let model_dir = voices::dir(&self.paths, &m);
             let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: m.session.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };
+            // an idle speech engine or translator lets go of the GPU before a voice loads there
+            if gpu && !procs.get(m.id).is_some_and(|p| p.on_gpu()) {
+                if let Some(core) = self.app.try_state::<Arc<Core>>() {
+                    core.free_gpu_for_voice();
+                }
+            }
             let p = self.ready_process(procs, m.id, &load)?;
             device = if p.on_gpu() { format!("GPU · {}", p.device) } else { "CPU".into() };
             let out = dir.join(format!("{index}-{k}.wav"));
@@ -472,6 +516,8 @@ pub struct DocView {
     pub lang: Lang,
     pub sentences: Vec<Sentence>,
     pub place: usize,
+    /// The people who speak in it, by id, with their names
+    pub speakers: Vec<(u32, String)>,
 }
 
 #[derive(Serialize)]
@@ -513,7 +559,7 @@ pub struct VoicesView {
 
 impl Reader {
     pub fn view(&self, doc: &Doc) -> DocView {
-        DocView { id: doc.id.clone(), title: doc.title.clone(), lang: doc.lang, sentences: doc.sentences.clone(), place: self.place(doc) }
+        DocView { id: doc.id.clone(), title: doc.title.clone(), lang: doc.lang, sentences: doc.sentences.clone(), place: self.place(doc), speakers: doc.speakers.clone() }
     }
 
     pub fn voices(&self) -> VoicesView {
@@ -672,28 +718,34 @@ fn reader(app: &AppHandle) -> Arc<Reader> {
 }
 
 /// Open something to read: a file (`path`), pasted text (`text`), or a transcript (`transcript`,
-/// with `language` for one of its translations).
+/// with `language` for one of its translations, or `minutes` for its minutes).
 #[tauri::command]
-pub async fn reading_open(app: AppHandle, path: Option<String>, text: Option<String>, transcript: Option<String>, language: Option<String>) -> R<DocView> {
+pub async fn reading_open(app: AppHandle, path: Option<String>, text: Option<String>, transcript: Option<String>, language: Option<String>, minutes: Option<bool>) -> R<DocView> {
     tauri::async_runtime::spawn_blocking(move || {
         let r = reader(&app);
         r.stop();
         let doc = if let Some(p) = path {
             let read = formats::read_path(Path::new(&p)).map_err(|e| format!("{e:#}"))?;
-            r.open(format!("file:{}", p.to_lowercase()), read.title, read.blocks)
+            r.open(format!("file:{}", p.to_lowercase()), read.title, read.blocks, Vec::new())
         } else if let Some(t) = text {
             let title = title_of(&t);
             // text copied from a chat or a page is often Markdown
             let blocks = if formats::looks_like_markdown(&t) { formats::from_markdown(&t) } else { formats::from_text(&t) };
-            r.open(format!("text:{}", short_hash(&t)), title, blocks)
+            r.open(format!("text:{}", short_hash(&t)), title, blocks, Vec::new())
         } else if let Some(id) = transcript {
             let core = app.state::<Arc<Core>>();
             let t = core.transcript(&id).map_err(|e| format!("{e:#}"))?;
-            let shown = match language.as_deref().filter(|l| !l.is_empty()) {
-                Some(l) => t.translated(l).ok_or_else(|| crate::tr!("That translation is not there."))?,
-                None => t.clone(),
-            };
-            r.open(format!("transcript:{id}:{}", language.unwrap_or_default()), t.title.clone(), transcript_blocks(&shown))
+            if minutes == Some(true) {
+                let m = t.minutes.as_ref().filter(|m| m.written()).ok_or_else(|| crate::tr!("This transcript has no minutes yet."))?;
+                r.open(format!("minutes:{id}:{}", m.written_ms), t.title.clone(), minutes_blocks(m), Vec::new())
+            } else {
+                let shown = match language.as_deref().filter(|l| !l.is_empty()) {
+                    Some(l) => t.translated(l).ok_or_else(|| crate::tr!("That translation is not there."))?,
+                    None => t.clone(),
+                };
+                let (blocks, speakers) = transcript_blocks(&shown);
+                r.open(format!("transcript:{id}:{}", language.unwrap_or_default()), t.title.clone(), blocks, speakers)
+            }
         } else {
             Err(anyhow!("nothing to open"))
         }
@@ -774,9 +826,9 @@ mod tests {
     #[test]
     fn blocks_become_sentences_with_pauses_and_voices_by_language() {
         let blocks = vec![
-            Block { kind: Kind::Heading, text: "عادة القراءة اليومية في البيت وفي العمل".into() },
-            Block { kind: Kind::Paragraph, text: "قال المدير: we will ship it next week, no matter what. ارتفعت الأسعار 15%.".into() },
-            Block { kind: Kind::Item, text: "The end".into() },
+            Block { kind: Kind::Heading, text: "عادة القراءة اليومية في البيت وفي العمل".into(), speaker: None },
+            Block { kind: Kind::Paragraph, text: "قال المدير: we will ship it next week, no matter what. ارتفعت الأسعار 15%.".into(), speaker: None },
+            Block { kind: Kind::Item, text: "The end".into(), speaker: None },
         ];
         let (lang, s) = sentences_of(&blocks);
         assert_eq!(lang, Lang::Ar);
@@ -853,6 +905,28 @@ mod tests {
     }
 
     #[test]
+    fn minutes_are_read_heading_by_heading_without_their_times() {
+        use crate::minutes::{Action, Minutes, Point};
+        let m = Minutes {
+            language: "en".into(),
+            kind: "meeting".into(),
+            written_ms: 1,
+            summary: "We planned the release.".into(),
+            decisions: vec![Point { text: "Ship on Thursday.".into(), time: Some(65.0), ..Default::default() }],
+            actions: vec![Action { who: "Sara".into(), what: "Write the notes".into(), due: "Friday".into(), time: Some(80.0), ..Default::default() }],
+            ..Default::default()
+        };
+        let b = minutes_blocks(&m);
+        let (_, s) = sentences_of(&b);
+        let texts: Vec<&str> = s.iter().map(|x| x.text.as_str()).collect();
+        assert_eq!(b[0].kind, Kind::Heading);
+        assert!(texts.contains(&"We planned the release.") && texts.contains(&"Ship on Thursday."), "{texts:?}");
+        assert!(texts.iter().any(|t| t.contains("Sara") && t.contains("Write the notes") && t.contains("Friday")), "{texts:?}");
+        assert!(!texts.iter().any(|t| t.contains("01:05") || t.contains("1:05")), "no times: {texts:?}");
+        assert_eq!(b.iter().filter(|x| x.kind == Kind::Heading).count(), 3);
+    }
+
+    #[test]
     fn pasted_text_is_named_by_its_first_sentence() {
         assert_eq!(title_of("
   رفعنا النسخة على GitHub أمس. وفي نهاية الاجتماع قال المدير"), "رفعنا النسخة على GitHub أمس.");
@@ -865,7 +939,10 @@ Text."), "Working from home");
 
     #[test]
     fn a_transcript_runs_on_until_a_long_pause() {
-        let b = lines_to_blocks([(0.0, 2.0, "Hello there,"), (2.2, 4.0, "my friend."), (7.0, 8.0, "Later.")].into_iter());
+        let b = lines_to_blocks([(0.0, 2.0, "Hello there,", None), (2.2, 4.0, "my friend.", None), (7.0, 8.0, "Later.", None)].into_iter());
         assert_eq!(b.iter().map(|b| b.text.as_str()).collect::<Vec<_>>(), vec!["Hello there, my friend.", "Later."]);
+        // someone else speaking starts a paragraph of their own, at once
+        let b = lines_to_blocks([(0.0, 2.0, "Hello,", Some(1)), (2.1, 4.0, "and welcome.", Some(1)), (4.1, 5.0, "Thanks.", Some(2)), (5.1, 6.0, "Shall we?", Some(1))].into_iter());
+        assert_eq!(b.iter().map(|b| (b.text.as_str(), b.speaker)).collect::<Vec<_>>(), vec![("Hello, and welcome.", Some(1)), ("Thanks.", Some(2)), ("Shall we?", Some(1))]);
     }
 }

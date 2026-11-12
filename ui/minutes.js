@@ -277,6 +277,8 @@ function minutesBar(m, running) {
   lang.onchange = () => { Minutes.language = lang.value; };
   lang.disabled = !!running;
   bar.append(write, lang);
+  // the minutes read aloud (reader.js)
+  if (m && !running && typeof readListenButton === "function") bar.append(readListenButton({ transcript: cur.id, minutes: true }, t("read.listenMinutesTip")));
 
   if (m) {
     const wrap = document.createElement("div");

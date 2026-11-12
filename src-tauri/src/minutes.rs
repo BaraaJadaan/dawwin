@@ -765,6 +765,24 @@ fn sections(m: &Minutes) -> Vec<(&'static str, Vec<String>)> {
     out
 }
 
+/// The minutes as they are read aloud: each heading with its points, without the times.
+pub fn for_reading(m: &Minutes) -> Vec<(&'static str, Vec<String>)> {
+    let w = words(&m.language);
+    let mut out = vec![(w.summary, vec![m.summary.clone()])];
+    let or_none = |v: Vec<String>| if v.is_empty() { vec![w.none.to_string()] } else { v };
+    if m.kind == "meeting" {
+        out.push((w.decisions, or_none(m.decisions.iter().map(|d| d.text.clone()).collect())));
+        out.push((w.actions, or_none(m.actions.iter().map(|a| action_line(a, &w)).collect())));
+    }
+    if !m.topics.is_empty() {
+        out.push((w.topics, m.topics.iter().map(|t| t.title.clone()).collect()));
+    }
+    if !m.open_questions.is_empty() {
+        out.push((w.questions, m.open_questions.iter().map(|q| q.text.clone()).collect()));
+    }
+    out
+}
+
 /// The minutes alone, or followed by the transcript, as text, Markdown or Word.
 pub fn export(t: &Transcript, m: &Minutes, ext: &str, with_transcript: bool) -> Result<Vec<u8>> {
     let w = words(&m.language);

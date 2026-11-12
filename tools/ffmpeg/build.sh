@@ -103,7 +103,7 @@ cd "$WORK/src/ffmpeg-$FFMPEG"
   --disable-everything --disable-autodetect --disable-network --disable-doc --disable-debug \
   --disable-ffplay --disable-ffprobe --disable-avdevice --enable-small \
   --enable-protocol=file,pipe,fd \
-  --enable-demuxer=mov,matroska,ogg,mp3,aac,ac3,eac3,dts,dtshd,truehd,wav,w64,flac,amr,asf,avi,flv,mpegts,mpegps,aiff,caf,srt,webvtt,ass,f32le \
+  --enable-demuxer=mov,matroska,ogg,mp3,aac,ac3,eac3,dts,dtshd,truehd,wav,w64,flac,amr,asf,avi,flv,mpegts,mpegps,aiff,caf,srt,webvtt,ass,pcm_f32le \
   --enable-decoder=aac,aac_latm,ac3,eac3,dca,truehd,mlp,mp1,mp2,mp3,mp3float,opus,vorbis,flac,alac,amrnb,amrwb,wmav1,wmav2,wmapro \
   --enable-decoder=pcm_s16le,pcm_s16be,pcm_s24le,pcm_s32le,pcm_f32le,pcm_f64le,pcm_u8,pcm_alaw,pcm_mulaw,adpcm_ima_wav,adpcm_ms,gsm_ms \
   --enable-decoder=srt,subrip,webvtt,movtext,ass,ssa \

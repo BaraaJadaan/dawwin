@@ -58,18 +58,15 @@ Object.assign(I18N.en.s, {
   "set.minutes": "Minutes",
   "guide.minutesTitle": "Write the minutes",
   "guide.minutesText": "On a transcript's Minutes tab, Write the minutes gives a short summary, the decisions, who does what by when, the topics with their times and the questions left open, in the language of the meeting or in another. Press a time to see the lines it came from, and click any line to correct it. A long meeting is written in parts, and a run you stop carries on where it stopped. The first time, download a minutes model: it runs on this computer like everything else.",
-  "model.min-gemma4-12b.name": "Gemma 4 12B",
-  "model.min-gemma4-12b.long": "Gemma 4 12B",
-  "model.min-gemma4-12b.detail": "Google's Gemma 4, the largest that was measured. The best minutes, slower.",
-  "model.min-qwen35-9b.name": "Qwen3.5 9B",
-  "model.min-qwen35-9b.long": "Qwen3.5 9B",
-  "model.min-qwen35-9b.detail": "Alibaba's Qwen3.5. Fits a graphics card with 8 GB.",
-  "model.min-qwen35-4b.name": "Qwen3.5 4B",
-  "model.min-qwen35-4b.long": "Qwen3.5 4B",
-  "model.min-qwen35-4b.detail": "Nearly as good at half the size.",
-  "model.min-qwen35-2b.name": "Qwen3.5 2B",
-  "model.min-qwen35-2b.long": "Qwen3.5 2B",
-  "model.min-qwen35-2b.detail": "The smallest that still gets the decisions and actions right. For computers without a graphics card.",
+  "model.min-jais3-7b.name": "Jais-3 7B",
+  "model.min-jais3-7b.long": "Jais-3 7B",
+  "model.min-jais3-7b.detail": "Made for Arabic and English. The best minutes in our test, and it fits a graphics card with 8 GB.",
+  "model.min-ministral3-3b.name": "Ministral 3 3B",
+  "model.min-ministral3-3b.long": "Ministral 3 3B",
+  "model.min-ministral3-3b.detail": "Mistral AI's. Good minutes at under half the size.",
+  "model.min-jais3-0.9b.name": "Jais-3 0.9B",
+  "model.min-jais3-0.9b.long": "Jais-3 0.9B",
+  "model.min-jais3-0.9b.detail": "The smallest that is still usable. For older computers.",
   "tool.translator.long": "Translation and minutes tool",
   "tool.translator.detail": "llama.cpp, which runs the translation and minutes models. It comes with the first one.",
 });
@@ -127,18 +124,15 @@ Object.assign(I18N.ar.s, {
   "set.minutes": "المحاضر",
   "guide.minutesTitle": "اكتب المحضر",
   "guide.minutesText": "في تبويب «المحضر» من أي تفريغ، يكتب زر «اكتب المحضر» ملخّصًا قصيرًا، والقرارات، ومن يفعل ماذا ومتى، والمواضيع بأوقاتها، والأسئلة التي بقيت بلا جواب، بلغة الاجتماع أو بلغة أخرى. اضغط على الوقت لترى الأسطر التي جاء منها، وانقر على أي سطر لتصحيحه. الاجتماع الطويل يُكتب على أجزاء، وإذا أوقفته أكمل من حيث توقّف. في المرة الأولى نزّل نموذج محاضر، وهو يعمل على هذا الحاسوب كغيره.",
-  "model.min-gemma4-12b.name": "Gemma 4 12B",
-  "model.min-gemma4-12b.long": "Gemma 4 12B",
-  "model.min-gemma4-12b.detail": "أكبر ما قيس، من Google. أفضل المحاضر، وأبطأ.",
-  "model.min-qwen35-9b.name": "Qwen3.5 9B",
-  "model.min-qwen35-9b.long": "Qwen3.5 9B",
-  "model.min-qwen35-9b.detail": "من Alibaba. يناسب بطاقة رسوم بذاكرة 8 غيغابايت.",
-  "model.min-qwen35-4b.name": "Qwen3.5 4B",
-  "model.min-qwen35-4b.long": "Qwen3.5 4B",
-  "model.min-qwen35-4b.detail": "يقارب الأكبر جودةً بنصف الحجم.",
-  "model.min-qwen35-2b.name": "Qwen3.5 2B",
-  "model.min-qwen35-2b.long": "Qwen3.5 2B",
-  "model.min-qwen35-2b.detail": "الأصغر الذي يصيب القرارات والمهام. للحواسيب بلا بطاقة رسوم.",
+  "model.min-jais3-7b.name": "Jais-3 7B",
+  "model.min-jais3-7b.long": "Jais-3 7B",
+  "model.min-jais3-7b.detail": "مصمَّم للعربية والإنجليزية. أفضل المحاضر في اختبارنا، ويناسب بطاقة رسوم بذاكرة 8 غيغابايت.",
+  "model.min-ministral3-3b.name": "Ministral 3 3B",
+  "model.min-ministral3-3b.long": "Ministral 3 3B",
+  "model.min-ministral3-3b.detail": "من Mistral AI. محاضر جيدة بأقل من نصف الحجم.",
+  "model.min-jais3-0.9b.name": "Jais-3 0.9B",
+  "model.min-jais3-0.9b.long": "Jais-3 0.9B",
+  "model.min-jais3-0.9b.detail": "الأصغر الذي يبقى صالحًا للاستعمال. للحواسيب القديمة.",
   "tool.translator.long": "أداة الترجمة والمحاضر",
   "tool.translator.detail": "‏llama.cpp، الذي يشغّل نماذج الترجمة والمحاضر. يأتي مع أول نموذج منها.",
 });
@@ -171,8 +165,10 @@ function minutesSpec(id) {
 /** Whether a minutes model fits this computer: on its GPU, on its processor, or not at all. */
 function minutesFit(m) {
   const spec = minutesSpec(m.id);
-  if (!spec) return "";
-  const vram = (S.snap?.engine.vram_total_gb || 0) * 1e9, ram = Minutes.info?.memory || 0;
+  // until the speech engine has looked for a GPU, nothing is said
+  if (!spec || !S.snap?.engine.device) return "";
+  // the engine counts the GPU's memory in GiB
+  const vram = (S.snap.engine.vram_total_gb || 0) * 2 ** 30, ram = Minutes.info?.memory || 0;
   if (vram && spec.needs <= vram * 0.92) return "gpu";
   if (!ram || spec.needs <= ram * 0.6) return "cpu";
   return "big";
@@ -584,7 +580,14 @@ async function exportMinutes(fmt) {
       const box = $("minutes").querySelector(".minutes-progress");
       if (box) box.replaceWith(minutesProgress(now));
       else renderMinutes();
-    } else if (prev?.setup.download.active || snap.setup.download.active || !!prev?.setup.families.minutes?.found !== !!snap.setup.families.minutes?.found) renderMinutes();
+    } else if (
+      prev?.setup.download.active ||
+      snap.setup.download.active ||
+      !!prev?.setup.families.minutes?.found !== !!snap.setup.families.minutes?.found ||
+      // the GPU found: the offer says what fits
+      (!snap.setup.families.minutes?.found && (prev?.engine.device !== snap.engine.device || prev?.engine.vram_total_gb !== snap.engine.vram_total_gb))
+    )
+      renderMinutes();
   };
 }
 

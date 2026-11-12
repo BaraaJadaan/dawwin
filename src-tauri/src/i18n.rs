@@ -20,7 +20,7 @@ pub fn lang() -> &'static str {
 /// filled from `args`, in order.
 pub fn tr(en: &str, args: &[String]) -> String {
     let template = match lang() {
-        "ar" => AR.iter().chain(crate::screen::AR).find(|(e, _)| *e == en).map(|(_, a)| *a).unwrap_or(en),
+        "ar" => AR.iter().chain(crate::record::AR).chain(crate::screen::AR).find(|(e, _)| *e == en).map(|(_, a)| *a).unwrap_or(en),
         _ => en,
     };
     let mut out = String::with_capacity(template.len() + 16);
@@ -54,7 +54,33 @@ static AR: &[(&str, &str)] = &[
     ("Dawwin cannot use that model. It works with Cohere Transcribe, Canary and Whisper model files.", "لا يستطيع دَوِّن استخدام ذلك النموذج. فهو يعمل مع ملفات نماذج Cohere Transcribe وCanary وWhisper."),
     ("The download arrived damaged, so it was removed. Please start it again.", "وصل التنزيل تالفًا فحُذف. ابدأه من جديد من فضلك."),
     ("The server refused the download (error {}).", "رفض الخادم التنزيل (الخطأ {})."),
+    ("The server is busy (error {}).", "الخادم مشغول (الخطأ {})."),
+    ("The proxy asks for a sign-in, which Dawwin cannot give it. Ask whoever looks after the network, or download the file by hand.", "الوكيل (proxy) يطلب تسجيل الدخول، ولا يستطيع دَوِّن ذلك. اسأل المسؤول عن الشبكة، أو نزّل الملف يدويًا."),
+    ("The proxy {} does not answer.", "الوكيل (proxy) {} لا يستجيب."),
+    ("No connection to the internet: the server's name could not be looked up.", "لا يوجد اتصال بالإنترنت: تعذّر العثور على اسم الخادم."),
+    ("The server could not be reached: the network may be blocking it.", "تعذّر الوصول إلى الخادم: ربما تحجبه الشبكة."),
+    ("The connection stopped answering.", "توقف الاتصال عن الاستجابة."),
+    ("The model did not load in {} minutes: the graphics driver may be stuck.", "لم يُحمَّل النموذج خلال {} دقائق: ربما علق برنامج تشغيل الرسوميات."),
+    ("Something went wrong in Dawwin while it worked on this: {}", "حدث خطأ في دَوِّن أثناء العمل على هذا: {}"),
+    ("Dawwin's queue has stopped. Please start Dawwin again.", "توقفت قائمة المهام في دَوِّن. أعد تشغيل دَوِّن من فضلك."),
+    ("Where should Dawwin save its files?", "أين يحفظ دَوِّن ملفاته؟"),
+    ("Another program keeps taking the translator's place. Close it and try again.", "برنامج آخر يأخذ مكان المترجم كل مرة. أغلقه وحاول من جديد."),
     ("Not enough free space: the model needs {} GB more, and {} GB is free. Choose another folder or free some space.", "لا توجد مساحة كافية: يحتاج النموذج {} غيغابايت إضافية والمتاح {} غيغابايت. اختر مجلدًا آخر أو أفرغ بعض المساحة."),
+    // speakers, the language heard, words and names (1.4)
+    ("Speaker {}", "المتحدث {}"),
+    ("Dawwin is finding the speakers of this transcript. Edit it when that is done.", "يبحث دَوِّن عن متحدثي هذا النص. عدّله حين ينتهي."),
+    ("This transcript changed meanwhile. It is shown again as it is now.", "تغيّر هذا النص في الأثناء. يُعرض من جديد كما هو الآن."),
+    ("This transcript is still being written. Find its speakers when it is done.", "هذا النص ما زال قيد الكتابة. ابحث عن متحدثيه حين ينتهي."),
+    ("Telling speakers apart needs its model. Download it in Settings.", "يحتاج التمييز بين المتحدثين إلى نموذجه. نزّله من الإعدادات."),
+    ("Transcribed, but the speakers could not be told apart: {}", "فُرّغ التسجيل، لكن تعذّر التمييز بين المتحدثين: {}"),
+    ("Detecting the language needs its model. Download it in Settings.", "يحتاج التعرّف على اللغة إلى نموذجه. نزّله من الإعدادات."),
+    ("This recording is in {}, and there is no model for it yet. Download one in Settings.", "هذا التسجيل باللغة {} ولا يوجد نموذج لها بعد. نزّل واحدًا من الإعدادات."),
+    ("There is too little speech in this recording to tell its language.", "الكلام في هذا التسجيل أقل من أن تُعرف لغته."),
+    ("Save the words and names", "حفظ الكلمات والأسماء"),
+    ("Dawwin words", "كلمات دَوِّن"),
+    ("Load words and names", "تحميل الكلمات والأسماء"),
+    ("The preview shows a video of yours: transcribe one first.", "تعرض المعاينة فيديو من فيديوهاتك: فرّغ واحدًا أولًا."),
+    ("This video is AV1, which this ffmpeg cannot read. Update the video ffmpeg in Settings.", "هذا الفيديو بترميز AV1 الذي لا يقرؤه ffmpeg هذا. حدّث ffmpeg الفيديو من الإعدادات."),
     // commands and dialogs
     ("Choose recordings to transcribe", "اختر التسجيلات المراد تفريغها"),
     ("Audio and video", "صوت وفيديو"),
@@ -128,6 +154,20 @@ static AR: &[(&str, &str)] = &[
     ("Arabic", "العربية"),
     ("English", "الإنجليزية"),
     ("Duration {} · {}", "المدة {} · {}"),
+    // read aloud
+    ("There is nothing to read in it.", "لا يوجد فيه ما يُقرأ."),
+    ("That text is no longer open.", "لم يعد ذلك النص مفتوحًا."),
+    ("That translation is not there.", "تلك الترجمة غير موجودة."),
+    ("{} is not a text file Dawwin can read.", "{} ليس ملفًا نصيًا يستطيع دَوِّن قراءته."),
+    ("The voice did not answer in {} seconds.", "لم يستجب الصوت خلال {} ثانية."),
+    ("The voice stopped ({}). Last output:
+{}", "توقّف الصوت ({}). آخر ما كتبه:
+{}"),
+    ("There is no voice for {} yet. Choose one in Settings.", "لا يوجد صوت للغة {} بعد. اختر واحدًا من الإعدادات."),
+    ("The voice is not installed. Download a voice in Settings.", "الصوت غير مثبّت. نزّل صوتًا من الإعدادات."),
+    ("The voice program is not published yet.", "لم يُنشر برنامج الصوت بعد."),
+    ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
+    ("{} waits for the graphics card while Dawwin transcribes or translates. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يفرّغ أو يترجم. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
 ];
 
 #[cfg(test)]

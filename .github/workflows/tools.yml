@@ -3,7 +3,8 @@ name: Tools
 # The programs Dawwin downloads only when they are wanted (src-tauri/src/tools.rs): its own small
 # ffmpeg in two sizes (tools/ffmpeg/build.sh), "audio", for reading and saving sound and adding
 # subtitle tracks, and "video", which also burns subtitles into the picture; and the translator,
-# llama.cpp's official server. Each is built or taken, packed (tools/pack.py), and tried on Windows
+# llama.cpp's official server; and the voice, Dawwin's dawwin-voice.exe (voice/) with audio.cpp's official
+# library for the processor and VoxCPM 2's ready-made voices (voice/refs), and that library's GPU build. Each is built or taken, packed (tools/pack.py), and tried on Windows
 # with the app's own unpacking, on real files of the kinds people bring. Run by hand with a release
 # tag, the files go on that release, where the app downloads them from. With the id of an earlier
 # run, its files are tried and uploaded instead of new ones: the app pins their exact bytes.
@@ -24,6 +25,7 @@ on:
       - "tools/ffmpeg/**"
       - "tools/pack.py"
       - "src-tauri/src/tools.rs"
+      - "voice/**"
       - ".github/workflows/tools.yml"
 
 permissions:
@@ -70,6 +72,42 @@ jobs:
           name: pack-translator
           path: packs/
 
+  voice:
+    if: inputs.from_run == ''
+    runs-on: windows-2022
+    env:
+      AUDIOCPP: v0.9.4
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: dawwin-voice.exe, and audio.cpp's library (processor and GPU builds) from its official release
+        shell: pwsh
+        run: |
+          cargo build --release --locked --manifest-path voice/Cargo.toml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($b in "cpu", "vulkan") {
+            curl.exe -sSL --fail --retry 5 -o "lib-$b.zip" "https://github.com/0xShug0/audio.cpp/releases/download/$env:AUDIOCPP/audio-$env:AUDIOCPP-lib-windows-x64-$b.zip"
+            Expand-Archive "lib-$b.zip" "lib-$b"
+          }
+          New-Item -ItemType Directory -Force voice-pack, voice-gpu-pack | Out-Null
+          Get-ChildItem lib-cpu -Recurse -Filter *.dll | Copy-Item -Destination voice-pack
+          Get-ChildItem lib-cpu -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-pack
+          Copy-Item voice/target/release/dawwin-voice.exe voice-pack
+          Copy-Item voice/refs/*.wav voice-pack
+          Get-ChildItem lib-vulkan -Recurse -Filter *.dll | Copy-Item -Destination voice-gpu-pack
+          Get-ChildItem lib-vulkan -Recurse -Include LICENSE*, NOTICE* | Copy-Item -Destination voice-gpu-pack
+          Write-Host "== voice"; Get-ChildItem voice-pack | Format-Table Name, Length
+          Write-Host "== voice-gpu"; Get-ChildItem voice-gpu-pack | Format-Table Name, Length
+      - name: Pack
+        shell: pwsh
+        run: |
+          python tools/pack.py "packs/dawwin-voice-audio.cpp-$env:AUDIOCPP.tar.xz" voice-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          python tools/pack.py "packs/dawwin-voice-gpu-audio.cpp-$env:AUDIOCPP.tar.xz" voice-gpu-pack | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-voice
+          path: packs/
+
   samples:
     # Files of the kinds people bring, made with Ubuntu's full ffmpeg: only for the test.
     runs-on: ubuntu-24.04
@@ -84,6 +122,8 @@ jobs:
           ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libx264 -preset veryfast -c:a ac3 -ac 6 film.mkv
           ffmpeg -loglevel error $v -f lavfi -i "sine=frequency=300:duration=30" -c:v libvpx-vp9 -deadline realtime -b:v 1M -c:a libopus browser.webm
           ffmpeg -loglevel error -f lavfi -i "sine=frequency=300:duration=10" -c:a libopus whatsapp.ogg
+          # AV1, as screen recorders and downloads make it
+          ffmpeg -loglevel error -f lavfi -i testsrc2=size=854x480:rate=30:duration=10 -f lavfi -i "sine=frequency=300:duration=10" -c:v libaom-av1 -cpu-used 8 -row-mt 1 -b:v 400k -c:a aac av1.mp4
           printf '1\n00:00:01,000 --> 00:00:05,000\nطيب، خلونا نبدأ الاجتماع\n\n2\n00:00:06,000 --> 00:00:10,000\nOkay, let'"'"'s start the meeting\n\n' > subtitles.srt
           ls -l
       - uses: actions/upload-artifact@v4
@@ -92,7 +132,7 @@ jobs:
           path: s/
 
   try:
-    needs: [ffmpeg, translator, samples]
+    needs: [ffmpeg, translator, voice, samples]
     if: ${{ !failure() && !cancelled() }}
     runs-on: windows-2022
     steps:
@@ -138,7 +178,7 @@ jobs:
           foreach ($variant in "audio", "video") {
             $ff = "unpacked\tools\ffmpeg-$variant\ffmpeg.exe"
             Write-Host "== $variant"
-            foreach ($f in "meeting.mp4", "obs.mkv", "film.mkv", "browser.webm", "whatsapp.ogg", "phone.mp4") {
+            foreach ($f in "meeting.mp4", "obs.mkv", "film.mkv", "browser.webm", "whatsapp.ogg", "phone.mp4", "av1.mp4") {
               & $ff -nostdin -loglevel error -y -i "s\$f" -vn -ac 1 -ar 16000 -f f32le "out-$f.f32"
               $n = (Get-Item "out-$f.f32").Length / 4 / 16000
               Write-Host ("read {0}: {1:N1} s of sound" -f $f, $n)
@@ -151,6 +191,10 @@ jobs:
             & $ff -nostdin -loglevel error -y -i "s\film.mkv" -f srt -i "s\subtitles.srt" -map 0 -map 1:0 -c copy -c:s srt "sub-$variant.mkv"
             if ($LASTEXITCODE -ne 0) { throw "$variant could not add a subtitle track to an MKV" }
             Write-Host "M4A and subtitle tracks: fine"
+            # raw sound from a pipe, as "-": the f32le reader and the fd protocol
+            cmd /c "$ff -nostdin -loglevel error -y -f f32le -ar 16000 -ac 1 -i - -c:a aac pipe-$variant.m4a < out-meeting.mp4.f32"
+            if ($LASTEXITCODE -ne 0) { throw "$variant could not read raw sound from a pipe" }
+            Write-Host "raw sound from a pipe: fine"
           }
       - name: Burn subtitles into the picture (video only), as the app does
         shell: pwsh
@@ -158,7 +202,7 @@ jobs:
           $ff = (Resolve-Path "unpacked\tools\ffmpeg-video\ffmpeg.exe").Path
           Copy-Item "s\subtitles.srt" burn.srt
           $style = "subtitles=burn.srt:force_style='FontName=Segoe UI,FontSize=18,Outline=1.6,Shadow=0.8,MarginV=18',format=nv12"
-          foreach ($f in "meeting.mp4", "film.mkv", "browser.webm", "phone.mp4") {
+          foreach ($f in "meeting.mp4", "film.mkv", "browser.webm", "phone.mp4", "av1.mp4") {
             $name = [IO.Path]::GetFileNameWithoutExtension($f)
             $t = Measure-Command { & $ff -nostdin -loglevel error -y -i "s\$f" -map 0:v:0 -map 0:a? -vf $style -c:v h264_mf -b:v 3M -c:a aac -b:a 160k -movflags +faststart "burned-$name.mp4" }
             if ($LASTEXITCODE -ne 0) { throw "burning into $f failed" }
@@ -169,6 +213,11 @@ jobs:
           # upright stays upright: the burned phone video is taller than wide
           $info = (& $ff -hide_banner -i burned-phone.mp4 2>&1 | Out-String)
           if ($info -notmatch "720x1280") { Write-Host $info; throw "the phone video lost its rotation" }
+          # a 480p AV1 video enlarged to 1080p before the text is drawn, as the app does for sharp text
+          & $ff -nostdin -loglevel error -y -i s\av1.mp4 -map 0:v:0 -vf "scale='if(gt(iw,ih),-2,1080)':'if(gt(iw,ih),1080,-2)':flags=lanczos,$style" -c:v h264_mf -b:v 3M -an sharp-av1.mp4
+          if ($LASTEXITCODE -ne 0) { throw "sharp text on the AV1 video failed" }
+          $info = (& $ff -hide_banner -i sharp-av1.mp4 2>&1 | Out-String)
+          if ($info -notmatch "\d+x1080") { Write-Host $info; throw "the AV1 video was not enlarged" }
           exit 0
       - uses: actions/upload-artifact@v4
         with:

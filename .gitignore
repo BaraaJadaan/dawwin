@@ -7,6 +7,7 @@ __pycache__/
 /dist/
 /prototypes/
 /engine/target/
+/voice/target/
 /src-tauri/engine-bin/*
 !/src-tauri/engine-bin/README.md
 !/src-tauri/engine-bin/translate/
@@ -15,3 +16,6 @@ __pycache__/
 /src-tauri/engine-cache/
 # The Thamanya font's license forbids uploading the font files: they stay out of the repository
 /ui/fonts/
+/tools/record-trial/target/
+/tools/timing/out/
+/tools/e2e/out/

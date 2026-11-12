@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Window, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder, Window};
 
 use super::shortcut::{Keys, Registered, DEFAULT, OTHERS};
 use super::{autostart, pressed, say::Say, Note, Reader, Settings};
@@ -213,19 +213,22 @@ pub fn show_main(app: &AppHandle) {
     }
 }
 
-/// Closing the main window: to the notification area while the shortcut is on, otherwise Dawwin
-/// quits as before (the small player, hidden, must not keep it running).
-pub fn on_window_event(window: &Window, event: &WindowEvent) {
-    if window.label() != "main" {
-        return;
+/// Closing the main window while the shortcut is on: to the notification area (a recording goes
+/// on). True when that is what happened.
+pub fn close_to_tray(window: &Window, api: &tauri::CloseRequestApi) -> bool {
+    if window.label() != "main" || !settings(window.app_handle()).on {
+        return false;
     }
-    if let WindowEvent::CloseRequested { api, .. } = event {
-        if settings(window.app_handle()).on {
-            api.prevent_close();
-            let _ = window.hide();
-        } else {
-            window.app_handle().exit(0);
-        }
+    api.prevent_close();
+    let _ = window.hide();
+    true
+}
+
+/// Otherwise Dawwin quits as before, unless a recording is asking first: the small player, hidden,
+/// must not keep it running.
+pub fn quit_on_close(window: &Window) {
+    if window.label() == "main" && !crate::queue::meeting::is_recording() {
+        window.app_handle().exit(0);
     }
 }
 

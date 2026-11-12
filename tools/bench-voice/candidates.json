@@ -1,0 +1,238 @@
+{
+  "about": "The voices the Voice bench tries, read from audio.cpp v0.9.4's model specs and the model cards on 2026-11-12. 'files' are on Hugging Face; 'voices' maps a language and m/f to a built-in voice id, to 'ref' (a ready-made voice from tools/bench-voice/texts.json, made by VoxCPM 2), or to '@<id>' (a voice file in 'voice_repo' whose name holds that id).",
+  "candidates": {
+    "supertonic3-f16": {
+      "name": "Supertonic 3, F16",
+      "maker": "Supertone",
+      "license": "BigScience OpenRAIL-M (use restrictions must be passed on)",
+      "params": "99M",
+      "family": "supertonic",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "files": [
+        "Supertonic-3-GGUF/supertonic-3-f16.gguf"
+      ],
+      "lang": {
+        "ar": "ar",
+        "en": "en"
+      },
+      "voices": {
+        "ar": {
+          "m": "M1",
+          "f": "F1"
+        },
+        "en": {
+          "m": "M1",
+          "f": "F1"
+        }
+      },
+      "gallery": [
+        "M1",
+        "M2",
+        "M3",
+        "M4",
+        "M5",
+        "F1",
+        "F2",
+        "F3",
+        "F4",
+        "F5"
+      ],
+      "extra": [
+        {
+          "passage": "ar-mixed",
+          "lang": "na",
+          "label": "language tag na (any language)"
+        }
+      ]
+    },
+    "supertonic3-orig": {
+      "name": "Supertonic 3, original weights",
+      "maker": "Supertone",
+      "license": "BigScience OpenRAIL-M (use restrictions must be passed on)",
+      "params": "99M",
+      "family": "supertonic",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "files": [
+        "Supertonic-3-GGUF/supertonic-3-orig.gguf"
+      ],
+      "lang": {
+        "ar": "ar",
+        "en": "en"
+      },
+      "voices": {
+        "ar": {
+          "f": "F1"
+        },
+        "en": {
+          "f": "F1"
+        }
+      },
+      "only": [
+        "ar-msa",
+        "ar-mixed",
+        "en-para"
+      ]
+    },
+    "voxcpm2-q8": {
+      "name": "VoxCPM 2, Q8",
+      "maker": "OpenBMB",
+      "license": "Apache-2.0",
+      "params": "2B",
+      "family": "voxcpm2",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "files": [
+        "VoxCPM2-GGUF/voxcpm2-q8_0.gguf"
+      ],
+      "lang": {
+        "ar": "",
+        "en": ""
+      },
+      "voices": {
+        "ar": {
+          "m": "ref",
+          "f": "ref"
+        },
+        "en": {
+          "m": "ref",
+          "f": "ref"
+        }
+      },
+      "options": {
+        "ultimate_clone": "true"
+      }
+    },
+    "chatterbox-mtl3-q8": {
+      "name": "Chatterbox Multilingual V3, Q8",
+      "maker": "Resemble AI",
+      "license": "MIT",
+      "params": "0.5B",
+      "family": "chatterbox",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "files": [
+        "Chatterbox-GGUF/chatterbox-q8_0.gguf"
+      ],
+      "session_options": {
+        "chatterbox.multilingual_t3": "v3"
+      },
+      "lang": {
+        "ar": "ar",
+        "en": "en"
+      },
+      "voices": {
+        "ar": {
+          "m": "ref",
+          "f": "ref"
+        },
+        "en": {
+          "m": "ref",
+          "f": "ref"
+        }
+      },
+      "options": {
+        "seed": "1234"
+      }
+    },
+    "magpie-q8": {
+      "name": "Magpie TTS Multilingual 357M, Q8",
+      "maker": "NVIDIA",
+      "license": "NVIDIA Open Model License",
+      "params": "357M",
+      "family": "magpie_tts",
+      "repo": "audio-cpp/audio.cpp-gguf",
+      "files": [
+        "MagpieTTS-Multilingual-357M-GGUF/magpie-tts-multilingual-357m-q8_0.gguf"
+      ],
+      "lang": {
+        "ar": "ar-MSA",
+        "en": "en"
+      },
+      "voices": {
+        "ar": {
+          "m": "Jason",
+          "f": "Sofia"
+        },
+        "en": {
+          "m": "Jason",
+          "f": "Sofia"
+        }
+      },
+      "gallery": [
+        "Aria",
+        "Jason",
+        "John",
+        "Leo",
+        "Sofia"
+      ],
+      "extra": [
+        {
+          "passage": "ar-gulf",
+          "lang": "ar-SA",
+          "label": "Saudi Arabic setting"
+        },
+        {
+          "passage": "ar-gulf",
+          "lang": "ar-AE",
+          "label": "Emirati Arabic setting"
+        }
+      ]
+    },
+    "lfm3-audio-q8": {
+      "name": "LFM3-Audio-2B, Q8",
+      "maker": "Liquid AI",
+      "license": "LFM Open License v1.0 (commercial use only under USD 10M yearly revenue)",
+      "params": "2B",
+      "family": "lfm3_audio",
+      "repo": "LiquidAI/LFM3-Audio-2B-GGUF",
+      "files": [
+        "LFM3-Audio-2B-Q8_0.gguf",
+        "mmproj-LFM3-Audio-2B-Q8_0.gguf"
+      ],
+      "lang": {
+        "ar": "ar",
+        "en": "en"
+      },
+      "voices": {
+        "ar": {
+          "m": "arabic_male",
+          "f": "arabic_female"
+        },
+        "en": {
+          "m": "american_english_male",
+          "f": "american_english_female"
+        }
+      },
+      "options": {
+        "seed": "1234"
+      }
+    },
+    "phonon-31m-q8": {
+      "name": "Phonon 31M English, Q8",
+      "maker": "Gradium",
+      "license": "Apache-2.0",
+      "params": "31M",
+      "family": "gradium_phonon",
+      "repo": "gradium/phonon-31m-en-audiocpp",
+      "files": [
+        "phonon-31m-en-q8_0.gguf",
+        "default-voice.safetensors"
+      ],
+      "voice_repo": "gradium/phonon-voices",
+      "lang": {
+        "en": ""
+      },
+      "voices": {
+        "en": {
+          "m": "@LMDIYE0Oa377Qh6Z",
+          "f": "@NbpkqMVS3CJeq2j8"
+        }
+      },
+      "gallery": [
+        "default",
+        "@LMDIYE0Oa377Qh6Z",
+        "@40QrMVgAxFiUnP9f",
+        "@NbpkqMVS3CJeq2j8",
+        "@NIWIOv5vTi5eRMj8"
+      ]
+    }
+  }
+}

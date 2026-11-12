@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice bench</title>
+<style>
+:root {
+  --bg: #f6f5f2; --panel: #ffffff; --text: #1d1c1a; --muted: #6b6862; --line: #e2dfd8;
+  --accent: #2f6f5e; --accent-soft: #e3efe9; --warn: #a3412c; --star: #c98a12;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161615; --panel: #201f1d; --text: #ecebe7; --muted: #a29f97; --line: #34322e;
+    --accent: #6cc3a6; --accent-soft: #23352f; --warn: #e48a73; --star: #e7b54a;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, "Segoe UI", sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1180px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+header p { margin: 0; color: var(--muted); }
+main { display: grid; grid-template-columns: 250px 1fr; gap: 16px; padding: 12px 16px 40px; max-width: 1180px; margin: 0 auto; }
+nav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 12px; align-self: start; }
+nav button { text-align: left; background: none; border: 0; padding: 7px 10px; border-radius: 8px; color: var(--text); font: inherit; cursor: pointer; }
+nav button:hover { background: var(--accent-soft); }
+nav button[aria-current="true"] { background: var(--accent); color: var(--panel); }
+nav .group { margin: 10px 10px 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+section.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+.text { font-size: 17px; line-height: 1.8; margin: 0 0 12px; }
+.text p { margin: 0 0 4px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 8px 6px; border-top: 1px solid var(--line); text-align: left; vertical-align: middle; }
+th { font-size: 13px; color: var(--muted); font-weight: 600; }
+td.letter { font-weight: 700; font-size: 18px; width: 48px; }
+.sample { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0; }
+.play { min-width: 92px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--accent); background: none; color: var(--accent); font: inherit; cursor: pointer; }
+.play.on { background: var(--accent); color: var(--panel); }
+.variant { color: var(--muted); font-size: 13px; }
+.stars { display: inline-flex; gap: 1px; }
+.stars button { border: 0; background: none; padding: 0 1px; font-size: 19px; line-height: 1; cursor: pointer; color: var(--line); }
+.stars button.lit { color: var(--star); }
+.oops { border: 1px solid var(--line); background: none; color: var(--muted); border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 13px; cursor: pointer; }
+.oops.on { border-color: var(--warn); color: var(--warn); }
+.none { color: var(--muted); }
+textarea { width: 100%; min-height: 90px; font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); }
+.actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.actions button { padding: 7px 14px; border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--panel); font: inherit; cursor: pointer; }
+.actions button.quiet { background: none; color: var(--accent); }
+.done { color: var(--accent); align-self: center; }
+@media (max-width: 760px) {
+  main { grid-template-columns: 1fr; }
+  nav { position: static; flex-direction: row; flex-wrap: wrap; }
+  nav .group { width: 100%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Voice bench: listen</h1>
+  <p>Each letter is one voice model. Play a passage with every letter, give each sample stars for how much it sounds like a person, and mark it when it misreads or skips words. Open <code>key.html</code> only when you are done.</p>
+</header>
+<main>
+  <nav id="nav"></nav>
+  <div>
+    <section class="panel" id="passage"></section>
+    <section class="panel" id="summary"></section>
+  </div>
+</main>
+<audio id="player" preload="none"></audio>
+<script>
+const DATA = /*DATA*/null;
+const KEY = "dawwin-voice-bench";
+let store = {};
+try { store = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { store = {}; }
+store.stars = store.stars || {}; store.oops = store.oops || {}; store.notes = store.notes || "";
+function save() { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) {} }
+
+const player = document.getElementById("player");
+let playing = null;
+const voiceName = v => ({ m: "Man", f: "Woman" })[v] || ("Voice " + v);
+const byPassage = {};
+for (const s of DATA.samples) (byPassage[s.passage] = byPassage[s.passage] || []).push(s);
+let current = (() => { try { return localStorage.getItem(KEY + "-at"); } catch (e) { return null; } })();
+if (!DATA.passages.some(p => p.id === current)) current = DATA.passages[0].id;
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "on") for (const [ev, f] of Object.entries(v)) e.addEventListener(ev, f);
+    else if (v !== undefined && v !== null) e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k !== null && k !== undefined) e.append(k);
+  return e;
+}
+
+function nav() {
+  const n = document.getElementById("nav");
+  n.innerHTML = "";
+  let group = null;
+  for (const p of DATA.passages) {
+    const g = p.id.startsWith("gallery") ? "Built-in voices" : (p.lang === "ar" ? "Arabic" : "English");
+    if (g !== group) { n.append(el("div", { class: "group" }, g)); group = g; }
+    const count = (byPassage[p.id] || []).length;
+    n.append(el("button", { "aria-current": p.id === current ? "true" : "false", on: { click: () => { current = p.id; try { localStorage.setItem(KEY + "-at", current); } catch (e) {} render(); } } },
+      p.title + (count ? "" : " (none)")));
+  }
+}
+
+function sampleKey(s) { return s.src; }
+
+function stars(s) {
+  const k = sampleKey(s), box = el("span", { class: "stars", title: "How much it sounds like a person" });
+  for (let i = 1; i <= 5; i++) {
+    box.append(el("button", { class: (store.stars[k] || 0) >= i ? "lit" : "", "aria-label": i + " of 5",
+      on: { click: () => { store.stars[k] = store.stars[k] === i ? 0 : i; save(); render(); } } }, "★"));
+  }
+  return box;
+}
+
+function playButton(s) {
+  const on = playing === s.src && !player.paused;
+  return el("button", { class: "play" + (on ? " on" : ""), on: { click: () => {
+    if (playing === s.src && !player.paused) { player.pause(); }
+    else { if (playing !== s.src) { player.src = s.src; playing = s.src; } player.play(); }
+  } } }, (on ? "Pause" : "Play") + " · " + s.seconds.toFixed(0) + " s");
+}
+
+function render() {
+  nav();
+  const p = DATA.passages.find(x => x.id === current);
+  const box = document.getElementById("passage");
+  box.innerHTML = "";
+  box.append(el("h2", {}, p.title));
+  const text = el("div", { class: "text", dir: p.lang === "ar" ? "rtl" : "ltr", lang: p.lang });
+  for (const t of p.text) text.append(el("p", {}, t));
+  box.append(text);
+  const rows = el("tbody");
+  for (const letter of DATA.letters) {
+    const mine = (byPassage[p.id] || []).filter(s => s.letter === letter);
+    const cell = el("td");
+    if (!mine.length) cell.append(el("span", { class: "none" }, "no sample"));
+    mine.sort((a, b) => (a.variant ? 1 : 0) - (b.variant ? 1 : 0) || a.voice.localeCompare(b.voice, undefined, { numeric: true }));
+    for (const s of mine) {
+      const k = sampleKey(s);
+      cell.append(el("div", { class: "sample" },
+        el("span", { style: "min-width:64px" }, voiceName(s.voice)),
+        playButton(s), stars(s),
+        el("button", { class: "oops" + (store.oops[k] ? " on" : ""), title: "It misread, skipped or repeated words",
+          on: { click: () => { store.oops[k] = !store.oops[k]; save(); render(); } } }, "Mistake"),
+        s.variant ? el("span", { class: "variant" }, s.variant) : null));
+    }
+    rows.append(el("tr", {}, el("td", { class: "letter" }, letter), cell));
+  }
+  box.append(el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Samples"))), rows));
+  summary();
+}
+
+function averages() {
+  const out = {};
+  for (const s of DATA.samples) {
+    const p = DATA.passages.find(x => x.id === s.passage);
+    const lang = p ? p.lang : "?";
+    const o = out[s.letter] = out[s.letter] || { ar: [], en: [], oops: 0, heard: 0 };
+    const k = sampleKey(s);
+    if (store.stars[k]) { o[lang].push(store.stars[k]); o.heard++; }
+    if (store.oops[k]) o.oops++;
+  }
+  return out;
+}
+
+function summary() {
+  const box = document.getElementById("summary");
+  box.innerHTML = "";
+  box.append(el("h2", {}, "Your ratings"));
+  const a = averages();
+  const mean = xs => xs.length ? (xs.reduce((x, y) => x + y, 0) / xs.length).toFixed(1) : "—";
+  const rows = el("tbody");
+  for (const letter of DATA.letters) {
+    const o = a[letter] || { ar: [], en: [], oops: 0, heard: 0 };
+    rows.append(el("tr", {}, el("td", { class: "letter" }, letter), el("td", {}, mean(o.ar)), el("td", {}, mean(o.en)),
+      el("td", {}, String(o.oops)), el("td", {}, String(o.heard))));
+  }
+  box.append(el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, ""), el("th", {}, "Arabic"), el("th", {}, "English"),
+    el("th", {}, "Mistakes"), el("th", {}, "Rated"))), rows));
+  const notes = el("textarea", { placeholder: "Notes", "aria-label": "Notes" });
+  notes.value = store.notes;
+  notes.addEventListener("input", () => { store.notes = notes.value; save(); });
+  box.append(el("h2", { style: "margin-top:16px" }, "Notes"), notes);
+  const done = el("span", { class: "done" });
+  box.append(el("div", { class: "actions" },
+    el("button", { on: { click: async () => {
+      const lines = ["Voice bench ratings (stars, Arabic / English, mistakes):"];
+      for (const letter of DATA.letters) {
+        const o = a[letter] || { ar: [], en: [], oops: 0 };
+        lines.push(`${letter}: Arabic ${mean(o.ar)}, English ${mean(o.en)}, mistakes ${o.oops}`);
+      }
+      lines.push("", "Each sample:");
+      for (const s of DATA.samples) {
+        const k = sampleKey(s);
+        if (store.stars[k] || store.oops[k]) lines.push(`${s.letter} ${s.passage} ${voiceName(s.voice)}${s.variant ? " (" + s.variant + ")" : ""}: ${store.stars[k] || 0} stars${store.oops[k] ? ", mistake" : ""}`);
+      }
+      if (store.notes.trim()) lines.push("", "Notes:", store.notes.trim());
+      try { await navigator.clipboard.writeText(lines.join("\n")); done.textContent = "Copied"; }
+      catch (e) { notes.value = lines.join("\n") + "\n\n" + store.notes; done.textContent = "Copy it from the notes box"; }
+    } } }, "Copy my ratings"),
+    el("button", { class: "quiet", on: { click: () => { if (confirm("Clear every rating?")) { store = { stars: {}, oops: {}, notes: "" }; save(); render(); } } } }, "Clear"),
+    done));
+}
+
+player.addEventListener("play", render);
+player.addEventListener("pause", render);
+player.addEventListener("ended", render);
+document.addEventListener("keydown", e => {
+  if (e.code === "Space" && e.target === document.body) { e.preventDefault(); if (playing) player.paused ? player.play() : player.pause(); }
+});
+render();
+</script>
+</body>
+</html>

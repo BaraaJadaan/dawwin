@@ -1,0 +1,13 @@
+[package]
+name = "record-trial"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Trial for Dawwin 1.5.0: record the microphone and what the PC plays on one clock"
+
+[dependencies]
+wasapi = "0.27"
+sonora = "0.3"
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_System_Performance", "Win32_System_Threading"] }
+
+[workspace]

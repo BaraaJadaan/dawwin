@@ -1,0 +1,20 @@
+[package]
+name = "dawwin-voice"
+version = "1.3.1"
+description = "The voice of Dawwin: text to speech through audio.cpp's library, in a process of its own"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/BaraaJadaan/dawwin"
+authors = ["Baraa Jadaan"]
+
+# Not part of a workspace, like the engine: it is built by the Tools workflow and downloaded with
+# audio.cpp's library, not put in the installer.
+[workspace]
+
+[dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

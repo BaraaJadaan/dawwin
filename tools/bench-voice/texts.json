@@ -1,0 +1,187 @@
+{
+  "about": "What the Voice bench reads with every candidate. All of it was written for the bench. A passage is read the way Dawwin reads: one request per sentence, then joined with a breath between sentences, a longer one at a paragraph's end and after a heading. 'pieces' splits a sentence by script, each piece read in its own language.",
+  "gallery": {
+    "ar": "أهلاً بك، هذا صوتي وأنا أقرأ لك هذا النص.",
+    "en": "Hello, this is my voice, reading this text to you."
+  },
+  "refs": {
+    "about": "The ready-made voices for the models that need a recording to speak like: made by VoxCPM 2 from a description, never from a real person.",
+    "text": {
+      "ar": "مرحباً، أنا صوت صُنع لتجربة القراءة بصوت عالٍ. أقرأ النصوص العربية بهدوء ووضوح، جملة بعد جملة.",
+      "en": "Hello, I am a voice made for reading aloud. I read English text calmly and clearly, one sentence after another."
+    },
+    "design": {
+      "ar-m": "A calm, warm adult man's voice, a professional Arabic narrator reading clear Modern Standard Arabic at a natural pace",
+      "ar-f": "A calm, warm adult woman's voice, a professional Arabic narrator reading clear Modern Standard Arabic at a natural pace",
+      "en-m": "A calm, warm adult man's voice, a professional audiobook narrator reading at a natural pace",
+      "en-f": "A calm, warm adult woman's voice, a professional audiobook narrator reading at a natural pace"
+    }
+  },
+  "passages": [
+    {
+      "id": "ar-msa",
+      "lang": "ar",
+      "title": "Plain Arabic",
+      "paragraphs": [[
+        "في صباح يوم هادئ، جلست سلمى قرب النافذة تقرأ رسالة وصلتها من صديقتها القديمة.",
+        "كانت الرسالة قصيرة، لكنها حملت أخباراً كثيرة عن المدينة التي غادرتها منذ سنوات.",
+        "ابتسمت وهي تتذكر الأسواق المزدحمة ورائحة الخبز في الشوارع الضيقة."
+      ]]
+    },
+    {
+      "id": "en-para",
+      "lang": "en",
+      "title": "An English paragraph",
+      "paragraphs": [[
+        "The old lighthouse stood at the edge of the cliff, its white paint peeling after decades of salty wind.",
+        "Every evening, Maya climbed the narrow stairs to watch the ships come back to the harbor.",
+        "She liked to imagine where each one had been, and what stories its sailors would tell over dinner."
+      ]]
+    },
+    {
+      "id": "ar-mixed",
+      "lang": "ar",
+      "title": "Arabic with English inside",
+      "paragraphs": [[
+        "رفعنا النسخة الجديدة على GitHub أمس، وأضفنا ميزة اسمها Read aloud.",
+        "وفي نهاية الاجتماع قال المدير: we will ship it next week, no matter what."
+      ]],
+      "pieces": [
+        [["ar", "رفعنا النسخة الجديدة على GitHub أمس، وأضفنا ميزة اسمها Read aloud."]],
+        [["ar", "وفي نهاية الاجتماع قال المدير:"], ["en", "we will ship it next week, no matter what."]]
+      ]
+    },
+    {
+      "id": "ar-news",
+      "lang": "ar",
+      "title": "Arabic, as in the news",
+      "paragraphs": [[
+        "أعلنت وزارة التعليم أمس عن خطة جديدة لتطوير المناهج الدراسية.",
+        "وتبدأ الخطة مع بداية العام الدراسي المقبل، وتشمل جميع المراحل من الابتدائية حتى الثانوية."
+      ]]
+    },
+    {
+      "id": "ar-numbers",
+      "lang": "ar",
+      "title": "Arabic numbers and dates, as written",
+      "paragraphs": [[
+        "في 12 مارس 2026 ارتفعت الأسعار بنسبة 15%، ووصل سعر الكيلو إلى 250 ريالاً.",
+        "الاجتماع القادم الساعة 10:30 صباحاً في القاعة رقم 7، ويحضره 24 موظفاً.",
+        "وفي عام ٢٠٢٥ بلغ عدد الزوار ٤٥٠٠ زائر."
+      ]]
+    },
+    {
+      "id": "en-numbers",
+      "lang": "en",
+      "title": "English numbers and dates, as written",
+      "paragraphs": [[
+        "On March 12, 2026, prices rose by 15%, and a kilo cost $66.50.",
+        "The next meeting is at 10:30 a.m. in room 7, and about 24 people will attend."
+      ]]
+    },
+    {
+      "id": "ar-tashkeel",
+      "lang": "ar",
+      "title": "Plain Arabic again, with tashkeel",
+      "paragraphs": [[
+        "فِي صَبَاحِ يَوْمٍ هَادِئٍ، جَلَسَتْ سَلْمَى قُرْبَ النَّافِذَةِ تَقْرَأُ رِسَالَةً وَصَلَتْهَا مِنْ صَدِيقَتِهَا القَدِيمَةِ.",
+        "كَانَتِ الرِّسَالَةُ قَصِيرَةً، لَكِنَّهَا حَمَلَتْ أَخْبَارًا كَثِيرَةً عَنِ المَدِينَةِ الَّتِي غَادَرَتْهَا مُنْذُ سَنَوَاتٍ.",
+        "ابْتَسَمَتْ وَهِيَ تَتَذَكَّرُ الأَسْوَاقَ المُزْدَحِمَةَ وَرَائِحَةَ الخُبْزِ فِي الشَّوَارِعِ الضَّيِّقَةِ."
+      ]]
+    },
+    {
+      "id": "ar-gulf",
+      "lang": "ar",
+      "title": "Gulf Arabic",
+      "paragraphs": [[
+        "شلونك اليوم؟ والله ودي أمر عليك بس الدوام طويل.",
+        "خلنا نتقابل بعد المغرب في القهوة اللي جنب البيت."
+      ]]
+    },
+    {
+      "id": "ar-egy",
+      "lang": "ar",
+      "title": "Egyptian Arabic",
+      "paragraphs": [[
+        "إزيك يا صاحبي؟ أنا لسه راجع من الشغل ومش قادر أعمل أي حاجة.",
+        "تعالى بكرة نقعد مع بعض ونشرب شاي."
+      ]]
+    },
+    {
+      "id": "ar-lev",
+      "lang": "ar",
+      "title": "Levantine Arabic",
+      "paragraphs": [[
+        "كيفك يا خيي؟ شو رأيك نطلع مشوار بكرا الصبح؟",
+        "الطقس رح يكون كتير حلو، وبعدين منروح ناكل سوا."
+      ]]
+    },
+    {
+      "id": "ar-numbers-words",
+      "lang": "ar",
+      "title": "Arabic numbers and dates, written out as Dawwin would",
+      "paragraphs": [[
+        "في الثاني عشر من مارس عام ألفين وستة وعشرين ارتفعت الأسعار بنسبة خمسة عشر بالمئة، ووصل سعر الكيلو إلى مئتين وخمسين ريالاً.",
+        "الاجتماع القادم الساعة العاشرة والنصف صباحاً في القاعة رقم سبعة، ويحضره أربعة وعشرين موظفاً.",
+        "وفي عام ألفين وخمسة وعشرين بلغ عدد الزوار أربعة آلاف وخمسمئة زائر."
+      ]]
+    },
+    {
+      "id": "en-numbers-words",
+      "lang": "en",
+      "title": "English numbers and dates, written out as Dawwin would",
+      "paragraphs": [[
+        "On March twelfth, twenty twenty-six, prices rose by fifteen percent, and a kilo cost sixty-six dollars and fifty cents.",
+        "The next meeting is at ten thirty a.m. in room seven, and about twenty-four people will attend."
+      ]]
+    },
+    {
+      "id": "ar-long",
+      "lang": "ar",
+      "title": "A long Arabic passage",
+      "heading": "عادة القراءة",
+      "paragraphs": [
+        [
+          "يقول كثير من الناس إنهم لا يجدون وقتاً للقراءة، لكن الحقيقة أن القراءة لا تحتاج إلى ساعات طويلة كل يوم.",
+          "يكفي أن تخصص عشرين دقيقة قبل النوم، أو أن تحمل كتاباً صغيراً معك في الطريق إلى العمل.",
+          "ومع مرور الأسابيع، ستلاحظ أن هذه الدقائق القليلة قد تحولت إلى عادة لا تستطيع الاستغناء عنها."
+        ],
+        [
+          "ابدأ بالكتب التي تحبها فعلاً، لا بالكتب التي يقال لك إنها مهمة.",
+          "فإذا كنت تحب القصص فاقرأ القصص، وإذا كنت تحب التاريخ أو العلوم فابدأ منها.",
+          "ولا تشعر بالذنب إذا تركت كتاباً في منتصفه، فليس كل كتاب مناسباً لكل قارئ في كل وقت."
+        ],
+        [
+          "ومن المفيد أيضاً أن تكتب بضع ملاحظات عما قرأته، ولو كانت جملة واحدة في نهاية كل فصل.",
+          "فالكتابة تساعدك على تذكر الأفكار، وتجعلك تقرأ بانتباه أكبر."
+        ],
+        [
+          "وأخيراً، شارك ما تقرأه مع أصدقائك، فالحديث عن الكتب يفتح لك أبواباً لم تكن تتوقعها.",
+          "قد تكتشف كتاباً جديداً من اقتراح صديق، وقد تقنع أنت صديقاً آخر بأن يبدأ رحلته مع القراءة."
+        ]
+      ]
+    },
+    {
+      "id": "en-long",
+      "lang": "en",
+      "title": "A long English passage",
+      "heading": "Starting a small garden",
+      "paragraphs": [
+        [
+          "You do not need a large yard to grow your own vegetables.",
+          "A few pots on a sunny balcony can give you fresh herbs and tomatoes for most of the summer.",
+          "Start with plants that forgive mistakes, such as mint, basil and cherry tomatoes."
+        ],
+        [
+          "Water them early in the morning, before the sun gets strong, and check the soil with your finger before you water again.",
+          "If the top of the soil is still damp, wait another day.",
+          "Most beginners water too much rather than too little."
+        ],
+        [
+          "Keep a simple notebook of what you planted and when, and you will learn more from one season than from any book.",
+          "By next spring, you will know which corner gets the most light, and which plants are worth the effort."
+        ]
+      ]
+    }
+  ]
+}

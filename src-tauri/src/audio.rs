@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::setup::no_window;
+use crate::setup::{kill_tree, killing_on_stop, no_window};
 
 pub const SR: usize = 16_000;
 
@@ -60,9 +60,10 @@ fn run_until(mut cmd: Command, cancel: &AtomicBool) -> std::io::Result<(std::pro
             return Ok((status, err.join().unwrap_or_default(), false));
         }
         if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
+            kill_tree(&mut child);
             let status = child.wait()?;
-            return Ok((status, err.join().unwrap_or_default(), true));
+            // what it said is of no use now, and waiting for it could wait on what it started
+            return Ok((status, String::new(), true));
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
@@ -98,7 +99,8 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
     let err_thread = collect_stderr(&mut child);
     let mut bytes = Vec::with_capacity(1 << 24);
     let mut buf = vec![0u8; 1 << 16];
-    let stopped = loop {
+    let child = std::sync::Mutex::new(child);
+    let stopped = killing_on_stop(&[&child], cancel, || loop {
         if cancel.load(Ordering::Relaxed) {
             break Some(anyhow!("cancelled"));
         }
@@ -107,11 +109,14 @@ fn decode_ffmpeg(ffmpeg: &Path, path: &Path, cancel: &AtomicBool) -> Result<Vec<
             Ok(n) => bytes.extend_from_slice(&buf[..n]),
             Err(e) => break Some(e.into()),
         }
-    };
+    });
+    let mut child = child.into_inner().unwrap_or_else(|e| e.into_inner());
+    // killed while it was read: a stop, whatever the pipe said
+    let stopped = if cancel.load(Ordering::Relaxed) { Some(anyhow!("cancelled")) } else { stopped };
     // never wait on a child whose pipe is still open
     drop(out);
     if let Some(e) = stopped {
-        let _ = child.kill();
+        kill_tree(&mut child);
         let _ = child.wait();
         return Err(e);
     }
@@ -430,6 +435,23 @@ pub fn speech_spans(audio: &[f32], min_gap_s: f32, keep_s: f32) -> Vec<(usize, u
 }
 
 /// The kept parts, one after the other.
+/// The same, in the memory the recording already takes: the kept parts moved to its front. A
+/// three-hour recording without its silences takes no more memory than with them (`spans` are
+/// in order and do not overlap, as `speech_spans` gives them).
+pub fn keep_spans(mut audio: Vec<f32>, spans: &[(usize, usize)]) -> Vec<f32> {
+    let mut to = 0;
+    for &(a, b) in spans {
+        let b = b.min(audio.len());
+        if a < to || a >= b {
+            continue;
+        }
+        audio.copy_within(a..b, to);
+        to += b - a;
+    }
+    audio.truncate(to);
+    audio
+}
+
 pub fn join_spans(audio: &[f32], spans: &[(usize, usize)]) -> Vec<f32> {
     let mut out = Vec::with_capacity(spans.iter().map(|(a, b)| b - a).sum());
     for &(a, b) in spans {
@@ -505,7 +527,7 @@ pub fn save_sound(source: &Path, dest: &Path, spans: Option<&[(usize, usize)]>, 
         Some(spans) => cut_with_ffmpeg(ff, source, &part, spans, cancel),
     };
     if let Err(why) = result {
-        let _ = std::fs::remove_file(&part);
+        crate::setup::remove_when_free(&part);
         bail!(crate::tr!("ffmpeg could not save the sound: {}", why));
     }
     std::fs::rename(&part, &dest)?;
@@ -530,15 +552,20 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     write.args(["-c:a", "aac", "-b:a", "96k"]).arg(dest);
     write.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
     no_window(&mut write);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".into());
+    }
     let mut reader = read.spawn().map_err(|e| e.to_string())?;
     let read_err = collect_stderr(&mut reader);
-    let mut writer = match write.spawn() {
+    // starting a program can take seconds on a slow machine: a stop meanwhile starts no second one
+    let writer = if cancel.load(Ordering::Relaxed) { Err("cancelled".to_string()) } else { write.spawn().map_err(|e| e.to_string()) };
+    let mut writer = match writer {
         Ok(w) => w,
         Err(e) => {
-            let _ = reader.kill();
+            kill_tree(&mut reader);
             drop(reader.stdout.take());
             let _ = reader.wait();
-            return Err(e.to_string());
+            return Err(e);
         }
     };
     let write_err = collect_stderr(&mut writer);
@@ -548,51 +575,64 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     let mut carry: Vec<u8> = Vec::new();
     let mut at = 0usize; // samples read so far, at 48 kHz
     let mut span = 0usize;
-    let mut failed = output.write_all(&wav_stream_header(RATE)).err().map(|_| "the encoder stopped".to_string());
-    while failed.is_none() {
-        if cancel.load(Ordering::Relaxed) {
-            failed = Some("cancelled".to_string());
-            break;
-        }
-        let n = match input.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => n,
-            Err(e) => {
-                failed = Some(e.to_string());
+    let (reader_slot, writer_slot) = (std::sync::Mutex::new(reader), std::sync::Mutex::new(writer));
+    let mut failed = killing_on_stop(&[&reader_slot, &writer_slot], cancel, || {
+        let mut failed = output.write_all(&wav_stream_header(RATE)).err().map(|_| "the encoder stopped".to_string());
+        while failed.is_none() {
+            if cancel.load(Ordering::Relaxed) {
+                failed = Some("cancelled".to_string());
                 break;
             }
-        };
-        carry.extend_from_slice(&buf[..n]);
-        let whole = carry.len() / 4 * 4;
-        let mut keep: Vec<u8> = Vec::with_capacity(whole);
-        for sample in carry[..whole].chunks_exact(4) {
-            while span < spans.len() && at >= spans[span].1 * scale {
-                span += 1;
+            let n = match input.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(e) => {
+                    failed = Some(e.to_string());
+                    break;
+                }
+            };
+            carry.extend_from_slice(&buf[..n]);
+            let whole = carry.len() / 4 * 4;
+            let mut keep: Vec<u8> = Vec::with_capacity(whole);
+            for sample in carry[..whole].chunks_exact(4) {
+                while span < spans.len() && at >= spans[span].1 * scale {
+                    span += 1;
+                }
+                if span < spans.len() && at >= spans[span].0 * scale {
+                    keep.extend_from_slice(sample);
+                }
+                at += 1;
             }
-            if span < spans.len() && at >= spans[span].0 * scale {
-                keep.extend_from_slice(sample);
+            carry.drain(..whole);
+            if output.write_all(&keep).is_err() {
+                failed = Some("the encoder stopped".to_string());
             }
-            at += 1;
         }
-        carry.drain(..whole);
-        if output.write_all(&keep).is_err() {
-            failed = Some("the encoder stopped".to_string());
-        }
+        failed
+    });
+    let mut reader = reader_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    let mut writer = writer_slot.into_inner().unwrap_or_else(|e| e.into_inner());
+    // killed while a pipe blocked: a stop, whatever the pipe said
+    if cancel.load(Ordering::Relaxed) {
+        failed = Some("cancelled".to_string());
     }
     // never wait on a child whose pipe is still open: on any early end the reader is killed and
     // its pipe let go first, or it waits for ever to write what nobody reads
     drop(input);
-    if failed.is_some() {
-        let _ = reader.kill();
+    let reader_killed = failed.is_some();
+    if reader_killed {
+        kill_tree(&mut reader);
     }
     let read_status = reader.wait().map_err(|e| e.to_string())?;
-    let read_why = read_err.join().unwrap_or_default();
-    if failed.as_deref() == Some("cancelled") {
-        let _ = writer.kill();
+    // a killed one's stderr is not waited for: what it started may hold it open
+    let read_why = if reader_killed { String::new() } else { read_err.join().unwrap_or_default() };
+    let writer_killed = failed.as_deref() == Some("cancelled");
+    if writer_killed {
+        kill_tree(&mut writer);
     }
     drop(output);
     let write_status = writer.wait().map_err(|e| e.to_string())?;
-    let write_why = write_err.join().unwrap_or_default();
+    let write_why = if writer_killed { String::new() } else { write_err.join().unwrap_or_default() };
     let failed = match failed {
         // what the encoder said is the better reason
         Some(why) if why == "the encoder stopped" && !write_why.trim().is_empty() => Some(write_why.trim().to_string()),
@@ -603,7 +643,7 @@ fn cut_with_ffmpeg(ff: &Path, source: &Path, dest: &Path, spans: &[(usize, usize
     };
     match failed {
         Some(why) => {
-            let _ = std::fs::remove_file(dest);
+            crate::setup::remove_when_free(dest);
             Err(why)
         }
         None => Ok(()),
@@ -731,6 +771,10 @@ mod tests {
         let kept: f32 = s.iter().map(|(a, b)| b - a).sum();
         assert!(kept > 5.0 && kept < 6.5, "from 9.8 s to about 5.9: {kept}");
         assert_eq!(join_spans(&audio, &spans).len(), spans.iter().map(|(a, b)| b - a).sum::<usize>());
+        let (joined, ptr) = (join_spans(&audio, &spans), audio.as_ptr());
+        let kept = keep_spans(audio, &spans);
+        assert_eq!(kept, joined, "the same sound, made in place");
+        assert_eq!(kept.as_ptr(), ptr, "in the memory the recording took, not a second copy");
         assert!(speech_spans(&vec![0.0; 3 * SR], 0.7, 0.3).is_empty(), "silence only: nothing to keep");
     }
 
@@ -809,6 +853,11 @@ mod tests {
             let source = dir.join("long.wav");
             write_wav(&source, &audio).unwrap();
             let spans = speech_spans(&audio, 0.7, 0.3);
+            // how long saving it takes on this machine, not stopped: a stop must take far less
+            let started = std::time::Instant::now();
+            let full = save_sound(&source, &dir.join("full.m4a"), Some(&spans), &audio, Some(&ff), &AtomicBool::new(false)).unwrap();
+            let unstopped = started.elapsed();
+            std::fs::remove_file(full).unwrap();
             for whole in [false, true] {
                 let stop = std::sync::Arc::new(AtomicBool::new(false));
                 let (src, a, s, f, st, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), stop.clone(), dir.clone());
@@ -820,12 +869,15 @@ mod tests {
                 stop.store(true, Ordering::SeqCst);
                 let stopped_at = std::time::Instant::now();
                 let result = crate::setup::within(Duration::from_secs(20), &format!("stopping {name}"), move || worker.join().unwrap());
-                // within a second, as stopping should feel
-                assert!(stopped_at.elapsed() < Duration::from_secs(1), "{name}: took {:?} to stop", stopped_at.elapsed());
-                if result.is_err() {
-                    let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
-                    assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");
-                }
+                // the stop ended the saving: ten minutes of sound were not saved to the end first
+                assert!(result.is_err(), "{name}: the whole sound was saved, the stop came too late to tell");
+                let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|f| f.file_name()).filter(|n| n.to_string_lossy().ends_with(".m4a")).collect();
+                assert!(left.is_empty(), "{name}: stopped, but {left:?} is there");
+                // at once: the ffmpeg processes are killed the moment the stop comes, even while a
+                // pipe blocks. Within a second on a usual PC; a slow shared machine (a CI runner) is
+                // judged by its own pace, at most half the time the whole save took there
+                let limit = (unstopped / 2).max(Duration::from_secs(1));
+                assert!(stopped_at.elapsed() < limit, "{name}: took {:?} to stop; the whole save takes {unstopped:?}", stopped_at.elapsed());
             }
             // a folder that is not there: the encoder cannot start writing
             let (src, a, s, f, d) = (source.clone(), audio.clone(), spans.clone(), ff.clone(), dir.join("not there"));

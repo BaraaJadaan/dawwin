@@ -153,7 +153,9 @@ pub fn stretches(s: &Segment) -> Vec<(f64, f64)> {
 
 /// Which stretch each word of the line was said in, from what the model heard in each; None
 /// when nothing it heard matches the line.
-fn stretch_of_words(accurate: &[String], heard: &[(f32, f32, String)]) -> Option<Vec<usize>> {
+/// Which stretch each word of the line was said in, and which stretches had any of the line's
+/// words heard in them; None when nothing heard matches the line.
+fn stretch_of_words(accurate: &[String], heard: &[(f32, f32, String)]) -> Option<(Vec<usize>, Vec<bool>)> {
     let mut rough = Vec::new();
     let mut tag = Vec::new();
     for (k, h) in heard.iter().enumerate() {
@@ -167,6 +169,10 @@ fn stretch_of_words(accurate: &[String], heard: &[(f32, f32, String)]) -> Option
         return None;
     }
     let matched = align(accurate, &rough);
+    let mut matching = vec![false; heard.len()];
+    for j in matched.iter().flatten() {
+        matching[tag[*j]] = true;
+    }
     // the words that matched, and one before the first and one after the last of both sides
     let mut anchors: Vec<(f64, f64)> = vec![(-1.0, -1.0)];
     anchors.extend(matched.iter().enumerate().filter_map(|(i, j)| j.map(|j| (i as f64, j as f64))));
@@ -186,8 +192,12 @@ fn stretch_of_words(accurate: &[String], heard: &[(f32, f32, String)]) -> Option
         let y = if x1 > x0 { y0 + (x - x0) * (y1 - y0) / (x1 - x0) } else { y0 };
         out.push(tag[(y.round().max(0.0) as usize).min(rough.len() - 1)]);
     }
-    Some(out)
+    Some((out, matching))
 }
+
+/// How fast people say a line's characters, about: for words placed in a stretch that holds
+/// something else besides.
+const CHARS_A_SECOND: f64 = 14.0;
 
 /// `along` seconds of speech after `from`, the pauses in `inner` skipped.
 fn skip_pauses(from: f64, mut along: f64, inner: &[(f64, f64)]) -> f64 {
@@ -214,7 +224,7 @@ pub fn word_starts(s: &Segment) -> Option<Vec<(u32, f32)>> {
     let chars: Vec<char> = s.text.chars().collect();
     let toks = tokens(&s.text);
     let accurate: Vec<String> = toks.iter().map(|&(a, b)| fold(&chars[a..b].iter().collect::<String>())).collect();
-    let tags = stretch_of_words(&accurate, &s.heard)?;
+    let (tags, matching) = stretch_of_words(&accurate, &s.heard)?;
     let mut out = Vec::with_capacity(toks.len());
     let mut k = 0;
     while k < toks.len() {
@@ -225,12 +235,24 @@ pub fn word_starts(s: &Segment) -> Option<Vec<(u32, f32)>> {
         }
         let (from, to) = (s.heard[st].0 as f64, s.heard[st].1 as f64);
         let inner: Vec<(f64, f64)> = s.pauses.iter().map(|p| (p[1] as f64, p[2] as f64)).filter(|&(a, b)| a > from && b < to).collect();
-        let speech = ((to - from) - inner.iter().map(|(a, b)| b - a).sum::<f64>()).max(0.0);
+        let mut speech = ((to - from) - inner.iter().map(|(a, b)| b - a).sum::<f64>()).max(0.0);
         let (c0, c1) = (toks[k].0, toks[e - 1].1);
         let len = (c1 - c0).max(1) as f64;
+        // none of the line's words was heard in this stretch: it holds mostly something the line
+        // does not (another voice in another language, which the model left out), and the words
+        // placed in it were said next to the speech that follows, at its end; or, with nothing
+        // heard after it, next to what came before, at its start. At the pace people speak.
+        let mut lead = 0.0;
+        if !matching[st] {
+            let needed = (len / CHARS_A_SECOND).min(speech);
+            if matching[st + 1..].iter().any(|m| *m) {
+                lead = speech - needed;
+            }
+            speech = needed;
+        }
         for tok in &toks[k..e] {
             let share = (tok.0 - c0) as f64 / len;
-            let t = skip_pauses(from, share * speech, &inner);
+            let t = skip_pauses(from, lead + share * speech, &inner);
             out.push((tok.0 as u32, ((t * 100.0).round() / 100.0) as f32));
         }
         k = e;
@@ -410,6 +432,25 @@ mod tests {
         assert_eq!(s.words.len(), 7);
         assert!(s.words[4].1 >= 3.5, "\"four\" still starts after the pause: {:?}", s.words);
         assert!(s.words[2].1 < 3.0, "and \"three\" before it: {:?}", s.words);
+    }
+
+    #[test]
+    fn words_left_out_of_a_stretch_of_another_voice_go_at_its_end() {
+        // English, then twelve seconds of recitation and a little English, then English: the
+        // recitation is not in the line, and hearing that stretch again gives only the recitation
+        let mut s = line("the realist is mind independent meaning pegged on or subject to what any of us believes", (36.0, 58.0), vec![[0.3, 39.2, 40.0], [0.8, 52.1, 52.6]]);
+        s.heard = vec![
+            (36.0, 39.2, "the realist is mind independent meaning".into()),
+            (40.0, 52.1, "كذلك أوحينا إليك قرآنا عربيا لتنذر أم القرى".into()),
+            (52.6, 58.0, "what any of us believes".into()),
+        ];
+        let w = word_starts(&s).unwrap();
+        let text: Vec<char> = s.text.chars().collect();
+        let at = |k: usize| text[w[k].0 as usize..].iter().take_while(|c| !c.is_whitespace()).collect::<String>();
+        assert_eq!(at(6), "pegged");
+        assert!(w[6].1 > 49.5 && w[6].1 < 52.1, "said just before the English that follows, not over the recitation: {:?}", w[6]);
+        assert!(w[10].1 < 52.1, "\"to\" still before the pause: {:?}", w[10]);
+        assert!(w.windows(2).all(|p| p[0].1 <= p[1].1), "in order: {w:?}");
     }
 
     #[test]

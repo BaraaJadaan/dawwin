@@ -41,6 +41,18 @@ impl std::fmt::Display for VoiceDied {
 
 impl std::error::Error for VoiceDied {}
 
+/// The voice took longer than it may, and Dawwin ended it: a slow sentence, not a GPU that failed.
+#[derive(Debug)]
+pub struct VoiceTimedOut(pub String);
+
+impl std::fmt::Display for VoiceTimedOut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for VoiceTimedOut {}
+
 pub struct VoiceProcess {
     child: Child,
     stdin: ChildStdin,
@@ -51,12 +63,20 @@ pub struct VoiceProcess {
     pub device: String,
     /// It was started with the GPU build of audio.cpp's library
     pub gpu_library: bool,
+    /// How long a sentence may take: seconds usually; a slow processor with a large voice, a minute
+    /// or two
+    pub speak_within: Duration,
 }
 
 impl VoiceProcess {
     /// Start the program; `lib` is the folder of audio.cpp's library, when it is not beside it.
     pub fn spawn(exe: &Path, lib: Option<&Path>, log: &Path) -> Result<Self> {
+        Self::spawn_with_env(exe, lib, log, &[])
+    }
+
+    fn spawn_with_env(exe: &Path, lib: Option<&Path>, log: &Path, env: &[(&str, &str)]) -> Result<Self> {
         let mut cmd = Command::new(exe);
+        cmd.envs(env.iter().copied());
         if let Some(lib) = lib {
             cmd.arg("--lib").arg(lib);
         }
@@ -94,7 +114,7 @@ impl VoiceProcess {
                 t.push_back(line);
             }
         });
-        Ok(VoiceProcess { child, stdin, lines, tail, next_id: 1, loaded: None, device: String::new(), gpu_library: false })
+        Ok(VoiceProcess { child, stdin, lines, tail, next_id: 1, loaded: None, device: String::new(), gpu_library: false, speak_within: Duration::from_secs(300) })
     }
 
     /// It holds the GPU: its model is loaded there.
@@ -123,15 +143,20 @@ impl VoiceProcess {
         if writeln!(self.stdin, "{line}").and_then(|_| self.stdin.flush()).is_err() {
             return Err(self.died());
         }
+        let id = request.get("id").filter(|i| !i.is_null()).cloned();
+        let deadline = std::time::Instant::now() + timeout;
         loop {
-            match self.lines.recv_timeout(timeout) {
-                Ok(l) => match serde_json::from_str::<Value>(&l) {
-                    Ok(v) => return Ok(v),
-                    Err(_) => continue, // something it printed that is not an answer
-                },
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.lines.recv_timeout(left) {
+                Ok(l) => {
+                    if is_answer(&l, id.as_ref()) {
+                        return Ok(serde_json::from_str(&l)?);
+                    }
+                    // something else it printed (its library's own output, say): not the answer
+                }
                 Err(RecvTimeoutError::Timeout) if self.alive() => {
                     let _ = self.child.kill();
-                    return Err(VoiceDied(crate::tr!("The voice did not answer in {} seconds.", timeout.as_secs())).into());
+                    return Err(VoiceTimedOut(crate::tr!("The voice did not answer in {} seconds.", timeout.as_secs())).into());
                 }
                 Err(_) => return Err(self.died()),
             }
@@ -171,8 +196,7 @@ impl VoiceProcess {
                 r.insert(k.clone(), x.clone());
             }
         }
-        // a sentence takes seconds; a slow processor with a large voice, a minute or two
-        let v = self.ask(req, Duration::from_secs(300))?;
+        let v = self.ask(req, self.speak_within)?;
         if v["ok"] != true {
             return Err(anyhow!("{}", v["error"].as_str().unwrap_or("the voice could not read this sentence")));
         }
@@ -187,6 +211,17 @@ impl Drop for VoiceProcess {
             let _ = self.child.wait();
         }
     }
+}
+
+/// Whether a line the program wrote is the answer to the request with `id` (None: a request without
+/// one, the load): an object that says whether it went well, with that id, or with none for the load.
+fn is_answer(line: &str, id: Option<&Value>) -> bool {
+    let Ok(v) = serde_json::from_str::<Value>(line) else { return false };
+    if !v.get("ok").is_some_and(Value::is_boolean) {
+        return false;
+    }
+    let theirs = v.get("id").filter(|i| !i.is_null());
+    theirs == id
 }
 
 // ------------------------------------------------------------------ sound files
@@ -286,6 +321,57 @@ pub fn join(pieces: &[(u32, Vec<f32>)], gap: f32, pause: f32) -> (u32, Vec<f32>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The stand-in voice (`cargo test` builds the examples too).
+    fn stand_in() -> Option<PathBuf> {
+        let exe = std::env::current_exe().ok()?.parent()?.parent()?.join("examples").join("fake_voice.exe");
+        exe.is_file().then_some(exe)
+    }
+
+    #[test]
+    fn only_an_answer_to_this_request_is_taken() {
+        let one = serde_json::json!(1);
+        assert!(is_answer(r#"{"id":1,"ok":true,"seconds":2.0}"#, Some(&one)));
+        assert!(!is_answer(r#"{"id":2,"ok":true,"seconds":2.0}"#, Some(&one)), "another request's");
+        assert!(!is_answer(r#"{"log":"warming up"}"#, Some(&one)));
+        assert!(!is_answer("[1,2]", Some(&one)));
+        assert!(!is_answer("loading model…", Some(&one)));
+        assert!(is_answer(r#"{"ok":true,"device":"CPU"}"#, None), "the load's");
+        assert!(is_answer(r#"{"id":null,"ok":false,"error":"x"}"#, None));
+        assert!(!is_answer(r#"{"id":7,"ok":true}"#, None), "a sentence's is not the load's");
+    }
+
+    #[test]
+    fn stray_lines_do_not_shift_the_answers() {
+        let Some(exe) = stand_in() else { return println!("skipped: cargo build --example fake_voice") };
+        let dir = std::env::temp_dir().join(format!("dawwin-voice-noise-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = VoiceProcess::spawn_with_env(&exe, None, &dir.join("voice.log"), &[("FAKE_VOICE_NOISE", "1"), ("FAKE_VOICE_DELAY_MS", "10")]).unwrap();
+        p.load(&Load { family: "stand-in".into(), model: dir.clone(), gpu: false, options: Vec::new() }).unwrap();
+        // the stand-in speaks 0.06 s a letter, at least 0.4 s
+        for (k, (text, seconds)) in [("short", 0.4), ("a longer sentence than that", 1.62), ("hi", 0.4)].into_iter().enumerate() {
+            let got = p.speak(text, "en", &serde_json::json!({ "voice_id": "en-f" }), &dir.join(format!("{k}.wav"))).unwrap();
+            assert!((got - seconds).abs() < 0.01, "{text}: {got}");
+        }
+        drop(p);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_voice_too_slow_is_ended_and_the_gpu_not_blamed() {
+        let Some(exe) = stand_in() else { return println!("skipped: cargo build --example fake_voice") };
+        let dir = std::env::temp_dir().join(format!("dawwin-voice-slow-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut p = VoiceProcess::spawn_with_env(&exe, None, &dir.join("voice.log"), &[("FAKE_VOICE_DELAY_MS", "5000")]).unwrap();
+        p.load(&Load { family: "stand-in".into(), model: dir.clone(), gpu: true, options: Vec::new() }).unwrap();
+        p.speak_within = Duration::from_secs(1);
+        let e = p.speak("slow", "en", &serde_json::json!({}), &dir.join("0.wav")).err().expect("too slow");
+        assert!(e.is::<VoiceTimedOut>() && !e.is::<VoiceDied>(), "{e:#}");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(!p.alive(), "it was ended");
+        drop(p);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn wavs_are_read_and_joined_with_their_pauses() {

@@ -452,6 +452,9 @@ impl Reader {
                             procs.retain(|_, p| p.alive());
                         }
                     }
+                    // one that took too long was ended (a slow sentence, the GPU not to blame): it starts
+                    // again with the next sentence
+                    procs.retain(|_, p| p.alive());
                     self.gpu_held.store(procs.values().any(|p| p.on_gpu()), Ordering::SeqCst);
                     result.map_err(|e| format!("{e:#}"))
                 }

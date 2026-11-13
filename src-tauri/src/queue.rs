@@ -329,6 +329,11 @@ impl Core {
     /// Read aloud is about to load a voice on the GPU: the speech engine and the translator, idle,
     /// let go of it first. False when one is at work and keeps it (the voice then waits).
     pub fn free_gpu_for_voice(&self) -> bool {
+        // at work on something that is no job (finding the GPU at the start, say): what it loads it
+        // ends by itself, and waiting for it would only delay the first sentence
+        if LOOP_BUSY.load(Ordering::SeqCst) {
+            return false;
+        }
         let (tx, rx) = std::sync::mpsc::channel();
         self.send(Msg::FreeGpu(tx));
         rx.recv_timeout(Duration::from_secs(15)).is_ok()
@@ -1147,6 +1152,18 @@ fn give_up_on_gpu(core: &Arc<Core>, engine: &mut Option<EngineProcess>) {
     });
 }
 
+/// The engine thread is handling a message (a job, finding the GPU…), not waiting for one.
+static LOOP_BUSY: AtomicBool = AtomicBool::new(false);
+
+/// Marks the engine thread idle again when the message is done with, however it ends.
+struct Idle;
+
+impl Drop for Idle {
+    fn drop(&mut self) {
+        LOOP_BUSY.store(false, Ordering::SeqCst);
+    }
+}
+
 fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
     let mut engine: Option<EngineProcess> = None;
     // the speech engine and the translator take turns: both want the GPU's memory
@@ -1181,6 +1198,8 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
             Err(RecvTimeoutError::Disconnected) => break,
         };
         last_used = Instant::now();
+        LOOP_BUSY.store(true, Ordering::SeqCst);
+        let _idle = Idle;
         // a voice reading aloud on the GPU gives it back first: they take turns, as these two do
         if !matches!(msg, Msg::FreeGpu(_)) {
             crate::reading::let_go_of_gpu(&core.app);

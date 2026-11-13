@@ -83,6 +83,31 @@ impl Reader for StandIn {
     }
 }
 
+/// One at a time: while a press of the shortcut is still taking the selection, another press is
+/// dropped. Two at once would each keep the clipboard and press Ctrl+C, and the second would keep
+/// the first one's copy and put that back in place of the user's clipboard.
+#[derive(Default)]
+pub struct OneAtATime(std::sync::atomic::AtomicBool);
+
+/// Held while a press is taken care of; letting it go lets the next one in.
+pub struct Turn<'a>(&'a OneAtATime);
+
+impl OneAtATime {
+    pub const fn new() -> Self {
+        OneAtATime(std::sync::atomic::AtomicBool::new(false))
+    }
+    pub fn try_turn(&self) -> Option<Turn<'_>> {
+        // lazily: a turn made and dropped would let the next press in
+        (!self.0.swap(true, std::sync::atomic::Ordering::SeqCst)).then(|| Turn(self))
+    }
+}
+
+impl Drop for Turn<'_> {
+    fn drop(&mut self) {
+        self.0 .0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 /// What the user is told after a press of the shortcut. Never the text itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -189,6 +214,17 @@ mod tests {
             Outcome::CopyOff
         });
         assert_eq!(seen, Some(false));
+    }
+
+    #[test]
+    fn a_press_while_another_is_taking_the_selection_is_dropped() {
+        static PRESSES: OneAtATime = OneAtATime::new();
+        let first = PRESSES.try_turn().expect("the first press goes ahead");
+        assert!(PRESSES.try_turn().is_none(), "a second press meanwhile is dropped");
+        // from another thread too, as the shortcut's presses come
+        assert!(std::thread::spawn(|| PRESSES.try_turn().is_none()).join().unwrap());
+        drop(first);
+        assert!(PRESSES.try_turn().is_some(), "once it is done, the next press goes ahead");
     }
 
     #[test]

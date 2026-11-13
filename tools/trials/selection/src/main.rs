@@ -44,6 +44,17 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("testwin") => testwin::run(),
         Some("watch") => watch(),
+        Some("history") => {
+            // what Windows answers about its clipboard history to a program not in front (no content)
+            selection::in_sta(|| {
+                use windows::ApplicationModel::DataTransfer::Clipboard as History;
+                println!("history on: {:?}", History::IsHistoryEnabled());
+                match History::GetHistoryItemsAsync().and_then(|op| op.join()) {
+                    Ok(r) => println!("status: {:?}, items: {:?}", r.Status(), r.Items().map(|i| i.Size())),
+                    Err(e) => println!("error: {e}"),
+                }
+            })
+        }
         Some("run") => run(args[1..].to_vec()),
         Some("hotkeys") => {
             // which shortcuts another program already holds (each is let go at once)
@@ -469,6 +480,8 @@ fn launch(name: &str, dir: &Path) -> Option<Target> {
             const F3: &[(&[VIRTUAL_KEY], VIRTUAL_KEY)] = &[(&[], VK_F3)];
             const F4: &[(&[VIRTUAL_KEY], VIRTUAL_KEY)] = &[(&[], VK_F4)];
             const F5: &[(&[VIRTUAL_KEY], VIRTUAL_KEY)] = &[(&[], VK_F5)];
+            const F6: &[(&[VIRTUAL_KEY], VIRTUAL_KEY)] = &[(&[], VK_F6)];
+            const F7: &[(&[VIRTUAL_KEY], VIRTUAL_KEY)] = &[(&[], VK_F7)];
             Target {
                 name: "test window",
                 window: format!("{TOKEN} testwin"),
@@ -478,6 +491,8 @@ fn launch(name: &str, dir: &Path) -> Option<Target> {
                     Case { name: "edit box, nothing selected", select: Sel::Keys(F3), expect: None },
                     Case { name: "box without a text pattern", select: Sel::Keys(F4), expect: Some("بلا نمط") },
                     Case { name: "box without a text pattern, nothing selected", select: Sel::Keys(F5), expect: None },
+                    Case { name: "box that copies 0.9 s after Ctrl+C", select: Sel::Keys(F6), expect: Some("بلا نمط") },
+                    Case { name: "box that copies 3.5 s after Ctrl+C", select: Sel::Keys(F7), expect: None },
                 ],
                 running: None,
                 note: String::new(),
@@ -689,8 +704,14 @@ fn scenarios(dir: &Path, names: &[String], mode: &Arc<Mutex<Mode>>, rx: &mpsc::R
                     rows.push(format!("| {} | {} | {way} | the window lost the front | | |", target.name, case.name));
                     continue;
                 }
+                let history_before = newest_history_id();
                 let pressed = rx.recv_timeout(Duration::from_secs(6));
                 std::thread::sleep(Duration::from_millis(150));
+                // a copy that comes after Dawwin stopped waiting is put back when it comes
+                if case.name.contains("3.5 s") {
+                    std::thread::sleep(Duration::from_millis(4500));
+                }
+                let history_after = newest_history_id();
                 let after = Clipboard::save();
                 own_sequence = sequence();
                 own_input = keys.sent;
@@ -728,6 +749,11 @@ fn scenarios(dir: &Path, names: &[String], mode: &Arc<Mutex<Mode>>, rx: &mpsc::R
                     Err(_) => ("✗ the shortcut gave no answer".to_string(), 0),
                 };
                 let mut result = result;
+                if history_before != history_after {
+                    result.push_str("; LEFT A NEW ITEM IN CLIPBOARD HISTORY");
+                } else if history_before.is_some() {
+                    result.push_str("; clipboard history as it was");
+                }
                 if let Some(running) = &target.running {
                     let alive = running_with(running) > 0;
                     result.push_str(if alive { "; its program still runs" } else { "; ITS PROGRAM WAS STOPPED" });
@@ -761,6 +787,28 @@ fn scenarios(dir: &Path, names: &[String], mode: &Arc<Mutex<Mode>>, rx: &mpsc::R
         bring_front(user_window);
     }
     format!("{}\n\n{back}\n", rows.join("\n"))
+}
+
+/// The id of the newest item in Windows' clipboard history (Win+V), never its content: whether
+/// the program's copy was left there.
+fn newest_history_id() -> Option<String> {
+    selection::in_sta(newest_history_id_here)
+}
+
+fn newest_history_id_here() -> Option<String> {
+    use windows::ApplicationModel::DataTransfer::{Clipboard as History, ClipboardHistoryItemsResultStatus};
+    (|| -> windows::core::Result<Option<String>> {
+        if !History::IsHistoryEnabled()? {
+            return Ok(None);
+        }
+        let r = History::GetHistoryItemsAsync()?.join()?;
+        if r.Status()? != ClipboardHistoryItemsResultStatus::Success {
+            return Ok(None);
+        }
+        Ok(r.Items()?.into_iter().next().map(|i| i.Id().map(|s| s.to_string()).unwrap_or_default()))
+    })()
+    .ok()
+    .flatten()
 }
 
 fn restore_theirs(c: &Clipboard) -> bool {

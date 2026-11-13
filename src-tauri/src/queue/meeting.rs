@@ -1286,7 +1286,12 @@ pub fn on_close(window: &tauri::Window, api: &tauri::CloseRequestApi) {
         return;
     }
     api.prevent_close();
-    let app = window.app_handle().clone();
+    ask_to_quit(window.app_handle().clone());
+}
+
+/// A recording runs and Dawwin is to quit (its window closed, or Quit in the notification area):
+/// ask, and on yes stop the recording properly before quitting.
+pub fn ask_to_quit(app: AppHandle) {
     std::thread::spawn(move || {
         use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
         let quit = app
@@ -1298,7 +1303,7 @@ pub fn on_close(window: &tauri::Window, api: &tauri::CloseRequestApi) {
             .blocking_show();
         if quit {
             core_of(&app).stop_recording_and_wait();
-            app.exit(0);
+            crate::screen::app::quit_now(&app);
         }
     });
 }

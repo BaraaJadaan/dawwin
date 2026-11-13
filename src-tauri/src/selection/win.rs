@@ -10,13 +10,14 @@ use windows::Win32::Graphics::Gdi::{DeleteEnhMetaFile, GetEnhMetaFileBits, SetEn
 use windows::Win32::Security::{GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TokenIntegrityLevel, TOKEN_MANDATORY_LABEL, TOKEN_QUERY};
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
+    CloseClipboard, EmptyClipboard, EnumClipboardFormats, GetClipboardData, GetClipboardOwner, GetClipboardSequenceNumber, OpenClipboard, RegisterClipboardFormatW, SetClipboardData,
 };
+use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
 use windows::Win32::UI::Accessibility::{CUIAutomation8, IUIAutomation, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern, SupportedTextSelection_None, UIA_TextPatternId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, MapVirtualKeyW, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LWIN, VK_MENU,
+    GetAsyncKeyState, GetLastInputInfo, MapVirtualKeyW, LASTINPUTINFO, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LWIN, VK_MENU,
     VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, GetClassNameW, GetForegroundWindow, GetWindowThreadProcessId, HWND_MESSAGE, WINDOW_EX_STYLE, WINDOW_STYLE};
@@ -29,13 +30,15 @@ pub struct System {
     pub shortcut_key: u16,
     /// How long UI Automation may take before Ctrl+C is tried
     pub uia_wait: Duration,
-    /// The window that was in front when the shortcut was pressed
+    /// The window that was in front when the shortcut was pressed, and its programs: its own and
+    /// those of the windows inside it (an app that Windows' ApplicationFrameHost holds is one)
     front: HWND,
+    pids: Vec<u32>,
 }
 
 impl System {
     pub fn new(shortcut_key: u16) -> Self {
-        System { shortcut_key, uia_wait: Duration::from_millis(1500), front: HWND::default() }
+        System { shortcut_key, uia_wait: Duration::from_millis(1500), front: HWND::default(), pids: Vec::new() }
     }
 }
 
@@ -51,6 +54,7 @@ impl Probe for System {
         self.front = hwnd;
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        self.pids = window_pids(hwnd, pid);
         let (process, level) = process_info(pid);
         Some(Front { class: class_name(hwnd), process, higher_rights: level.map_or(level_unknown_is_higher(pid), |l| l > own_level()) })
     }
@@ -76,7 +80,7 @@ impl Probe for System {
         if unsafe { GetForegroundWindow() } != self.front {
             return Copied::Failed("another window came to the front".into());
         }
-        copy_selection()
+        copy_selection(self.pids.clone())
     }
 }
 
@@ -216,8 +220,58 @@ fn key(vk: VIRTUAL_KEY, up: bool) -> INPUT {
     }
 }
 
+/// How long a program has to copy after Ctrl+C before Dawwin takes it that nothing was selected:
+/// Word with a long selection, a remote desktop or a busy program can take over half a second.
+const COPY_WAIT: Duration = Duration::from_millis(2500);
+/// A copy that comes later still is the program's (see `whose`): it is put back as it comes.
+const LATE_WATCH: Duration = Duration::from_secs(15);
+
+/// The system's tick of the last keyboard or mouse input.
+fn last_input() -> u32 {
+    let mut li = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    unsafe {
+        let _ = GetLastInputInfo(&mut li);
+    }
+    li.dwTime
+}
+
+/// The programs of a window and of the windows inside it.
+fn window_pids(hwnd: HWND, pid: u32) -> Vec<u32> {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::UI::WindowsAndMessaging::EnumChildWindows;
+    unsafe extern "system" fn each(child: HWND, lp: LPARAM) -> windows::core::BOOL {
+        let v = &mut *(lp.0 as *mut Vec<u32>);
+        let mut p = 0u32;
+        GetWindowThreadProcessId(child, Some(&mut p));
+        if p != 0 && !v.contains(&p) {
+            v.push(p);
+        }
+        true.into()
+    }
+    let mut pids = vec![pid];
+    unsafe {
+        let _ = EnumChildWindows(Some(hwnd), Some(each), LPARAM(&mut pids as *mut _ as isize));
+    }
+    pids
+}
+
+/// The program the clipboard's owner belongs to, if it has an owner window.
+fn clipboard_owner_pid() -> Option<u32> {
+    let owner = unsafe { GetClipboardOwner() }.ok().filter(|h| !h.is_invalid())?;
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(owner, Some(&mut pid)) };
+    (pid != 0).then_some(pid)
+}
+
+/// Whether the clipboard holds the program's answer to Dawwin's Ctrl+C, not the user's own copy or
+/// another program's (a password manager clearing its copy, say).
+fn programs_copy(target: &[u32], sent_at: u32) -> bool {
+    let user_input = last_input().wrapping_sub(sent_at) < u32::MAX / 2 && last_input().wrapping_sub(sent_at) > 150;
+    super::whose(clipboard_owner_pid(), target, user_input)
+}
+
 /// Send Ctrl+C to the window in front, read the text it copies, and put the clipboard back.
-fn copy_selection() -> Copied {
+fn copy_selection(target: Vec<u32>) -> Copied {
     let owner = Owner::new();
     let Some(saved) = Clipboard::save() else {
         return Copied::Failed("the clipboard is busy".into());
@@ -227,30 +281,118 @@ fn copy_selection() -> Copied {
     if unsafe { SendInput(&keys, std::mem::size_of::<INPUT>() as i32) } != keys.len() as u32 {
         return Copied::Failed("Windows did not let Dawwin press Ctrl+C".into());
     }
+    let sent_at = unsafe { GetTickCount() };
     // wait for the copy, then for the program to finish writing all its formats
-    let start = Instant::now();
-    let mut seen = before;
-    let mut settled = None;
-    while start.elapsed() < Duration::from_millis(500) {
-        std::thread::sleep(Duration::from_millis(10));
-        let now = unsafe { GetClipboardSequenceNumber() };
-        if now != seen {
-            seen = now;
-            settled = Some(Instant::now());
-        } else if settled.is_some_and(|t| t.elapsed() >= Duration::from_millis(40)) {
-            break;
-        }
-    }
-    if seen == before {
+    let Some(seen) = wait_for_copy(before, COPY_WAIT) else {
+        // nothing yet: if the program copies later, what it copies is put back as it comes
+        watch_late(saved, before, target, sent_at);
         return Copied::Nothing;
+    };
+    // the clipboard changed, but not by the program: that copy is someone's own, and stays
+    if !programs_copy(&target, sent_at) {
+        return Copied::Failed("the clipboard changed meanwhile".into());
     }
     let read = read_copied_text();
     let after_read = unsafe { GetClipboardSequenceNumber() };
     // the user's own copy since then wins over what Dawwin kept
     if after_read == seen {
         saved.restore(owner.0);
+        // the history asks the clipboard's owner for what it holds: Dawwin's window, gone first
+        drop(owner);
+        if let Copied::Text(t) | Copied::Line(t) = &read {
+            forget_in_history(t);
+        }
     }
-    read
+    read.without_line()
+}
+
+/// The clipboard's counter once it has moved and settled, or None if it did not move in time.
+fn wait_for_copy(before: u32, within: Duration) -> Option<u32> {
+    let start = Instant::now();
+    let mut seen = before;
+    let mut settled = None;
+    while start.elapsed() < within {
+        std::thread::sleep(Duration::from_millis(10));
+        let now = unsafe { GetClipboardSequenceNumber() };
+        if now != seen {
+            seen = now;
+            settled = Some(Instant::now());
+        } else if settled.is_some_and(|t| t.elapsed() >= Duration::from_millis(60)) {
+            break;
+        }
+    }
+    (seen != before).then_some(seen)
+}
+
+/// A program that copies after Dawwin stopped waiting: its copy is put back as it comes, with the
+/// clipboard Dawwin kept, unless it is someone else's.
+fn watch_late(saved: Clipboard, before: u32, target: Vec<u32>, sent_at: u32) {
+    let _ = std::thread::Builder::new().name("late-copy".into()).spawn(move || {
+        let Some(_) = wait_for_copy(before, LATE_WATCH) else { return };
+        if !programs_copy(&target, sent_at) {
+            return;
+        }
+        let read = read_copied_text();
+        let owner = Owner::new();
+        saved.restore(owner.0);
+        drop(owner);
+        if let Copied::Text(t) | Copied::Line(t) = &read {
+            forget_in_history(t);
+        }
+    });
+}
+
+/// Take the program's copy of the selection out of Windows' clipboard history (Win+V), where
+/// Dawwin's Ctrl+C made it land: the newest item, if it is that text. What Dawwin puts back is kept
+/// out of the history already.
+pub fn forget_in_history(text: &str) -> bool {
+    let text = text.to_string();
+    in_sta(move || forget_in_history_here(&text))
+}
+
+/// Run `f` on a thread of its own in a single-threaded apartment, which Windows' clipboard history
+/// asks for.
+pub fn in_sta<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T
+where
+    T: Default,
+{
+    use windows::Win32::System::Com::COINIT_APARTMENTTHREADED;
+    std::thread::spawn(move || unsafe {
+        let com = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let r = f();
+        if com.is_ok() {
+            CoUninitialize();
+        }
+        r
+    })
+    .join()
+    .unwrap_or_default()
+}
+
+fn forget_in_history_here(text: &str) -> bool {
+    use windows::ApplicationModel::DataTransfer::{Clipboard as History, ClipboardHistoryItemsResultStatus, StandardDataFormats};
+    (|| -> windows::core::Result<bool> {
+        if !History::IsHistoryEnabled()? {
+            return Ok(false);
+        }
+        let items = History::GetHistoryItemsAsync()?.join()?;
+        if items.Status()? != ClipboardHistoryItemsResultStatus::Success {
+            return Ok(false);
+        }
+        let want = text.replace("\r\n", "\n");
+        // the newest few: the program may add more than one item for one copy
+        for item in items.Items()?.into_iter().take(3) {
+            let content = item.Content()?;
+            if !content.Contains(&StandardDataFormats::Text()?)? {
+                continue;
+            }
+            if content.GetTextAsync()?.join()?.to_string().replace("\r\n", "\n") == want {
+                return History::DeleteItemFromHistory(&item);
+            }
+        }
+        Ok(false)
+    })()
+    .unwrap_or(false)
 }
 
 /// The text just copied, or that it was a whole line copied for an empty selection.
@@ -261,10 +403,11 @@ fn read_copied_text() -> Copied {
     let marks = ["MSDEVLineSelect", "VisualStudioEditorOperationsLineCutCopyClipboardTag"].map(|n| format_id(n));
     let vscode = format_id("vscode-editor-data");
     let result = unsafe {
+        let text = || read_global(13).map(|b| utf16z(&b)).unwrap_or_default();
         if marks.iter().any(|&f| f != 0 && GetClipboardData(f).is_ok()) {
-            Copied::WholeLine
+            Copied::Line(text())
         } else if vscode != 0 && read_global(vscode).is_some_and(|b| String::from_utf8_lossy(&b).replace(' ', "").contains("\"isFromEmptySelection\":true")) {
-            Copied::WholeLine
+            Copied::Line(text())
         } else {
             match read_global(13) {
                 Some(bytes) => Copied::Text(utf16z(&bytes)),

@@ -758,7 +758,7 @@ pub fn run() {
                     return;
                 }
                 queue::meeting::on_close(window, api);
-                screen::app::quit_on_close(window);
+                screen::app::quit_on_close(window, api);
             }
         })
         .setup(move |app| {

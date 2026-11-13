@@ -13,6 +13,9 @@ use super::{autostart, pressed, say::Say, Note, Reader, Settings};
 use crate::queue::Core;
 
 const TRAY: &str = "dawwin-tray";
+
+/// The shortcut's presses, one at a time.
+static PRESSES: super::OneAtATime = super::OneAtATime::new();
 const PLAYER: &str = "player";
 
 /// Held by the app.
@@ -94,9 +97,14 @@ pub fn start(app: &AppHandle) {
     let handle = app.clone();
     #[cfg(windows)]
     let hotkey = super::shortcut::Hotkey::start(move || {
+        // a press while another one is still taking the selection is dropped (see OneAtATime)
+        let Some(turn) = PRESSES.try_turn() else { return };
         let app = handle.clone();
         // the capture waits for the keys to be let go: not on the shortcut's thread
-        std::thread::spawn(move || on_press(&app));
+        std::thread::spawn(move || {
+            let _turn = turn;
+            on_press(&app);
+        });
     });
     #[cfg(not(windows))]
     let _ = handle;
@@ -264,7 +272,7 @@ fn tray(app: &AppHandle, on: bool) {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "open" => show_main(app),
             "stop" => app.state::<Screen>().reader.stop(),
-            "quit" => app.exit(0),
+            "quit" => quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -295,11 +303,45 @@ pub fn close_to_tray(window: &Window, api: &tauri::CloseRequestApi) -> bool {
 }
 
 /// Otherwise Dawwin quits as before, unless a recording is asking first: the small player, hidden,
-/// must not keep it running.
-pub fn quit_on_close(window: &Window) {
-    if window.label() == "main" && !crate::queue::meeting::is_recording() {
-        window.app_handle().exit(0);
+/// must not keep it running, and a sound being saved is stopped and cleaned up first.
+pub fn quit_on_close(window: &Window, api: &tauri::CloseRequestApi) {
+    if window.label() != "main" || crate::queue::meeting::is_recording() {
+        return;
     }
+    api.prevent_close();
+    let _ = window.hide();
+    let app = window.app_handle().clone();
+    std::thread::spawn(move || quit_now(&app));
+}
+
+/// Quit in the notification area: as closing the window does, a recording asks first.
+pub fn quit(app: &AppHandle) {
+    if crate::queue::meeting::is_recording() {
+        crate::queue::meeting::ask_to_quit(app.clone());
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || quit_now(&app));
+}
+
+/// Stop what Dawwin started that would outlive it, then quit: a reading being saved as sound (its
+/// ffmpeg, its `.part` file, its WAV in the cache), and a selection being read.
+pub fn quit_now(app: &AppHandle) {
+    if let Some(screen) = app.try_state::<Screen>() {
+        screen.reader.stop();
+    }
+    if let Some(core) = app.try_state::<Arc<Core>>() {
+        let saving = |c: &Core| c.snapshot().queue.into_iter().filter(|j| j.kind == "reading_sound" && j.status == "saving_audio").map(|j| j.id).collect::<Vec<_>>();
+        for id in saving(&core) {
+            core.cancel(&id);
+        }
+        // a sentence the voice is making finishes first: a few seconds at most
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while !saving(&core).is_empty() && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    app.exit(0);
 }
 
 // ---- commands ----

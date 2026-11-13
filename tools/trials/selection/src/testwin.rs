@@ -1,7 +1,8 @@
 //! A small window of made-up text: a standard edit box (UI Automation gives it a text pattern) and
 //! a box of its own that has none but copies on Ctrl+C, as many programs do. Keys, sent only to
 //! this window: F2 selects the edit box's first line, F3 selects nothing in it, F4 selects the
-//! whole of the other box, F5 nothing in it.
+//! whole of the other box, F5 nothing in it; F6 and F7 select it too, but it copies 0.9 s and 3.5 s
+//! after Ctrl+C, as a busy program does.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -9,7 +10,7 @@ use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{BeginPaint, DrawTextW, EndPaint, FillRect, GetSysColorBrush, COLOR_HIGHLIGHT, COLOR_WINDOW, DT_RTLREADING, DT_WORDBREAK, PAINTSTRUCT};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_F2, VK_F3, VK_F4, VK_F5};
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_CONTROL, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6, VK_F7};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 pub const EDIT_TEXT: &str = "مرحبًا، هذه جملة مختلقة للتجربة في Dawwin 1.8.0: هل يُقرأ «النص المحدد» جيدًا؟\r\nThe second line is made up too, with one Arabic word: تجربة.";
@@ -17,6 +18,8 @@ pub const EDIT_FIRST_LINE: &str = "مرحبًا، هذه جملة مختلقة �
 pub const BOX_TEXT: &str = "نص في صندوق بلا نمط نصّي (no text pattern), copied by Ctrl+C: 3.5% فقط!";
 
 static SELECTED: AtomicBool = AtomicBool::new(false);
+/// How long the box takes to copy after Ctrl+C, in milliseconds (0: at once)
+static DELAY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static mut EDIT: HWND = HWND(std::ptr::null_mut());
 static mut BOX: HWND = HWND(std::ptr::null_mut());
 
@@ -53,8 +56,18 @@ unsafe extern "system" fn box_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM)
         WM_KEYDOWN if wp.0 == 'C' as usize && GetKeyState(VK_CONTROL.0 as i32) < 0 => {
             if SELECTED.load(Ordering::SeqCst) {
                 // what most programs do on Ctrl+C: the selection, as text, on the clipboard
-                copy_text(hwnd, BOX_TEXT);
+                match DELAY.load(Ordering::SeqCst) {
+                    0 => copy_text(hwnd, BOX_TEXT),
+                    ms => {
+                        SetTimer(Some(hwnd), 1, ms, None);
+                    }
+                }
             }
+            LRESULT(0)
+        }
+        WM_TIMER => {
+            let _ = KillTimer(Some(hwnd), 1);
+            copy_text(hwnd, BOX_TEXT);
             LRESULT(0)
         }
         WM_PAINT => {
@@ -125,8 +138,9 @@ pub fn run() {
                         SendMessageW(EDIT, 0x00B1, Some(WPARAM(0)), Some(LPARAM(0)));
                         true
                     }
-                    k if k == VK_F4.0 || k == VK_F5.0 => {
-                        SELECTED.store(k == VK_F4.0, Ordering::SeqCst);
+                    k if k == VK_F4.0 || k == VK_F5.0 || k == VK_F6.0 || k == VK_F7.0 => {
+                        SELECTED.store(k != VK_F5.0, Ordering::SeqCst);
+                        DELAY.store(if k == VK_F6.0 { 900 } else if k == VK_F7.0 { 3500 } else { 0 }, Ordering::SeqCst);
                         let _ = SetFocus(Some(BOX));
                         let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(BOX), None, true);
                         true

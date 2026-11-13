@@ -17,7 +17,7 @@ mod win;
 // the clipboard's own type is for the trial (tools/trials/selection) and the tests
 #[cfg(windows)]
 #[allow(unused_imports)]
-pub use win::{Clipboard, System};
+pub use win::{in_sta, Clipboard, System};
 
 /// The window in front when the shortcut was pressed.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -59,9 +59,32 @@ pub enum Copied {
     WholeLine,
     /// The clipboard did not change: nothing was selected
     Nothing,
+    /// Inside `win.rs` only: a whole line copied, with its text, before it is taken as `WholeLine`
+    #[allow(dead_code)]
+    Line(String),
     /// The shortcut's keys were still held: Ctrl+C would have been another shortcut
     KeysHeld,
     Failed(String),
+}
+
+impl Copied {
+    /// A whole line copied for an empty selection is not read.
+    pub fn without_line(self) -> Copied {
+        match self {
+            Copied::Line(_) => Copied::WholeLine,
+            other => other,
+        }
+    }
+}
+
+/// Whether a change of the clipboard after Dawwin's Ctrl+C is the program's answer: its owner
+/// window is the program's, or it has no owner and nobody has touched the keyboard or the mouse
+/// since (a person copies with one or the other). Anything else is someone's own copy, never undone.
+pub fn whose(owner_pid: Option<u32>, target: &[u32], input_since: bool) -> bool {
+    match owner_pid {
+        Some(p) => target.contains(&p),
+        None => !input_since,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,7 +152,7 @@ pub fn capture(p: &mut impl Probe, options: Options) -> Outcome {
             Some(text) => Outcome::Text { text, by: Method::Copy },
             None => Outcome::NothingSelected,
         },
-        Copied::WholeLine | Copied::Nothing => Outcome::NothingSelected,
+        Copied::WholeLine | Copied::Line(_) | Copied::Nothing => Outcome::NothingSelected,
         Copied::KeysHeld => Outcome::KeysHeld,
         Copied::Failed(why) => Outcome::Failed(why),
     }
@@ -250,6 +273,19 @@ mod tests {
         assert_eq!(capture(&mut p, ON), Outcome::NothingSelected, "a whole line copied for an empty selection is not read");
         let mut p = Recorded::new("app.exe", "X", Uia::NoPattern, Copied::KeysHeld);
         assert_eq!(capture(&mut p, ON), Outcome::KeysHeld);
+    }
+
+    #[test]
+    fn only_the_programs_own_copy_is_taken_and_undone() {
+        // its owner window is the program in front
+        assert!(whose(Some(42), &[42], true));
+        // an app held by Windows' ApplicationFrameHost: its own window inside is the program's too
+        assert!(whose(Some(43), &[42, 43], false));
+        // another program's (a password manager clearing its copy) or the user's: left alone
+        assert!(!whose(Some(7), &[42], false));
+        // no owner: the program's only if nobody typed or clicked since Dawwin's Ctrl+C
+        assert!(whose(None, &[42], false));
+        assert!(!whose(None, &[42], true));
     }
 
     #[test]

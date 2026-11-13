@@ -12,7 +12,7 @@
 // (and make_word.ps1). PDFium: the release's dawwin-pdfium-*.tar.xz in DAWWIN_E2E_TOOLS.
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { APP, check, finish, makeHome, open, OUT, PORT, sleep, TOOLS } from "./lib.mjs";
 
@@ -253,6 +253,36 @@ closeMainWindow(a.proc.pid);
 for (let i = 0; i < 20 && alive(a.proc); i++) await sleep(500);
 check("with the shortcut off, closing the window quits Dawwin", !alive(a.proc));
 if (alive(a.proc)) a.close();
+
+// ---- started by Windows, hidden in the notification area; started again from Start, its window opens
+{
+  const settingsFile = join(home, "settings.json");
+  const st = JSON.parse(readFileSync(settingsFile, "utf8"));
+  st.screen = { ...(st.screen || {}), on: true, start_with_windows: true };
+  writeFileSync(settingsFile, JSON.stringify(st));
+  await sleep(1500);
+  const hidden = spawn(APP, ["--hidden"], { stdio: "ignore", env: { ...process.env, ...env, DAWWIN_HOME: home, WEBVIEW2_USER_DATA_FOLDER: join(OUT, "webview-screen-hidden") } });
+  let page;
+  for (let i = 0; i < 80 && !page; i++) {
+    await sleep(500);
+    try { page = (await (await fetch(`http://127.0.0.1:${port}/json`)).json()).find((t) => t.type === "page" && !t.url.includes("player")); } catch { /* not up yet */ }
+  }
+  const ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((r) => (ws.onopen = r));
+  let n = 0;
+  const pending = new Map();
+  ws.onmessage = (m) => { const d = JSON.parse(m.data); if (pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); } };
+  const ev = (expression) => new Promise((r) => { const id = ++n; pending.set(id, (d) => r(d.result?.result?.value)); ws.send(JSON.stringify({ id, method: "Runtime.evaluate", params: { expression, awaitPromise: true, returnByValue: true } })); });
+  await sleep(3000);
+  const shown = () => ev("window.__TAURI__.window.getCurrentWindow().isVisible()");
+  check("started with --hidden and the shortcut on, it waits without its window", (await shown()) === false && alive(hidden));
+  const fromStart = spawn(APP, [], { stdio: "ignore", env: { ...process.env, DAWWIN_HOME: home, WEBVIEW2_USER_DATA_FOLDER: join(OUT, "webview-screen-again") } });
+  await sleep(4000);
+  const state = await ev("window.__TAURI__.core.invoke('screen_state')");
+  check("started again from Start: the hidden one opens its window, the second quits, the shortcut is its own", (await shown()) === true && !alive(fromStart) && state.shortcut.state === "on", { second: alive(fromStart), shortcut: state.shortcut });
+  ws.close();
+  hidden.kill();
+}
 cleanReg();
 server?.close();
 finish();

@@ -10,6 +10,9 @@ description = "Trial for Dawwin 1.8.0: the text selected in other programs, by a
 
 [dependencies]
 windows = { version = "0.62.2", features = [
+    "ApplicationModel_DataTransfer",
+    "Foundation",
+    "Foundation_Collections",
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",

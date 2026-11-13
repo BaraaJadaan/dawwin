@@ -202,7 +202,7 @@ fn sources(core: &Core) -> Result<Box<dyn source::Factory>> {
     if let Ok(spec) = std::env::var("DAWWIN_TEST_RECORD") {
         let ff = setup::ffmpeg(&core.paths);
         let stop = std::sync::atomic::AtomicBool::new(false);
-        let mut files = source::Files { me: None, them: None, t0: 0, silent_default: false };
+        let mut files = source::Files::new(None, None, false);
         for part in spec.split('|') {
             match part.split_once('=') {
                 Some(("me", p)) => files.me = Some(Arc::new(audio::decode(Path::new(p), ff.as_ref(), &stop)?)),
@@ -211,7 +211,6 @@ fn sources(core: &Core) -> Result<Box<dyn source::Factory>> {
                 _ => {}
             }
         }
-        files.t0 = source::now();
         return Ok(Box::new(files));
     }
     let _ = core;

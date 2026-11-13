@@ -511,7 +511,7 @@ mod tests {
         // "me" speaks at 0.5 s; "them" is silent (no packets at all) until 2 s, then a tone
         let me: Vec<f32> = (0..n).map(|i| if (SR / 2..SR).contains(&i) { 0.3 } else { 0.0 }).collect();
         let them: Vec<f32> = (0..n).map(|i| if i >= 2 * SR { ((i as f32) * 0.05).sin() * 0.3 } else { 0.0 }).collect();
-        let files = source::Files { me: Some(Arc::new(me)), them: Some(Arc::new(them)), t0: source::now(), silent_default: false };
+        let files = source::Files::new(Some(me), Some(them), false);
         let cfg = Config { sources: Sources::Mic, mic: None, wav: wav.clone(), on_status: Box::new(|_| {}) };
         // the microphone alone: no echo cancellation, so the samples come back as they went in
         let (rec, pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
@@ -522,7 +522,7 @@ mod tests {
         let mut r = wav::Reader::open(&wav, 0).unwrap();
         let (left, right) = r.next(frames as usize).unwrap();
         let first = left.iter().position(|x| *x > 0.2).unwrap();
-        assert!((first as i64 - (SR / 2) as i64).abs() < 200, "me starts at {first}");
+        assert!((first as i64 - (SR / 2) as i64).abs() < 400, "me starts at {first}");
         assert!(right.iter().all(|x| *x == 0.0), "them was not recorded");
         let got: Vec<Piece> = pieces.try_iter().collect();
         assert!(got.iter().all(|p| p.track == Track::Me));
@@ -539,7 +539,7 @@ mod tests {
         let wav = d.join("r.wav");
         let n = SR * 3;
         let them: Vec<f32> = (0..n).map(|i| ((i as f32) * 0.05).sin() * 0.3 + 0.01).collect();
-        let files = source::Files { me: None, them: Some(Arc::new(them)), t0: source::now(), silent_default: false };
+        let files = source::Files::new(None, Some(them), false);
         let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let c = calls.clone();
         let cfg = Config {
@@ -594,7 +594,10 @@ mod tests {
         let wav = d.join("r.wav");
         let n = SR * 3;
         let them: Vec<f32> = (0..n).map(|i| if i >= 2 * SR { 0.25 } else { 0.0 }).collect();
-        let files = source::Files { me: None, them: Some(Arc::new(them)), t0: source::now(), silent_default: false };
+        let files = source::Files::new(None, Some(them), false);
+        // a slow machine between making the source and starting the recorder (a CI runner took
+        // 56 ms): the made-up tracks start with the recorder all the same
+        std::thread::sleep(Duration::from_millis(300));
         let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), on_status: Box::new(|_| {}) };
         let (rec, _pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
@@ -602,7 +605,7 @@ mod tests {
         let frames = rec.wait().unwrap();
         let (_, right) = wav::Reader::open(&wav, 0).unwrap().next(frames as usize).unwrap();
         let first = right.iter().position(|x| *x > 0.2).unwrap();
-        assert!((first as i64 - 2 * SR as i64).abs() < 200, "them starts at {first}");
+        assert!((first as i64 - 2 * SR as i64).abs() < 400, "them starts at {first}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

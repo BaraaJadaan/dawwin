@@ -168,9 +168,26 @@ fn refused(f: super::ocr::Fail) -> Refused {
     }
 }
 
+/// The largest e-book or picture read aloud: the same as a Word file in 1.7.0, since both carry
+/// pictures; their text is held to `formats::MAX_TEXT` as Read aloud's is.
+pub const MAX_FILE: u64 = crate::reading::formats::MAX_DOCX;
+
+fn too_large(path: &Path) -> Refused {
+    let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    Refused::Failed { message: crate::tr!("{} is too large to read aloud: Dawwin reads files of up to {} MB of text.", name, crate::reading::formats::MAX_TEXT >> 20) }
+}
+
 pub fn open(paths: &Paths, path: &Path) -> std::result::Result<Opened, Refused> {
     let failed = |e: anyhow::Error| Refused::Failed { message: format!("{e:#}") };
     let title = path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    // the size first: nothing is read of a file too large (a PDF is read by PDFium page by page, its
+    // text held below)
+    if matches!(kind(path), Some(Kind::Epub | Kind::Picture)) {
+        let size = std::fs::metadata(path).map_err(|e| failed(e.into()))?.len();
+        if size > MAX_FILE {
+            return Err(too_large(path));
+        }
+    }
     match kind(path) {
         Some(Kind::Pdf) => {
             if !pdfium_installed(paths) {
@@ -189,12 +206,15 @@ pub fn open(paths: &Paths, path: &Path) -> std::result::Result<Opened, Refused> 
                 (Err(_), Some(f)) => return Err(refused(f)),
                 (Err(e), None) => return Err(failed(e)),
             };
+            if pages.iter().map(|p| p.text.len() as u64).sum::<u64>() > crate::reading::formats::MAX_TEXT {
+                return Err(too_large(path));
+            }
             let recognised = pages.iter().any(|p| p.recognised);
             let parts = pages.into_iter().enumerate().map(|(i, p)| Part { title: crate::tr!("Page {}", i + 1), text: p.text }).collect();
             Ok(Opened { kind: Kind::Pdf, title, parts, recognised })
         }
         Some(Kind::Epub) => {
-            let b = epub::read(path).map_err(failed)?;
+            let b = epub::read(path).map_err(|e| if e.is::<epub::TooLarge>() { too_large(path) } else { failed(e) })?;
             Ok(Opened { kind: Kind::Epub, title: b.title, parts: b.chapters.into_iter().map(|c| Part { title: c.title, text: c.text }).collect(), recognised: false })
         }
         Some(Kind::Picture) => {
@@ -252,6 +272,21 @@ mod tests {
         assert_eq!(r.blocks[0].text, "الفصل الأول");
         assert_eq!(run_on("A word cut at the end of a line, exam-\nple, and\n  the next line."), "A word cut at the end of a line, example, and the next line.");
         assert_eq!(Refused::NeedsPdfium { size: 1 }.for_interface(), "needs-pdfium");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_file_too_large_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("dawwin-files-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let paths = Paths { local: dir.clone(), roaming: dir.clone() };
+        // larger than the limit, without writing it: only its size is looked at
+        for name in ["huge.epub", "huge.png"] {
+            let f = dir.join(name);
+            std::fs::File::create(&f).unwrap().set_len(MAX_FILE + 1).unwrap();
+            let e = open(&paths, &f).err().expect("refused");
+            assert!(e.for_interface().contains("too large"), "{name}: {e:?}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

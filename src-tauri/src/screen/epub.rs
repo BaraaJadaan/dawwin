@@ -26,16 +26,35 @@ pub struct Book {
 
 struct Archive {
     zip: zip::ZipArchive<std::fs::File>,
+    /// What is still allowed to be unpacked: a small book can say it unpacks to gigabytes
+    left: u64,
 }
+
+/// A book that unpacks to more text than Read aloud takes (1.7.0's limit, `formats::MAX_TEXT`).
+#[derive(Debug)]
+pub struct TooLarge;
+
+impl std::fmt::Display for TooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("too large")
+    }
+}
+
+impl std::error::Error for TooLarge {}
 
 impl Archive {
     fn read(&mut self, name: &str) -> Result<String> {
         let name = name.trim_start_matches('/');
         // some books write names %-encoded in the manifest
         let index = self.zip.index_for_name(name).or_else(|| self.zip.index_for_name(&percent_decode(name))).with_context(|| format!("{name} is missing from the book"))?;
-        let mut f = self.zip.by_index(index)?;
+        let f = self.zip.by_index(index)?;
+        // no more than is left, whatever the archive says of the size
         let mut bytes = Vec::new();
-        f.read_to_end(&mut bytes)?;
+        f.take(self.left + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > self.left {
+            return Err(TooLarge.into());
+        }
+        self.left -= bytes.len() as u64;
         Ok(String::from_utf8_lossy(&bytes).trim_start_matches('\u{feff}').to_string())
     }
 }
@@ -80,8 +99,13 @@ fn dir_of(path: &str) -> &str {
 }
 
 pub fn read(file: &Path) -> Result<Book> {
+    read_up_to(file, crate::reading::formats::MAX_TEXT)
+}
+
+/// The book, unpacking no more than `limit` bytes of its text and its lists.
+pub fn read_up_to(file: &Path, limit: u64) -> Result<Book> {
     let f = std::fs::File::open(file)?;
-    let mut a = Archive { zip: zip::ZipArchive::new(f).map_err(|_| anyhow!("{}", crate::tr!("This e-book is damaged, or is not an EPUB.")))? };
+    let mut a = Archive { zip: zip::ZipArchive::new(f).map_err(|_| anyhow!("{}", crate::tr!("This e-book is damaged, or is not an EPUB.")))?, left: limit };
     // META-INF/container.xml names the package file
     let container = a.read("META-INF/container.xml").map_err(|_| anyhow!("{}", crate::tr!("This e-book is damaged, or is not an EPUB.")))?;
     let opf_path = markup::items(&container)
@@ -196,7 +220,11 @@ pub fn read(file: &Path) -> Result<Book> {
         if !(media.contains("html") || media.is_empty()) {
             continue;
         }
-        let Ok(doc) = a.read(path) else { continue };
+        let doc = match a.read(path) {
+            Ok(d) => d,
+            Err(e) if e.is::<TooLarge>() => return Err(e),
+            Err(_) => continue,
+        };
         let text = markup::text(&doc);
         if text.trim().is_empty() {
             continue;
@@ -275,6 +303,19 @@ pub mod tests {
         }
         std::fs::write(dir.join("not.epub"), b"not a zip").unwrap();
         assert!(read(&dir.join("not.epub")).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_book_that_unpacks_to_more_than_the_limit_is_refused() {
+        let dir = std::env::temp_dir().join(format!("dawwin-epub-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("book.epub");
+        made_epub(&p, true);
+        // the made book is a few kilobytes of text: a limit under that refuses it, unpacking no more
+        let e = read_up_to(&p, 600).err().expect("refused");
+        assert!(e.is::<TooLarge>(), "{e:#}");
+        assert!(read_up_to(&p, 1 << 20).is_ok());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

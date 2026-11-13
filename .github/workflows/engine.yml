@@ -24,7 +24,12 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # The Rust every engine so far was built with. With 1.100.0 (2026-11-12) the speech library's
+      # build script no longer leaves its DLLs in target/release, and the engine came out without
+      # its GPU backend; move on only after checking the DLLs land beside dawwin-engine.exe.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.99.1"
       - name: Install the Vulkan SDK
         shell: pwsh
         run: |

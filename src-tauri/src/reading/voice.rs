@@ -66,6 +66,8 @@ impl VoiceProcess {
         }
         no_window(&mut cmd);
         let mut child = cmd.spawn().with_context(|| crate::tr!("cannot start {}", exe.display()))?;
+        // it ends with the app however the app ends, mid-sentence too, giving back the GPU at once
+        crate::translate::end_with_the_app(&child);
         let stdin = child.stdin.take().context("no stdin")?;
         let (tx, lines) = std::sync::mpsc::channel();
         let stdout = child.stdout.take().context("no stdout")?;

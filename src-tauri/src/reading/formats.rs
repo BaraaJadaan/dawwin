@@ -43,14 +43,31 @@ pub struct Opened {
 
 pub const EXTENSIONS: &[&str] = &["txt", "text", "md", "markdown", "html", "htm", "docx", "srt", "vtt"];
 
+/// The most text read aloud from one file. A book of a thousand pages is a few megabytes; a file the
+/// size of a disk, or a Word file whose text unpacks to gigabytes, would take the app's memory, and
+/// the app with it, a transcription or a recording under way included.
+pub const MAX_TEXT: u64 = 64 << 20;
+/// A Word file also carries its pictures, which are not unpacked: it may be larger.
+pub const MAX_DOCX: u64 = 256 << 20;
+
+fn too_large(name: &str) -> anyhow::Error {
+    anyhow::anyhow!(crate::tr!("{} is too large to read aloud: Dawwin reads files of up to {} MB of text.", name, MAX_TEXT >> 20))
+}
+
 pub fn read_path(path: &Path) -> Result<Opened> {
-    let bytes = std::fs::read(path).with_context(|| path.display().to_string())?;
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+    // the size first: nothing is read of a file too large to read aloud
+    let size = std::fs::metadata(path).with_context(|| path.display().to_string())?.len();
+    if size > if ext == "docx" { MAX_DOCX } else { MAX_TEXT } {
+        return Err(too_large(&name));
+    }
+    let bytes = std::fs::read(path).with_context(|| path.display().to_string())?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
     let (title, blocks) = match ext.as_str() {
         "md" | "markdown" => (None, from_markdown(&decode(&bytes))),
         "html" | "htm" | "xhtml" => from_html(&decode_html(&bytes)),
-        "docx" => (None, from_docx(&bytes)?),
+        "docx" => (None, from_docx(&bytes).map_err(|e| if e.is::<TooLarge>() { too_large(&name) } else { e })?),
         "srt" | "vtt" => (None, from_subtitles(&decode(&bytes))),
         _ => {
             if bytes.iter().take(4096).filter(|&&b| b == 0).count() > 16 && !has_utf16_bom(&bytes) {
@@ -588,10 +605,32 @@ pub fn from_html(html: &str) -> (Option<String>, Vec<Block>) {
     (title.map(|t| t.split_whitespace().collect::<Vec<_>>().join(" ")), out)
 }
 
+/// A Word file whose text unpacks to more than [`MAX_TEXT`].
+#[derive(Debug)]
+pub struct TooLarge;
+
+impl std::fmt::Display for TooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("too large")
+    }
+}
+
+impl std::error::Error for TooLarge {}
+
 pub fn from_docx(bytes: &[u8]) -> Result<Vec<Block>> {
+    from_docx_up_to(bytes, MAX_TEXT)
+}
+
+/// The text of a Word file, unpacking no more than `limit` bytes of it: what its header says of the
+/// size is not trusted (a small file can unpack to gigabytes).
+fn from_docx_up_to(bytes: &[u8], limit: u64) -> Result<Vec<Block>> {
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).context("not a Word document")?;
-    let mut xml = String::new();
-    zip.by_name("word/document.xml").context("not a Word document")?.read_to_string(&mut xml)?;
+    let mut raw = Vec::new();
+    zip.by_name("word/document.xml").context("not a Word document")?.take(limit + 1).read_to_end(&mut raw)?;
+    if raw.len() as u64 > limit {
+        return Err(TooLarge.into());
+    }
+    let xml = String::from_utf8_lossy(&raw).into_owned();
     let mut out = Vec::new();
     let mut cur = String::new();
     let mut kind = Kind::Paragraph;
@@ -816,6 +855,37 @@ Text."));
         let b = from_docx(buf.get_ref()).unwrap();
         assert_eq!(texts(&b), vec![(Kind::Heading, "العنوان"), (Kind::Paragraph, "Hello world & all ."), (Kind::Item, "an item")]);
         assert!(from_docx(b"not a zip").is_err());
+    }
+
+    #[test]
+    fn a_file_too_large_is_refused_before_it_is_read() {
+        let dir = std::env::temp_dir().join(format!("dawwin-read-big-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // larger than the limit, without writing it: only its size is looked at
+        let big = dir.join("huge.txt");
+        std::fs::File::create(&big).unwrap().set_len(MAX_TEXT + 1).unwrap();
+        let e = read_path(&big).err().expect("refused");
+        assert!(format!("{e:#}").contains("too large"), "{e:#}");
+        let docx = dir.join("big.docx");
+        std::fs::File::create(&docx).unwrap().set_len(MAX_DOCX + 1).unwrap();
+        assert!(format!("{:#}", read_path(&docx).err().unwrap()).contains("too large"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_word_file_that_unpacks_to_much_more_is_refused() {
+        // a few kilobytes that unpack to a megabyte
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut z = zip::ZipWriter::new(&mut buf);
+            z.start_file("word/document.xml", zip::write::SimpleFileOptions::default()).unwrap();
+            std::io::Write::write_all(&mut z, &vec![b'a'; 1 << 20]).unwrap();
+            z.finish().unwrap();
+        }
+        assert!(buf.get_ref().len() < 64 << 10);
+        let e = from_docx_up_to(buf.get_ref(), 64 << 10).err().expect("refused");
+        assert!(e.is::<TooLarge>());
+        assert!(from_docx_up_to(buf.get_ref(), 2 << 20).is_ok(), "under the limit it reads");
     }
 
     #[test]

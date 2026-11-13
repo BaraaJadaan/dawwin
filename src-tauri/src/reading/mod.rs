@@ -179,7 +179,7 @@ fn save_prefs(paths: &Paths, p: &Prefs) {
 
 // ------------------------------------------------------------------ the reader
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Ready {
     pub path: String,
     pub seconds: f64,
@@ -189,10 +189,87 @@ pub struct Ready {
 
 type Made = Result<Ready, String>;
 
+/// What the one waiting for a sentence hears when nobody makes it any more: another place was asked
+/// for, reading stopped, or another text was opened. The page has moved on and ignores it.
+pub const SUPERSEDED: &str = "superseded";
+
+/// Sentences made, of the text open, this many before or after the one asked for last are dropped,
+/// their sound files with them: a book read for hours does not fill the disk.
+const KEEP: usize = 50;
+
+#[derive(Default)]
 struct Work {
     /// (document, sentence), the one waited for first
     wanted: VecDeque<(String, usize)>,
     made: HashMap<(String, usize), (String, Made)>,
+    /// The one being made now
+    making: Option<(String, usize)>,
+}
+
+impl Work {
+    /// Sentence `index` of `doc` is asked for: it first, then the ones after it; other places wait.
+    fn want(&mut self, doc: &str, index: usize, count: usize, sig: &str) {
+        self.wanted.retain(|(d, i)| d == doc && *i > index && *i <= index + AHEAD);
+        for i in (index..(index + AHEAD + 1).min(count)).rev() {
+            let k = (doc.to_string(), i);
+            let fresh = self.made.get(&k).is_some_and(|(s, m)| s == sig && m.is_ok());
+            if !fresh && !self.wanted.contains(&k) {
+                self.wanted.push_front(k);
+            }
+        }
+        let key = (doc.to_string(), index);
+        if let Some(p) = self.wanted.iter().position(|k| *k == key) {
+            let k = self.wanted.remove(p).unwrap();
+            self.wanted.push_front(k);
+        }
+        // a failure, or a sentence made with other voices, is made again when asked for again
+        if self.made.get(&key).is_some_and(|(s, m)| s != sig || m.is_err()) {
+            self.made.remove(&key);
+        }
+    }
+
+    /// What the one waiting for `key` gets now: its sound or its error, [`SUPERSEDED`] when nobody
+    /// will make it any more, or None while it is still wanted or being made.
+    fn answer(&self, key: &(String, usize), sig: &str) -> Option<Made> {
+        if let Some((s, m)) = self.made.get(key) {
+            if s == sig {
+                return Some(m.clone());
+            }
+        }
+        if self.wanted.contains(key) || self.making.as_ref() == Some(key) {
+            return None;
+        }
+        Some(Err(SUPERSEDED.to_string()))
+    }
+
+    /// Sentence `index` of `doc` was made: what was made far from it goes. The files to delete.
+    fn prune(&mut self, doc: &str, index: usize) -> Vec<String> {
+        let far: Vec<(String, usize)> = self.made.keys().filter(|(d, i)| d == doc && (i + KEEP < index || *i > index + KEEP)).cloned().collect();
+        far.into_iter().filter_map(|k| self.made.remove(&k)).filter_map(|(_, m)| m.ok().map(|r| r.path)).collect()
+    }
+
+    /// Another text was opened: nothing else is wanted, and what was made for others is forgotten.
+    fn forget_others(&mut self, doc: &str) {
+        self.wanted.retain(|(d, _)| d == doc);
+        self.made.retain(|(d, _), _| d == doc);
+    }
+}
+
+/// A text's id: what it is (a file, a transcript, pasted text) and what it now says. A file edited
+/// since, or a transcript corrected or translated again, is another text, whose sound is made anew.
+fn doc_id(key: &str, sentences: &[Sentence], speakers: &[(u32, String)]) -> String {
+    let mut h = Sha256::new();
+    h.update(key.as_bytes());
+    for s in sentences {
+        h.update([0u8]);
+        h.update(s.text.as_bytes());
+        h.update(s.speaker.unwrap_or(u32::MAX).to_le_bytes());
+    }
+    for (id, name) in speakers {
+        h.update(id.to_le_bytes());
+        h.update(name.as_bytes());
+    }
+    h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect()
 }
 
 pub struct Reader {
@@ -229,7 +306,7 @@ impl Reader {
             paths,
             app,
             docs: Mutex::new(HashMap::new()),
-            work: Mutex::new(Work { wanted: VecDeque::new(), made: HashMap::new() }),
+            work: Mutex::new(Work::default()),
             wake: Condvar::new(),
             done: Condvar::new(),
             downloads: Mutex::new(HashMap::new()),
@@ -269,8 +346,20 @@ impl Reader {
         if sentences.is_empty() {
             return Err(anyhow!(crate::tr!("There is nothing to read in it.")));
         }
-        let doc = Arc::new(Doc { id: short_hash(&key), key, title, lang, sentences, speakers });
-        self.docs.lock().unwrap().insert(doc.id.clone(), doc.clone());
+        let doc = Arc::new(Doc { id: doc_id(&key, &sentences, &speakers), key, title, lang, sentences, speakers });
+        // one text open at a time: what was made for any other goes, its sound files too
+        {
+            let mut docs = self.docs.lock().unwrap();
+            docs.retain(|id, _| *id == doc.id);
+            docs.insert(doc.id.clone(), doc.clone());
+        }
+        self.work.lock().unwrap().forget_others(&doc.id);
+        self.done.notify_all();
+        for entry in std::fs::read_dir(cache_root(&self.paths)).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy() != doc.id.as_str() {
+                let _ = std::fs::remove_dir_all(entry.path());
+            }
+        }
         Ok(doc)
     }
 
@@ -301,31 +390,14 @@ impl Reader {
         let key = (doc_id.to_string(), index);
         let mut w = self.work.lock().unwrap();
         let count = self.docs.lock().unwrap().get(doc_id).map(|d| d.sentences.len()).ok_or_else(|| crate::tr!("That text is no longer open."))?;
-        // what is wanted now: this sentence, then the ones after it; other places can wait
-        w.wanted.retain(|(d, i)| d == doc_id && *i > index && *i <= index + AHEAD);
-        for i in (index..(index + AHEAD + 1).min(count)).rev() {
-            let k = (doc_id.to_string(), i);
-            let fresh = w.made.get(&k).is_some_and(|(s, m)| *s == sig && m.is_ok());
-            if !fresh && !w.wanted.contains(&k) {
-                w.wanted.push_front(k);
-            }
-        }
-        // the one waited for goes first
-        if let Some(p) = w.wanted.iter().position(|k| *k == key) {
-            let k = w.wanted.remove(p).unwrap();
-            w.wanted.push_front(k);
-        }
-        // a failure is tried again when asked for again
-        if w.made.get(&key).is_some_and(|(s, m)| *s != sig || m.is_err()) {
-            w.made.remove(&key);
-        }
+        w.want(doc_id, index, count, &sig);
         self.wake.notify_all();
+        // the others waiting see whether what they wait for is still wanted
+        self.done.notify_all();
         let deadline = std::time::Instant::now() + Duration::from_secs(6 * 60);
         loop {
-            if let Some((s, m)) = w.made.get(&key) {
-                if *s == sig {
-                    return m.clone();
-                }
+            if let Some(answer) = w.answer(&key, &sig) {
+                return answer;
             }
             let left = deadline.saturating_duration_since(std::time::Instant::now());
             if left.is_zero() {
@@ -338,6 +410,8 @@ impl Reader {
     /// Stop making sentences ahead (reading was stopped, or another text opened).
     pub fn stop(&self) {
         self.work.lock().unwrap().wanted.clear();
+        // those waiting hear that it will not come
+        self.done.notify_all();
     }
 
     fn run(self: Arc<Self>) {
@@ -353,6 +427,7 @@ impl Reader {
                         if w.made.get(&k).is_some_and(|(s, m)| *s == sig && m.is_ok()) {
                             continue;
                         }
+                        w.making = Some(k.clone());
                         break (k.0, k.1, sig);
                     }
                     w = self.wake.wait_timeout(w, Duration::from_secs(1)).unwrap().0;
@@ -385,8 +460,18 @@ impl Reader {
             if let Err(e) = &made {
                 let _ = self.app.emit("reading-error", serde_json::json!({ "doc": doc_id, "index": index, "error": e }));
             }
+            let open = self.docs.lock().unwrap().contains_key(&doc_id);
             let mut w = self.work.lock().unwrap();
-            w.made.insert((doc_id, index), (sig, made));
+            w.making = None;
+            if open {
+                for file in w.prune(&doc_id, index) {
+                    let _ = std::fs::remove_file(file);
+                }
+                w.made.insert((doc_id, index), (sig, made));
+            } else if let Ok(r) = &made {
+                // another text was opened meanwhile
+                let _ = std::fs::remove_file(&r.path);
+            }
             self.done.notify_all();
         }
     }
@@ -929,6 +1014,62 @@ mod tests {
         assert!(texts.iter().any(|t| t.contains("Sara") && t.contains("Write the notes") && t.contains("Friday")), "{texts:?}");
         assert!(!texts.iter().any(|t| t.contains("01:05") || t.contains("1:05")), "no times: {texts:?}");
         assert_eq!(b.iter().filter(|x| x.kind == Kind::Heading).count(), 3);
+    }
+
+    fn ready(path: &str) -> Made {
+        Ok(Ready { path: path.into(), seconds: 1.0, device: "CPU".into() })
+    }
+
+    #[test]
+    fn a_wait_ends_when_what_it_waits_for_is_no_longer_wanted() {
+        let mut w = Work::default();
+        w.want("doc", 5, 100, "sig");
+        let five = ("doc".to_string(), 5);
+        assert!(w.answer(&five, "sig").is_none(), "wanted: it waits");
+        // the worker takes it: still waited for
+        let k = w.wanted.pop_front().unwrap();
+        assert_eq!(k, five);
+        w.making = Some(k);
+        assert!(w.answer(&five, "sig").is_none());
+        w.making = None;
+        w.made.insert(five.clone(), ("sig".into(), ready("5.wav")));
+        assert!(w.answer(&five, "sig").unwrap().is_ok(), "made: its sound");
+        // forward twice before sentence 20 is made: the wait for 20 ends
+        w.want("doc", 20, 100, "sig");
+        w.want("doc", 40, 100, "sig");
+        assert_eq!(w.answer(&("doc".to_string(), 20), "sig"), Some(Err(SUPERSEDED.to_string())));
+        assert!(w.answer(&("doc".to_string(), 40), "sig").is_none());
+        // stopped while it was being prepared
+        w.wanted.clear();
+        assert_eq!(w.answer(&("doc".to_string(), 40), "sig"), Some(Err(SUPERSEDED.to_string())));
+    }
+
+    #[test]
+    fn what_was_made_far_away_or_for_another_text_goes() {
+        let mut w = Work::default();
+        for i in 0..200 {
+            w.made.insert(("doc".to_string(), i), ("sig".into(), ready(&format!("{i}.wav"))));
+        }
+        w.made.insert(("old".to_string(), 3), ("sig".into(), ready("old-3.wav")));
+        let gone = w.prune("doc", 120);
+        assert_eq!(gone.len(), 70 + 29, "before 70 and after 170");
+        assert!(w.made.contains_key(&("doc".to_string(), 70)) && w.made.contains_key(&("doc".to_string(), 170)));
+        assert!(!w.made.contains_key(&("doc".to_string(), 69)) && !w.made.contains_key(&("doc".to_string(), 171)));
+        assert!(w.made.contains_key(&("old".to_string(), 3)), "another text is left to forget_others");
+        w.wanted.push_back(("old".to_string(), 4));
+        w.forget_others("doc");
+        assert!(!w.made.keys().any(|(d, _)| d == "old") && w.wanted.is_empty());
+    }
+
+    #[test]
+    fn a_text_edited_since_is_another_text() {
+        let blocks = |t: &str| vec![Block { kind: Kind::Paragraph, text: t.into(), speaker: None }];
+        let (_, a) = sentences_of(&blocks("One. Two."));
+        let (_, b) = sentences_of(&blocks("One. Two, changed."));
+        assert_eq!(doc_id("file:notes.txt", &a, &[]), doc_id("file:notes.txt", &a, &[]), "the same text: the same id, its sound kept");
+        assert_ne!(doc_id("file:notes.txt", &a, &[]), doc_id("file:notes.txt", &b, &[]));
+        assert_ne!(doc_id("file:a.txt", &a, &[]), doc_id("file:b.txt", &a, &[]));
+        assert_ne!(doc_id("t", &a, &[(1, "Sara".into())]), doc_id("t", &a, &[(1, "Sami".into())]), "a speaker renamed");
     }
 
     #[test]

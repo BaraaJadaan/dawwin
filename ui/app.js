@@ -2123,7 +2123,15 @@ function wire() {
   $("btn-export").onclick = (ev) => {
     ev.stopPropagation();
     paintExportScope();
-    $("export-menu").hidden = !$("export-menu").hidden;
+    const menu = $("export-menu");
+    menu.hidden = !menu.hidden;
+    if (!menu.hidden) {
+      // it opens back from the button's end; where the toolbar wraps and the button starts a row, that
+      // would run under the side panel, so it opens forward from the button's start instead
+      menu.classList.remove("menu-start");
+      const r = menu.getBoundingClientRect(), main = $("main").getBoundingClientRect();
+      if (r.left < main.left || r.right > main.right) menu.classList.add("menu-start");
+    }
   };
   for (const b of $("export-menu").querySelectorAll("button[data-fmt]")) b.onclick = () => exportAs(b.dataset.fmt);
   $("export-video").onclick = exportVideo;

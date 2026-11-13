@@ -314,7 +314,8 @@ async function readFrom(i) {
     await READ.audio.play();
     invoke("reading_place", { doc: d.id, index: i }).catch(() => {});
   } catch (err) {
-    if (my !== READ.token) return;
+    // another sentence was asked for meanwhile: nothing went wrong
+    if (my !== READ.token || String(err) === "superseded") return;
     READ.playing = false;
     READ.error = String(err);
   } finally {

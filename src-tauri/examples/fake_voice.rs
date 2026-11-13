@@ -7,7 +7,8 @@
 //! `FAKE_VOICE_DELAY_MS`: how long a request takes (300 ms). `FAKE_VOICE_CRASH_AFTER`: exit after
 //! that many requests. `FAKE_VOICE_CRASH_TIMES` with `FAKE_VOICE_CRASH_FILE`: the first that many
 //! processes exit on their first request (the file counts them). `FAKE_VOICE_LOG`: a file where
-//! each request is written, one JSON a line.
+//! each request is written, one JSON a line. `FAKE_VOICE_NOISE`: before each answer, lines that are
+//! not it (as a library may print): not JSON, JSON that is no answer, and another request's answer.
 
 use std::io::{BufRead, Write};
 use std::time::Duration;
@@ -39,6 +40,7 @@ fn main() {
     let delay = std::env::var("FAKE_VOICE_DELAY_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(300);
     let crash_after: Option<usize> = std::env::var("FAKE_VOICE_CRASH_AFTER").ok().and_then(|v| v.parse().ok());
     let log = std::env::var("FAKE_VOICE_LOG").ok().filter(|l| !l.is_empty());
+    let noise = std::env::var_os("FAKE_VOICE_NOISE").is_some();
     let rate = 24_000u32;
     let mut done = 0usize;
     let stdout = std::io::stdout();
@@ -98,6 +100,12 @@ fn main() {
             _ => serde_json::json!({ "ok": false, "error": "unknown command" }),
         };
         let mut out = stdout.lock();
+        if noise {
+            let _ = writeln!(out, "loading weights 100%");
+            let _ = writeln!(out, "[1,2,3]");
+            let _ = writeln!(out, r#"{{"log":"warming up"}}"#);
+            let _ = writeln!(out, r#"{{"id":999,"ok":true,"seconds":42}}"#);
+        }
         let _ = writeln!(out, "{reply}");
         let _ = out.flush();
     }

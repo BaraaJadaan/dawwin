@@ -163,7 +163,9 @@ impl WavWriter {
 /// work. A book (two headings or more) gets a chapter at each heading. `progress` goes from 0 to 1.
 pub fn save_reading(r: &crate::reading::Reader, doc: &crate::reading::Doc, ffmpeg: &Path, work: &Path, dest: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(f64)) -> Result<Vec<std::path::PathBuf>> {
     use crate::reading::formats::Kind;
-    r.set_saving(&doc.id, true);
+    // a copy of its own: listening to the same text meanwhile does not take its sentences
+    let copy = r.for_saving(doc);
+    let doc = &*copy;
     let wav = work.join(format!("reading-{}.wav", crate::queue::now_ms()));
     let result = (|| -> Result<Vec<std::path::PathBuf>> {
         let book = doc.sentences.iter().filter(|s| s.kind == Kind::Heading).count() >= 2;
@@ -200,7 +202,8 @@ pub fn save_reading(r: &crate::reading::Reader, doc: &crate::reading::Doc, ffmpe
         Ok(vec![dest.to_path_buf()])
     })();
     let _ = std::fs::remove_file(&wav);
-    r.set_saving(&doc.id, false);
+    // its sentences' sound goes with it
+    r.forget(&doc.id);
     result
 }
 

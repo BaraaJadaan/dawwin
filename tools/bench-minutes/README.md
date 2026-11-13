@@ -65,7 +65,7 @@ is written, which was read by hand for the finalists.
 ## Running it
 
 From the Actions tab: **Minutes bench**, with model keys to run some of them. The table is in the
-`results` artifact. The runs that chose 1.6.0's models are in [results-1.6.0.md](results-1.6.0.md). Locally, against Dawwin's stand-in server (no model needed):
+`results` artifact. The runs that chose the models Dawwin offers (since 1.8.0) are in [results-1.8.0.md](results-1.8.0.md). Locally, against Dawwin's stand-in server (no model needed):
 
 ```bash
 cargo build --example fake_translator --manifest-path src-tauri/Cargo.toml

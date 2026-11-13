@@ -241,7 +241,7 @@ pub const VARIANTS: [Variant; 12] = [
         size: 26_693_632,
         prompt: None,
     },
-    // Minutes: the places the maintainer's rule fills, from tools/bench-minutes (results-1.6.0.md):
+    // Minutes: the places the maintainer's rule fills, from tools/bench-minutes (results-1.8.0.md):
     // the best (Jais-3 7B, which with its context in 8 bits also fits an 8 GB GPU, so it fills the
     // second place too), the best for its size, and the smallest that is still decent. All Apache 2.0.
     Variant {

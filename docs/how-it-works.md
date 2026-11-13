@@ -29,7 +29,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/net.rs` | The way out to the internet: the proxy Windows or `HTTPS_PROXY` names, and why a connection failed. |
 | `src-tauri/src/saving.rs` | Where the files Dawwin makes go: next to the recording, or a folder of one's own. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
-| `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds): pinned files on the release, downloaded, checked and unpacked. |
+| `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds, the voice program and its GPU library, PDFium): pinned files on one release, downloaded, checked and unpacked. |
 | `src-tauri/src/record/` | Recording a meeting: the microphone and what the PC plays (WASAPI) as two tracks on one clock, a WAV that survives a crash, echo cancellation, and pieces for the engine as the sound arrives. |
 | `src-tauri/src/queue/meeting.rs` | The recording as a job: live text, "me" and "them", the rest after Stop, recovery, the M4A. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
@@ -150,9 +150,10 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   `pipe:0`, encoded as AAC), or as WAV without it. Dawwin's own builds have no raw-sample reader and no
   `fd:` protocol, so a bare `-` as input fails there. A child process whose pipe is still open is killed
   and let go before the app waits for it.
-- **Tools.** The translator (llama.cpp's official Windows build, the files its server needs) and two
-  builds of ffmpeg are not in the installer. `tools.rs` pins each as a `.tar.xz` on a release, with its
-  size and SHA-256. It downloads like a model (resumable, checked), then unpacks (xz and tar, plain files
+- **Tools.** The translator (llama.cpp's official Windows build, the files its server needs), two
+  builds of ffmpeg, the voice program (`voice/`, with audio.cpp's library for the processor), that
+  library's GPU build, and PDFium are not in the installer. `tools.rs` pins each as a `.tar.xz` on one
+  release (`RELEASE`, the same for all), with its size and SHA-256. It downloads like a model (resumable, checked), then unpacks (xz and tar, plain files
   at the top level only, dated when they are unpacked) into a folder of its own under
   `%LOCALAPPDATA%\Dawwin\tools`. A tool counts as installed only when every file it needs is there
   (`Tool::files`), and files 1.3.0 unpacked with the date 1970 get today's at start. The first
@@ -277,10 +278,12 @@ releases are built on the maintainer's PC, with the engine from GitHub Actions.
    time (`tools/timing`, which must meet its pass mark), translates with each translation model
    through the translator Dawwin downloads, and writes the minutes of two made-up meetings with each
    minutes model through it.
-4. If a tool changes (llama.cpp, ffmpeg): create the release as a draft
+4. If a tool changes (llama.cpp, ffmpeg, the voice program, PDFium): create the release as a draft
    (`gh release create vX.Y.Z --draft --target <commit>`), run the **Tools** workflow by hand with the
    tag, and put the sizes and SHA-256 it prints, with the new file names and `RELEASE`, into `tools.rs`.
-   Otherwise the app keeps downloading them from the release that has them.
+   Every tool moves to that release, since `RELEASE` is one value. With `from_run`, the workflow tries
+   and uploads the packs of an earlier run instead of building them again, so pins already taken from
+   that run hold. Otherwise the app keeps downloading them from the release that has them.
 5. `npm run engine -- --from-ci`, then `npm run build`. The last line it prints must say yes to both GPU
    support and the font.
 6. Upload `dist/*` to the release and publish it (`gh release edit vX.Y.Z --draft=false --latest`), or

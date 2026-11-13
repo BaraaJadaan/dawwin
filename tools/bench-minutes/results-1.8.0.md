@@ -1,6 +1,6 @@
-# Minutes bench, 1.6.0
+# Minutes bench, 1.8.0
 
-How the minutes models Dawwin 1.6.0 offers were chosen. The test and the scoring are in
+How the minutes models Dawwin 1.8.0 offers were chosen. The test and the scoring are in
 [README.md](README.md); the models are the files at the revisions in
 [the workflow](../../.github/workflows/minutes-bench.yml).
 

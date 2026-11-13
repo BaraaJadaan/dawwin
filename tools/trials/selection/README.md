@@ -73,7 +73,7 @@ this branch (Settings, "Read anything on the screen", turn the shortcut on), or
 5. **Arabic keyboard**: switch to Arabic (101) and repeat 1 in Notepad and Chrome.
 6. **The clipboard**: copy a picture (a screenshot), then read a selection in Firefox (it needs the
    Ctrl+C way). Paste afterwards: the picture must still be there.
-7. **The small player** (once the voice of 1.7.0 is in): while it reads, keep typing in another
+7. **The small player** (with a voice downloaded): while it reads, keep typing in another
    program and click the player's buttons. Expected: the buttons work and the typing never stops
    going to the program you are in.
 8. **Closing and starting again**: with the shortcut on, close Dawwin's window; its icon stays in

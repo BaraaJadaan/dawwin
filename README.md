@@ -2,20 +2,21 @@
 
 *Dawwin* means "write it down" in Arabic.
 
-**Turn recordings, videos and meetings into text, translate it, subtitle them, and write their minutes, on your own Windows PC.**
+**Turn recordings, videos and meetings into text, translate it, subtitle them, write their minutes, and have any text read aloud, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
 languages. Translation into 46 languages. Record a Zoom, Meet or Teams call and read it as it is
-said. And the other way round: any text, file or transcript read aloud in a natural voice, in Arabic and
-English. Nothing leaves your computer: no account, no upload, no subscription, no limit on hours.
+said. And the other way round: any text, file, transcript or minutes read aloud in a natural voice, in
+Arabic and English, and the text you select in any program read at a shortcut. Nothing leaves your
+computer: no account, no upload, no subscription, no limit on hours.
 
 **[Download the latest release](https://github.com/BaraaJadaan/dawwin/releases/latest)** · free and open source (MIT)
 
 <div dir="rtl">
 
-**دَوِّن** يفرّغ التسجيلات والفيديوهات إلى نص على حاسوبك، ويترجمها، ويضيف إليها نصًّا على الشاشة.
-العربية أولًا، بلهجاتها والكلمات الإنجليزية التي تتخللها، ونحو 100 لغة أخرى، والترجمة إلى 46 لغة.
-ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام. ويقرأ لك أي نص أو ملف أو تفريغ بصوت طبيعي،
-بالعربية والإنجليزية.
+**دَوِّن** يفرّغ التسجيلات والفيديوهات إلى نص على حاسوبك، ويترجمها، ويضيف إليها نصًّا على الشاشة،
+ويكتب محاضر الاجتماعات. العربية أولًا، بلهجاتها والكلمات الإنجليزية التي تتخللها، ونحو 100 لغة أخرى،
+والترجمة إلى 46 لغة. ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام. ويقرأ لك أي نص أو ملف أو
+تفريغ أو محضر بصوت طبيعي، بالعربية والإنجليزية، وأي نص تحدّده في أي برنامج بضغطة اختصار.
 لاجتماعات العمل، والمحاضرات والدروس والخطب، والمقابلات والأبحاث، والفيديوهات والأفلام، والرسائل
 الصوتية. لا شيء يغادر جهازك: لا حساب ولا رفع ولا اشتراك.
 
@@ -60,6 +61,25 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 
 ## Features
 
+**Transcribe**
+
+- Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg, also
+  WhatsApp voice notes, webm, avi, wmv, flv, mpg, a camera's mts, m2ts and ts, aiff, caf and ac3:
+  Dawwin offers it when a file needs it (a download of 1.3 MB), or uses one already on the PC. Several
+  files queue up. The message while you drag a file over the window says what the ticked steps will do.
+- Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
+  recordings that are already done are skipped, so a stopped run picks up where it left off. The files
+  Dawwin wrote there itself (the sound, the videos with subtitles) are never taken for new recordings,
+  and a folder of thousands of files, or a whole drive, shows how far it has looked and can be stopped.
+- Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
+  yet, it offers to download it.
+- The transcript appears line by line while it is written, in the direction of its language.
+- **Follow words**: the word being said is highlighted as the recording plays. Ctrl+click a word, or
+  select text and right-click → **Play from here**, to hear it.
+- Long recordings stay quick: a three-hour meeting of 5,000 lines opens in a fifth of a second, and
+  search answers each key at once (new in 1.3.2).
+- Runs on the GPU of any brand (NVIDIA, AMD, Intel), or on the CPU when there is none.
+
 **One drop, several steps** (new in 1.3)
 
 - Choose on the start page what happens to what you drop, in order: take the long silences out and
@@ -70,34 +90,6 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 - Save the sound and the videos next to the recording, or in a folder of your own (new in 1.3.2).
 
 ![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text (with Tell speakers apart and Write the minutes), Translation and Video.](docs/screenshots/home.png)
-
-**Who said what** (new in 1.4)
-
-- Tick **Tell speakers apart**, and each line gets its speaker, named where the speaker changes. Up to
-  four people are told apart, on the processor, in a small part of the recording's length; one
-  download of 139 MB, offered when you tick it.
-- Click "Speaker 2" and type "Sami": every line of that speaker says Sami. Merge two speakers that are
-  one person, or give one line to someone else, or to someone new. A line that holds two people's
-  words is split where the speaker changes, when there is a pause there.
-- Names go into every export: "Sami:" before each turn in Word, text and Markdown, a speaker column in
-  CSV and TSV, a speaker on each line of JSON, the voice tag of WebVTT, and, if you want it, the name
-  at the start of a subtitle when the speaker changes. A translation keeps the same speakers.
-- Search within one speaker's lines. **More ▾ → Find the speakers** does it for an older transcript.
-
-![A meeting in Arabic with the speakers' names where the speaker changes, and a speaker's menu open: Rename, Same person as Speaker 2, Search their lines.](docs/screenshots/speakers.png)
-
-**The language, and your words** (new in 1.4)
-
-- **Detect the language**, at the top of the language menu: Dawwin listens to the first half minute of
-  speech of each recording, so a folder in several languages is fine. A recording in a language you
-  have no model for says which one it is and offers its model; the transcript says what was heard, and
-  **More ▾ → Transcribe again in** fixes a wrong guess in one press. One download of 27 MB.
-- **Words and names** in Settings: how to write the words Dawwin keeps getting wrong ("Thmanyah", not
-  "ثمانية"), with the wrong forms they come out as if you know them. Every new transcript writes them
-  your way, as whole words, whatever their diacritics or Latin case (another spelling is listed as
-  a wrong form, so a name never replaces a word that only looks like it); an "All languages" (Whisper) model also
-  hears them better. Select a word in a transcript and right-click → **Always write it like this…**, or
-  **More ▾ → Apply my words** on an older one. Save the list to a file and load it on another PC.
 
 **Record a meeting** (new in 1.5)
 
@@ -128,24 +120,33 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
 
 ![Recording a meeting: the time, a level for Me and one for Them, Stop, and the text appearing with each line marked Me or Them.](docs/screenshots/record.png)
 
-**Transcribe**
+**Who said what** (new in 1.4)
 
-- Drop recordings and videos on the window: m4a, mp3, wav, flac, mp4, mov and mkv. With ffmpeg, also
-  WhatsApp voice notes, webm, avi, wmv, flv, mpg, a camera's mts, m2ts and ts, aiff, caf and ac3:
-  Dawwin offers it when a file needs it (a download of 1.3 MB), or uses one already on the PC. Several
-  files queue up. The message while you drag a file over the window says what the ticked steps will do.
-- Transcribe a whole folder, subfolders included. The transcripts are saved next to the recordings, and
-  recordings that are already done are skipped, so a stopped run picks up where it left off. The files
-  Dawwin wrote there itself (the sound, the videos with subtitles) are never taken for new recordings,
-  and a folder of thousands of files, or a whole drive, shows how far it has looked and can be stopped.
-- Choose the spoken language, and Dawwin uses the model that suits it. If that model is not on the PC
-  yet, it offers to download it.
-- The transcript appears line by line while it is written, in the direction of its language.
-- **Follow words**: the word being said is highlighted as the recording plays. Ctrl+click a word, or
-  select text and right-click → **Play from here**, to hear it.
-- Long recordings stay quick: a three-hour meeting of 5,000 lines opens in a fifth of a second, and
-  search answers each key at once (new in 1.3.2).
-- Runs on the GPU of any brand (NVIDIA, AMD, Intel), or on the CPU when there is none.
+- Tick **Tell speakers apart**, and each line gets its speaker, named where the speaker changes. Up to
+  four people are told apart, on the processor, in a small part of the recording's length; one
+  download of 139 MB, offered when you tick it.
+- Click "Speaker 2" and type "Sami": every line of that speaker says Sami. Merge two speakers that are
+  one person, or give one line to someone else, or to someone new. A line that holds two people's
+  words is split where the speaker changes, when there is a pause there.
+- Names go into every export: "Sami:" before each turn in Word, text and Markdown, a speaker column in
+  CSV and TSV, a speaker on each line of JSON, the voice tag of WebVTT, and, if you want it, the name
+  at the start of a subtitle when the speaker changes. A translation keeps the same speakers.
+- Search within one speaker's lines. **More ▾ → Find the speakers** does it for an older transcript.
+
+![A meeting in Arabic with the speakers' names where the speaker changes, and a speaker's menu open: Rename, Same person as Speaker 2, Search their lines.](docs/screenshots/speakers.png)
+
+**The language, and your words** (new in 1.4)
+
+- **Detect the language**, at the top of the language menu: Dawwin listens to the first half minute of
+  speech of each recording, so a folder in several languages is fine. A recording in a language you
+  have no model for says which one it is and offers its model; the transcript says what was heard, and
+  **More ▾ → Transcribe again in** fixes a wrong guess in one press. One download of 27 MB.
+- **Words and names** in Settings: how to write the words Dawwin keeps getting wrong ("Thmanyah", not
+  "ثمانية"), with the wrong forms they come out as if you know them. Every new transcript writes them
+  your way, as whole words, whatever their diacritics or Latin case (another spelling is listed as
+  a wrong form, so a name never replaces a word that only looks like it); an "All languages" (Whisper) model also
+  hears them better. Select a word in a transcript and right-click → **Always write it like this…**, or
+  **More ▾ → Apply my words** on an older one. Save the list to a file and load it on another PC.
 
 **Translate** (new in 1.3)
 
@@ -186,61 +187,8 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   bottom or the top, with a preview on a second of your own video. **Sharp text on small videos**
   enlarges a video under 1080p before drawing the text, so it is as sharp as on a 1080p one; the file
   gets about three times larger (on by default, and it says so on hover).
-- Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.2 MB
+- Both need ffmpeg, which Dawwin downloads the first time you ask: 1.3 MB for subtitle tracks, 3.8 MB
   for burning in. Both are in **Settings**, to download or delete by hand.
-
-**Read aloud** (new in 1.7)
-
-- Drop a text file, Markdown, a web page saved as HTML, a Word document or subtitles (SRT, VTT) on
-  **Read aloud**, or paste text, and press play. Code blocks, link addresses, image paths and subtitle
-  times are left out; old Arabic text files in Windows-1256 read right.
-- **Listen** on any transcript reads it, or its translation when one is shown.
-- Sentence by sentence, the one being read marked and the page following it: pause, back and forward a
-  sentence, click any sentence to read from there, and choose the speed. Dawwin remembers where you
-  stopped in each file, and breathes a little at the end of a paragraph and after a heading.
-- Arabic and English each have their own voice, a man's or a woman's. An English sentence inside Arabic
-  is read by the English voice; a single English word stays with the Arabic one. Numbers, dates, times,
-  percentages and money are read as words, in the language around them.
-- Three voices, chosen by ear in a blind listening test (below): **VoxCPM 2**, the most natural, wants
-  a graphics card; **Supertonic 3** reads Arabic and English on any processor; **Phonon 31M** reads
-  English and is the smallest. Hear each one in **Settings** before you download it. The voices run on
-  your PC like everything else: the text never leaves it.
-
-- New in 1.8: **PDFs** (the first one brings PDFium, 3 MB), read in the right order also in Arabic;
-  **e-books** (EPUB), with their chapters to go to and the place remembered; and **pictures of text** and
-  scanned PDFs, read by Windows' own text recognition (Windows says which language to add when it
-  cannot read one).
-- **Save as sound** (new in 1.8): the reading as a sound file to listen to away from the computer, M4A,
-  or M4B with a chapter for each chapter of a book. It is made in the list of jobs, with its progress,
-  and can be stopped there.
-
-![Read aloud: an article with the sentence being read marked, the Arabic and English voices chosen at the top, and the player at the bottom.](docs/screenshots/read.png)
-
-**Read anything on the screen** (new in 1.8)
-
-- Select text in any program, a web page, a Word document, a PDF, an email or a chat, and press
-  **Ctrl+Shift+Space**: Dawwin reads it in the voices of Read aloud, in a small player at the corner of the
-  screen that leaves the keyboard where it was, with pause and back and forward a sentence. Press the
-  shortcut again to stop. Turn it on in **Settings → Read anything on the screen**, where the keys can be
-  changed; if another program already uses them, Dawwin says so and offers free ones.
-- While the shortcut is on, closing Dawwin's window keeps it in the notification area, ready; **Start with
-  Windows** (off until you turn it on) starts it there when you sign in. Starting Dawwin again opens its
-  window.
-- Dawwin asks the program for its selection through Windows' accessibility interface. Where a program
-  does not give it that way, Dawwin presses Ctrl+C for you and puts back what you had copied, text,
-  pictures and all, also when a busy program copies late; never in a terminal, where Ctrl+C would stop
-  the running program, and it can be turned off. With nothing selected, it says so instead of reading old text. In a window that runs as
-  administrator, Windows lets no ordinary program read, and Dawwin says that too.
-- **Say it like this**: names and terms the voice says wrongly, with how to say them, for Arabic and for
-  English sentences.
-- Tried on: a test window of its own (a standard text box, one that only answers Ctrl+C, and one that
-  answers it 0.9 s or 3.5 s late). Not yet
-  tried in Chrome, Edge, Firefox, Word, Outlook, a PDF viewer, VS Code, Windows Terminal, WhatsApp or
-  Telegram: it is built for them, and how each answers is still to be seen.
-
-![Read anything on the screen in Settings: the shortcut turned on, Ctrl+Shift+Space, copying the selection on, Start with Windows off, and a word in Say it like this.](docs/screenshots/screen.png)
-
-![The small player reading a selection: the sentence being read, back, pause, forward and close.](docs/screenshots/player.png)
 
 **Sound** (new in 1.3)
 
@@ -249,7 +197,7 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   of the original recording, so playback, Follow words and subtitles stay in step.
 - Save the sound as a file of its own (M4A): from a video, or without its silences.
 
-**Minutes** (new in 1.6)
+**Minutes** (new in 1.8)
 
 - **Write the minutes** on a transcript's Minutes tab: a summary of a few sentences, the decisions, the
   action items (who, what, by when), the topics in order with their start times, and the questions left
@@ -271,6 +219,63 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   The panel offers the models with their sizes and says which fits your computer.
 
 ![A meeting's minutes in Dawwin: the summary, four decisions with their times, and action items with who, what and by when.](docs/screenshots/minutes.png)
+
+**Read aloud** (new in 1.8)
+
+- Drop a text file, Markdown, a web page saved as HTML, a Word document, subtitles (SRT, VTT), a PDF, an
+  e-book (EPUB) or a picture of text on **Read aloud**, or paste text, and press play. Code blocks, link
+  addresses, image paths and subtitle times are left out; old Arabic text files in Windows-1256 read right.
+- PDFs are read in the right order, also in Arabic (the first one brings PDFium, 3 MB). An e-book shows
+  its chapters to go to. Pictures of text and scanned PDFs are read by Windows' own text recognition,
+  which says which Windows language to add when it cannot read one.
+- **Listen** on any transcript reads it, or its translation when one is shown. In a meeting whose speakers
+  were told apart, or one you recorded, each person reads in a voice of their own, their name shown where
+  they start. **Listen** on the Minutes tab reads the minutes.
+- Sentence by sentence, the one being read marked and the page following it: pause, back and forward a
+  sentence, click any sentence to read from there, and choose the speed. Dawwin remembers where you
+  stopped in each file, and breathes a little at the end of a paragraph and after a heading.
+- Arabic and English each have their own voice, a man's or a woman's. An English sentence inside Arabic
+  is read by the English voice; a single English word stays with the Arabic one. Numbers, dates, times,
+  percentages and money are read as words, in the language around them.
+- Three voices, chosen by ear in a blind listening test (below): **VoxCPM 2**, the most natural, wants
+  a graphics card; **Supertonic 3** reads Arabic and English on any processor; **Phonon 31M** reads
+  English and is the smallest. Hear each one in **Settings** before you download it. A voice that needs
+  the graphics card waits while Dawwin records, transcribes, translates or writes minutes on it, and says
+  so. The voices run on your PC like everything else: the text never leaves it.
+- **Save as sound**: the reading as a sound file to listen to away from the computer, M4A, or M4B with a
+  chapter for each chapter of a book. It is made in the list of jobs, with its progress, and can be
+  stopped there.
+
+![Read aloud: an article with the sentence being read marked, the Arabic and English voices chosen at the top, and the player at the bottom.](docs/screenshots/read.png)
+
+**Read anything on the screen** (new in 1.8)
+
+- Select text in any program, a web page, a Word document, a PDF, an email or a chat, and press
+  **Ctrl+Shift+Space**: Dawwin reads it in the voices of Read aloud, in a small player at the corner of the
+  screen that leaves the keyboard where it was, with pause and back and forward a sentence. Press the
+  shortcut again to stop. Turn it on in **Settings → Read anything on the screen**, where the keys can be
+  changed; if another program already uses them, Dawwin says so and offers free ones.
+- While the shortcut is on, closing Dawwin's window keeps it in the notification area, ready; **Start with
+  Windows** (off until you turn it on) starts it there when you sign in. Starting Dawwin again opens its
+  window.
+- Dawwin asks the program for its selection through Windows' accessibility interface. Where a program
+  does not give it that way, Dawwin presses Ctrl+C for you and puts back what you had copied, text,
+  pictures and all, also when a busy program copies late, and takes its copy out of the clipboard
+  history. Never in a terminal, where Ctrl+C would stop the running program, and it can be turned off.
+  With nothing selected, it says so instead of reading old text. In a window that runs as administrator,
+  Windows lets no ordinary program read, and Dawwin says that too.
+- **Say it like this**: names and terms the voice says wrongly, with how to say them, for Arabic and for
+  English sentences.
+- Tried so far only on a test window of its own (a standard text box, one that only answers Ctrl+C, and
+  one that answers it 0.9 s or 3.5 s late), not yet in Chrome, Edge, Firefox, Word, Outlook, a PDF
+  viewer, VS Code, Windows Terminal, WhatsApp or Telegram: it is built for them, and how each answers is
+  still to be seen. Known not to give their selection: a terminal that shows Windows no text (PuTTY,
+  mintty, VS Code's terminal), where Dawwin says so rather than press Ctrl+C; any window run as
+  administrator; and Firefox before its UI Automation, which needs the Ctrl+C way.
+
+![Read anything on the screen in Settings: the shortcut turned on, Ctrl+Shift+Space, copying the selection on, Start with Windows off, and a word in Say it like this.](docs/screenshots/screen.png)
+
+![The small player reading a selection: the sentence being read, back, pause, forward and close.](docs/screenshots/player.png)
 
 **Edit, search and export**
 
@@ -355,15 +360,15 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
    | **Supertonic 3** (Supertone) | Arabic and English, five men and five women | 0.3 GB | Fast on any processor: it reads faster than it speaks without a GPU. |
    | **Phonon 31M** (Gradium) | English, two men and three women | 87 MB | The smallest, and the fastest. |
 
+7. To have text you select in other programs read, turn on the shortcut in **Settings → Read anything
+   on the screen**, select some text and press **Ctrl+Shift+Space**. It reads in the voices of step 6.
+
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
 laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary
 ran about 7 times faster than real time, and Whisper about as fast as real time. The smaller
 translation model translated a short line in about 2 seconds on a small cloud CPU without a GPU. On the
 same kind of CPU, the minutes of a meeting of eight minutes took about 4½ minutes with Jais-3 7B and
 under a minute with Jais-3 0.9B.
-
-7. To have text you select in other programs read, turn on the shortcut in **Settings → Read anything
-   on the screen**, select some text and press **Ctrl+Shift+Space**. It reads in the voices of step 6.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation or minutes model
 without a GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg,
@@ -419,7 +424,7 @@ finds as much as the best, but its summaries of the Arabic meetings say nothing 
 Dawwin offers the best (Jais-3 7B, which also fits a GPU with 8 GB, its context kept in 8 bits), the best
 for its size (Ministral 3 3B) and the smallest that is still usable (Jais-3 0.9B). With the context in
 8 bits, as on a GPU, they scored 87.6, 77.9 and 70.7. The models, the scoring and all the numbers are in
-[tools/bench-minutes](tools/bench-minutes/results-1.6.0.md).
+[tools/bench-minutes](tools/bench-minutes/results-1.8.0.md).
 
 ## How the voices were chosen
 
@@ -474,10 +479,11 @@ If Dawwin is useful to you, a star on GitHub helps other people find it.
 
 ## Privacy
 
-Dawwin goes online only when you ask it to: to download a model (from
-[Hugging Face](https://huggingface.co)) or a tool (the translator and ffmpeg, from this repository's
-[releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for updates (from GitHub; also at startup if you
-turn that on in Settings). Recordings, transcripts, translations and minutes stay on your computer. A meeting you
+Dawwin goes online only when you ask it to: to download a model or a voice (from
+[Hugging Face](https://huggingface.co)) or a tool (the translator, ffmpeg, the voice program and PDFium,
+from this repository's [releases](https://github.com/BaraaJadaan/dawwin/releases)), and to check for
+updates (from GitHub; also at startup if you turn that on in Settings). Recordings, transcripts,
+translations, minutes and what is read aloud stay on your computer. A meeting you
 record is captured from your own microphone and speakers only: nothing joins the call, and the
 recording is never sent anywhere. Recording a call may still need the consent of everyone on it, which
 Dawwin reminds you of before the first recording. Text you select in other programs to have it read is

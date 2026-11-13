@@ -4,7 +4,7 @@ name: Minutes bench
 # recordings in tools/bench-minutes/meetings through llama.cpp on a CPU, the way the app asks
 # (src-tauri/prompts), and score.py scores them against the hand-made answers. Run it from the
 # Actions tab; `models` picks some of the keys below. Each model is the file at the revision that was
-# measured for 1.6.0 (for the ones Dawwin offers, the revision it downloads).
+# measured for 1.8.0 (for the ones Dawwin offers, the revision it downloads).
 on:
   workflow_dispatch:
     inputs:

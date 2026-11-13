@@ -31,7 +31,7 @@ writeFileSync(join(home, "history", "rd-1.json"), JSON.stringify({
   ] }],
 }));
 
-// a meeting with two speakers told apart (1.4), and its minutes (1.6)
+// a meeting with two speakers told apart (1.4), and its minutes (1.8)
 const said = (start, speaker, text) => ({ start, end: start + 2.5, speaker, text, edited: false });
 writeFileSync(join(home, "history", "rd-2.json"), JSON.stringify({
   id: "rd-2", title: "اجتماع المتحدثين", source_path: "C:/made-up/meeting2.m4a", created_ms: Date.now() - 1000, duration_s: 20, language: "ar",

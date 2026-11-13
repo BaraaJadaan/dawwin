@@ -280,8 +280,24 @@ if (alive(a.proc)) a.close();
   await sleep(4000);
   const state = await ev("window.__TAURI__.core.invoke('screen_state')");
   check("started again from Start: the hidden one opens its window, the second quits, the shortcut is its own", (await shown()) === true && !alive(fromStart) && state.shortcut.state === "on", { second: alive(fromStart), shortcut: state.shortcut });
+
+  // ---- Quit in the notification area while a reading is saved as sound: the save stops, nothing is left
+  const long = Array.from({ length: 80 }, (_, i) => `هذه الجملة المختلقة رقم ${i + 1} للتجربة.`).join(" ");
+  const opened = await ev(`window.__TAURI__.core.invoke("reading_open", { path: null, text: ${JSON.stringify(long)}, transcript: null, language: null }).then((d) => d.id, (e) => "error: " + e)`);
+  const dest = join(OUT, "screen-quit.m4a");
+  rmSync(dest, { force: true });
+  const job = await ev(`window.__TAURI__.core.invoke("reading_save_sound_to_path", { doc: ${JSON.stringify(opened)}, path: ${JSON.stringify(dest)} }).catch((e) => "error: " + e)`);
+  let status = "";
+  for (let i = 0; i < 100 && status !== "saving_audio"; i++) {
+    await sleep(100);
+    status = await ev(`S.snap?.queue.find((j) => j.id === ${JSON.stringify(job)})?.status || ""`);
+  }
+  ev(`window.__TAURI__.core.invoke("test_tray_quit")`).catch(() => {});
+  for (let i = 0; i < 40 && alive(hidden); i++) await sleep(500);
+  const left = readdirSync(home, { recursive: true }).map(String).filter((f) => /reading-\d+\.wav$|\.part\.m4a$|-sound-\d+$/.test(f));
+  check("Quit in the notification area mid-save: the save stops, Dawwin quits and leaves nothing behind", typeof job === "string" && !job.startsWith("error") && status === "saving_audio" && !alive(hidden) && !existsSync(dest) && !existsSync(dest.replace(/\.m4a$/, ".part.m4a")) && left.length === 0, { job, status, alive: alive(hidden), left });
   ws.close();
-  hidden.kill();
+  if (alive(hidden)) hidden.kill();
 }
 cleanReg();
 server?.close();

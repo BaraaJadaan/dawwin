@@ -905,6 +905,8 @@ pub fn run() {
             screen::app::reading_save_sound_to_path,
             #[cfg(debug_assertions)]
             screen::app::test_screen_read,
+            #[cfg(debug_assertions)]
+            screen::app::test_tray_quit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Dawwin");

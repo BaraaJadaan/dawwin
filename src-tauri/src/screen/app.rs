@@ -449,6 +449,13 @@ pub async fn test_player_note(app: AppHandle, note: Note) {
     show_player(&app, note);
 }
 
+/// Test builds: what Quit in the notification area does (a menu a test cannot click).
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn test_tray_quit(app: AppHandle) {
+    quit(&app);
+}
+
 /// What the small player shows now (its page asks once it is loaded).
 #[tauri::command]
 pub fn player_last(app: AppHandle) -> Option<serde_json::Value> {

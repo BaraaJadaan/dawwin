@@ -44,6 +44,48 @@ fn main() {
     match args.first().map(String::as_str) {
         Some("testwin") => testwin::run(),
         Some("watch") => watch(),
+        Some("historytest") => {
+            // the program's copy taken out of Windows' clipboard history: made-up text copied as an
+            // ordinary program copies (it lands in the history), then taken out; the clipboard the
+            // user had goes back after. Only ids and counts are printed, never content.
+            let theirs = Clipboard::save();
+            let count = || selection::in_sta(|| {
+                use windows::ApplicationModel::DataTransfer::Clipboard as History;
+                History::GetHistoryItemsAsync().and_then(|op| op.join()).and_then(|r| r.Items()).map(|i| i.Size().unwrap_or(0)).unwrap_or(9999)
+            });
+            let before = count();
+            let text = "نص مختلق لتجربة سجل الحافظة، made-up text for the clipboard history trial";
+            unsafe {
+                use windows::core::w;
+                let owner = CreateWindowExW(WINDOW_EX_STYLE(0), w!("STATIC"), w!(""), WINDOW_STYLE(0), 0, 0, 0, 0, Some(HWND_MESSAGE), None, None, None).unwrap_or_default();
+                // no history marks: as Notepad or a browser copies
+                use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData};
+                use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+                use windows::Win32::Foundation::HANDLE;
+                let units: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+                if OpenClipboard(Some(owner)).is_ok() {
+                    let _ = EmptyClipboard();
+                    if let Ok(g) = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2) {
+                        let p = GlobalLock(g) as *mut u16;
+                        std::ptr::copy_nonoverlapping(units.as_ptr(), p, units.len());
+                        let _ = GlobalUnlock(g);
+                        let _ = SetClipboardData(13, Some(HANDLE(g.0)));
+                    }
+                    let _ = CloseClipboard();
+                }
+                let _ = DestroyWindow(owner);
+            }
+            std::thread::sleep(Duration::from_millis(800));
+            let copied = count();
+            let removed = selection::forget_in_history(text);
+            std::thread::sleep(Duration::from_millis(500));
+            let after = count();
+            println!("history items: before {before}, after the copy {copied}, after taking it out {after} (removed: {removed})");
+            if let Some(c) = theirs {
+                restore_theirs(&c);
+                println!("the user's clipboard put back: {}", Clipboard::save().map(|n| n.essentials() == c.essentials()).unwrap_or(false));
+            }
+        }
         Some("history") => {
             // what Windows answers about its clipboard history to a program not in front (no content)
             selection::in_sta(|| {
@@ -798,7 +840,7 @@ fn newest_history_id() -> Option<Option<String>> {
 /// None: no history to look at; Some(None): an empty one.
 fn newest_history_id_here() -> Option<Option<String>> {
     use windows::ApplicationModel::DataTransfer::{Clipboard as History, ClipboardHistoryItemsResultStatus};
-    (|| -> windows::core::Result<Option<String>> {
+    (|| -> windows::core::Result<Option<Option<String>>> {
         if !History::IsHistoryEnabled()? {
             return Ok(None);
         }

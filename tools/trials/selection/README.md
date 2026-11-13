@@ -8,6 +8,7 @@ cargo build --release
 target/release/trial-selection hotkeys        # which shortcuts other programs already hold
 target/release/trial-selection run testwin    # the small test window, driven by itself
 target/release/trial-selection watch          # by hand: select text anywhere, press Ctrl+Alt+Q
+target/release/trial-selection historytest    # a made-up copy into Win+V's history, then taken out
 ```
 
 `run` with other targets (chrome, edge, chrome-pdf, edge-pdf, firefox, word, vscode, antigravity,
@@ -15,9 +16,10 @@ wt, conhost) opens each program in a throwaway profile with made-up text and dri
 it takes the screen and the keyboard for a few minutes, so it runs only when the maintainer says so.
 `watch` prints the program, the way that worked, the number of characters and the time, never the text.
 
-## Results so far (2026-11-12, the maintainer's PC)
+## Results so far (2026-11-12 and 2026-11-13, the maintainer's PC)
 
-**The test window**: a standard edit box and a box with no text pattern that copies on Ctrl+C.
+**The test window**: a standard edit box and a box with no text pattern that copies on Ctrl+C, at
+once or, like a busy program, 0.9 s or 3.5 s late (F6, F7).
 
 | Case | Way | Result | Time | Clipboard after |
 | --- | --- | --- | --- | --- |
@@ -29,9 +31,17 @@ it takes the screen and the keyboard for a few minutes, so it runs only when the
 | Box without a text pattern, selected | as the app does it | text, by Ctrl+C | 242 ms | put back, every format |
 | | Ctrl+C turned off | "copying is turned off" | 0 ms | untouched |
 | Box without a text pattern, nothing selected | as the app does it | nothing selected | 687 ms | untouched |
+| Box that copies 0.9 s late | as the app does it | text, by Ctrl+C | 1179 ms | put back, every format |
+| Box that copies 3.5 s late | as the app does it | nothing selected (Dawwin waits 2.5 s) | 2687 ms | put back, every format, once the copy came |
 
 "Every format" is made-up text, a made-up picture and made-up HTML, compared byte for byte. The
 user's own clipboard was kept at the start and put back the same at the end.
+
+**Clipboard history** (on here): after every case the newest item of Win+V is the one there before,
+compared by its id (never its content): the program's copy was taken out. `trial-selection
+historytest` shows the same with one made-up copy: items before, after the copy, after taking it out.
+Dawwin waits 2.5 s for a program's copy, then watches 15 s more and puts the clipboard back as soon as
+a late one comes; a copy by any other program meanwhile is left alone.
 
 **Shortcuts other programs hold on this PC**: Ctrl+Alt+R (the spec's default), Ctrl+Alt+L,
 Ctrl+Alt+Space, Alt+Shift+R, Win+Alt+R, Win+Shift+R. Free: Ctrl+Alt+S, Ctrl+Alt+Q, Ctrl+Alt+E,

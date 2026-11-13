@@ -228,12 +228,13 @@ English. Nothing leaves your computer: no account, no upload, no subscription, n
   window.
 - Dawwin asks the program for its selection through Windows' accessibility interface. Where a program
   does not give it that way, Dawwin presses Ctrl+C for you and puts back what you had copied, text,
-  pictures and all; never in a terminal, where Ctrl+C would stop the running program, and it can be
-  turned off. With nothing selected, it says so instead of reading old text. In a window that runs as
+  pictures and all, also when a busy program copies late; never in a terminal, where Ctrl+C would stop
+  the running program, and it can be turned off. With nothing selected, it says so instead of reading old text. In a window that runs as
   administrator, Windows lets no ordinary program read, and Dawwin says that too.
 - **Say it like this**: names and terms the voice says wrongly, with how to say them, for Arabic and for
   English sentences.
-- Tried on: a test window of its own (a standard text box, and one that only answers Ctrl+C). Not yet
+- Tried on: a test window of its own (a standard text box, one that only answers Ctrl+C, and one that
+  answers it 0.9 s or 3.5 s late). Not yet
   tried in Chrome, Edge, Firefox, Word, Outlook, a PDF viewer, VS Code, Windows Terminal, WhatsApp or
   Telegram: it is built for them, and how each answers is still to be seen.
 
@@ -482,15 +483,16 @@ recording is never sent anywhere. Recording a call may still need the consent of
 Dawwin reminds you of before the first recording. Text you select in other programs to have it read is
 read on your computer and kept nowhere: not in History, not in a log, not even its place, and the sound
 made of it is deleted when the reading stops. Where Dawwin has to press Ctrl+C to get it, the program
-copies it, so it can show in Windows' clipboard history (Win+V) if you use that; Dawwin then puts back
-what you had copied. The
+copies it: Dawwin then takes that copy out of Windows' clipboard history (Win+V) and puts back what you
+had copied. If your clipboard syncs to your other devices (Settings → System → Clipboard), Windows may
+already have sent the copy there; turn off copying the selection in Dawwin's Settings to avoid it. The
 translator, which also writes the minutes, listens only to Dawwin on the same computer, with a key it
 is given at start.
 
 ## Uninstall
 
-Uninstall Dawwin from Windows Settings → Apps. The models and your transcripts are kept in case you
-reinstall. To remove them too, delete the folders `%LOCALAPPDATA%\Dawwin` and `%APPDATA%\Dawwin` (and
+Uninstall Dawwin from Windows Settings → Apps; it no longer starts with Windows. The models and your
+transcripts are kept in case you reinstall. To remove them too, delete the folders `%LOCALAPPDATA%\Dawwin` and `%APPDATA%\Dawwin` (and
 the model folder, if you chose another place for it).
 
 ## License

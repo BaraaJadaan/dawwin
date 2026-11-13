@@ -17,7 +17,7 @@ mod win;
 // the clipboard's own type is for the trial (tools/trials/selection) and the tests
 #[cfg(windows)]
 #[allow(unused_imports)]
-pub use win::{in_sta, Clipboard, System};
+pub use win::{forget_in_history, in_sta, Clipboard, System};
 
 /// The window in front when the shortcut was pressed.
 #[derive(Clone, Debug, Default, PartialEq)]

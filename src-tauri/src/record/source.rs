@@ -54,10 +54,18 @@ pub fn now() -> u64 {
 pub struct Files {
     pub me: Option<Arc<Vec<f32>>>,
     pub them: Option<Arc<Vec<f32>>>,
-    /// When the tracks started: a source opened again (another microphone) carries on from now.
-    pub t0: u64,
+    /// When the tracks started: when the recorder opened the first stream, which it does right
+    /// after taking its own start time (so a slow machine does not shift them on its timeline). A
+    /// source opened again (another microphone) carries on from now.
+    pub t0: std::sync::OnceLock<u64>,
     /// The default microphone sends digital silence, as a muted one does; a chosen one plays "me"
     pub silent_default: bool,
+}
+
+impl Files {
+    pub fn new(me: Option<Vec<f32>>, them: Option<Vec<f32>>, silent_default: bool) -> Self {
+        Files { me: me.map(Arc::new), them: them.map(Arc::new), t0: std::sync::OnceLock::new(), silent_default }
+    }
 }
 
 impl Factory for Files {
@@ -66,7 +74,7 @@ impl Factory for Files {
             Track::Me => self.me.clone(),
             Track::Them => self.them.clone(),
         };
-        let t0 = self.t0;
+        let t0 = *self.t0.get_or_init(now);
         let mute = self.silent_default && track == Track::Me && device.as_deref().is_none_or(|d| d == "test-default");
         std::thread::spawn(move || {
             let Some(samples) = samples else { return };

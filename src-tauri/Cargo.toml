@@ -1,6 +1,6 @@
 [package]
 name = "dawwin"
-version = "1.5.0"
+version = "1.8.0"
 description = "Local speech-to-text, translation and subtitles, Arabic first"
 edition = "2021"
 license = "MIT"

@@ -35,13 +35,13 @@ pub struct Tool {
 
 /// The release the tools are files of. A newer version of the app keeps pointing here until a
 /// tool itself changes.
-const RELEASE: &str = "v1.4.0";
+const RELEASE: &str = "v1.8.0";
 
 pub const TRANSLATOR: Tool = Tool {
     id: "translator",
     file: "dawwin-translator-llama.cpp-b12237.tar.xz",
-    size: 14_117_968,
-    sha256: "98f19e4bc87fc78e40bca8ec752d0a513d26fa04f464e77c015afaa67de02665",
+    size: 14_119_932,
+    sha256: "29d7ea1fd9f0ca8c54761412f5bd69b49d597c2a2453c9d0e868c7f35e4f726e",
     folder: "translate",
     exe: "llama-server.exe",
     // what the pack holds, but its two license files
@@ -58,8 +58,8 @@ pub const TRANSLATOR: Tool = Tool {
 pub const FFMPEG_AUDIO: Tool = Tool {
     id: "ffmpeg-audio",
     file: "dawwin-ffmpeg-audio-8.1.2.tar.xz",
-    size: 1_335_556,
-    sha256: "48a2b244b1815cdfe2f85a411812369e9efd480e67b42ef939d74e0719be4659",
+    size: 1_335_512,
+    sha256: "5e055919031b99339023d2e8997fbe53a52126b3e2871856ac64735ff845837e",
     folder: "ffmpeg-audio",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
@@ -69,8 +69,8 @@ pub const FFMPEG_AUDIO: Tool = Tool {
 pub const FFMPEG_VIDEO: Tool = Tool {
     id: "ffmpeg-video",
     file: "dawwin-ffmpeg-video-8.1.2.tar.xz",
-    size: 3_847_048,
-    sha256: "464b379577c87fb1952093cde7ff0112488f4e43502735e02d821629bb41feaf",
+    size: 3_846_348,
+    sha256: "272ce61e767cc9a0e0a3e8fa1a75bd74dde6144e493e0d1fc66a1eb06a82e296",
     folder: "ffmpeg-video",
     exe: "ffmpeg.exe",
     files: &["ffmpeg.exe"],
@@ -84,8 +84,8 @@ pub const VOICE: Tool = Tool {
     id: "voice",
     file: "dawwin-voice-audio.cpp-v0.9.4.tar.xz",
     // from Tools run 43313712037, whose packs a release can upload with from_run
-    size: 10_801_324,
-    sha256: "9be32aaba02c5dd9cd2e61ab76e2330643f084dc8a248048e51040cf5e3368cd",
+    size: 10_797_992,
+    sha256: "d30a03a5a6b339edd42f2474d2fb3ec81415a3c30896c49d3625dd24de539e1c",
     folder: "voice",
     exe: "dawwin-voice.exe",
     files: &[
@@ -104,8 +104,8 @@ pub const VOICE_GPU: Tool = Tool {
     id: "voice-gpu",
     file: "dawwin-voice-gpu-audio.cpp-v0.9.4.tar.xz",
     // from Tools run 43313712037
-    size: 13_400_504,
-    sha256: "0f8edd8b8a5f10ed391afe593ec6cf7febdaa20fa08245773ab63e5594a0b78e",
+    size: 13_396_492,
+    sha256: "573c6880e1ce64e17bfa999267aacd974c5f295a0ed44e3bca56051e58f77477",
     folder: "voice-gpu",
     exe: "audiocpp.dll",
     files: &[

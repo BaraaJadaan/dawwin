@@ -791,11 +791,12 @@ fn scenarios(dir: &Path, names: &[String], mode: &Arc<Mutex<Mode>>, rx: &mpsc::R
 
 /// The id of the newest item in Windows' clipboard history (Win+V), never its content: whether
 /// the program's copy was left there.
-fn newest_history_id() -> Option<String> {
+fn newest_history_id() -> Option<Option<String>> {
     selection::in_sta(newest_history_id_here)
 }
 
-fn newest_history_id_here() -> Option<String> {
+/// None: no history to look at; Some(None): an empty one.
+fn newest_history_id_here() -> Option<Option<String>> {
     use windows::ApplicationModel::DataTransfer::{Clipboard as History, ClipboardHistoryItemsResultStatus};
     (|| -> windows::core::Result<Option<String>> {
         if !History::IsHistoryEnabled()? {
@@ -805,7 +806,7 @@ fn newest_history_id_here() -> Option<String> {
         if r.Status()? != ClipboardHistoryItemsResultStatus::Success {
             return Ok(None);
         }
-        Ok(r.Items()?.into_iter().next().map(|i| i.Id().map(|s| s.to_string()).unwrap_or_default()))
+        Ok(Some(r.Items()?.into_iter().next().map(|i| i.Id().map(|s| s.to_string()).unwrap_or_default())))
     })()
     .ok()
     .flatten()

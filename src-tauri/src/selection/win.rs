@@ -296,12 +296,12 @@ fn copy_selection(target: Vec<u32>) -> Copied {
     let after_read = unsafe { GetClipboardSequenceNumber() };
     // the user's own copy since then wins over what Dawwin kept
     if after_read == seen {
-        saved.restore(owner.0);
-        // the history asks the clipboard's owner for what it holds: Dawwin's window, gone first
-        drop(owner);
+        // out of the history first: deleting the item Windows still counts as the clipboard's
+        // empties the clipboard, so what Dawwin kept goes back after it
         if let Copied::Text(t) | Copied::Line(t) = &read {
             forget_in_history(t);
         }
+        saved.restore(owner.0);
     }
     read.without_line()
 }
@@ -333,12 +333,11 @@ fn watch_late(saved: Clipboard, before: u32, target: Vec<u32>, sent_at: u32) {
             return;
         }
         let read = read_copied_text();
-        let owner = Owner::new();
-        saved.restore(owner.0);
-        drop(owner);
         if let Copied::Text(t) | Copied::Line(t) = &read {
             forget_in_history(t);
         }
+        let owner = Owner::new();
+        saved.restore(owner.0);
     });
 }
 

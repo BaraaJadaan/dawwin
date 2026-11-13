@@ -13,7 +13,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { APP, check, finish, makeHome, open, OUT, PORT, sleep, TOOLS } from "./lib.mjs";
 
 const FAKE = join(dirname(APP), "examples", "fake_voice.exe");
@@ -129,7 +129,8 @@ await a.ev(`setUiLang('en')`);
 
 // ---- Start with Windows, in the test key
 await a.invoke("screen_set_start_with_windows", { on: true });
-check("Start with Windows writes this Dawwin, hidden", regValue().includes(`"${APP}" --hidden`), regValue().trim().split("\n").pop());
+// the path as Windows writes it, however DAWWIN_APP was given
+check("Start with Windows writes this Dawwin, hidden", regValue().includes(`"${resolve(APP)}" --hidden`), regValue().trim().split("\n").pop());
 
 // ---- the small player: a note alone
 await a.invoke("test_player_note", { note: "nothing_selected" });

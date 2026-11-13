@@ -1,13 +1,15 @@
-// The pictures of "How to use" (ui/guide/<lang>/<part>.webp) and the README's start page
-// (docs/screenshots/home.png), speakers (docs/screenshots/speakers.png), minutes
-// (docs/screenshots/minutes.png) and Read aloud (docs/screenshots/read.png), from the real app, in
-// English and Arabic. Made-up data only. Writes into the repository: look at what it made before
-// committing.
-//   node tools/e2e/pictures.mjs [part …]     (parts: steps sound home speakers minutes settings read screen; all by default)
-// "screen" also makes docs/screenshots/screen.png and player.png (Read anything on the screen).
-// "settings" (the subtitle look with its preview) needs DAWWIN_E2E_TOOLS, and a full ffmpeg for its video.
+// The pictures of "How to use" (ui/guide/<lang>/<part>.webp) and the README's (docs/screenshots),
+// from the real app, in English and Arabic. Made-up data only. Writes into the repository: look at
+// what it made before committing.
+//   node tools/e2e/pictures.mjs [part …]
+// Parts, all by default: drop steps sound live listen speakers translate minutes export settings read
+// screen home readme setup. "live" transcribes talks spoken by the voices of Windows
+// (tools/timing/speak.ps1) with DAWWIN_E2E_MODEL. "screen" also makes screen.png and player.png;
+// "readme" the transcript, its translation, the export menu, a search, Play from here, the Arabic
+// interface and the queue at work; "setup" the first-run page. "settings" (the subtitle look with its
+// preview) needs DAWWIN_E2E_TOOLS; it, "export" and "readme" need a full ffmpeg for their videos.
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { APP, ffmpeg, finish, makeHome, MODEL, need, open, OUT, PORT, REPO, sleep, slash, TOOLS } from "./lib.mjs";
 
@@ -81,6 +83,46 @@ withMinutes("en-sprint", "Sprint planning, release 3.2",
   "The team set the scope and date of release 3.2. The calendar sync fix ships behind a feature flag, dark mode moves to 3.3, the code freeze is Friday at noon and 3.2 goes out on Monday, November 30th. Store review time and QA cover during Kenji's leave are still open.", "en");
 withMinutes("ar-levant-product", "اجتماع الإطلاق",
   "اتفق الفريق على تأجيل الـ dark mode للسبرنت الجاي، وعلى إطلاق الأندرويد والـ iOS سوا يوم الأربعا 15 نيسان. أول نسخة من الـ dashboard فيها تلات metrics بس. بقي سؤالان: هل يشوف الـ clients الـ dashboard، ومين on call بالويكند.", "ar");
+// the weekly meeting of made-who again, as a video of test pictures with its English translation, its
+// words placed in time, for Follow words, the translation, the export menu and the README
+const TALK = [
+  ["طيب، خلونا نبدأ. اليوم عندنا ثلاث نقاط: الشاشة الرئيسية، تسجيل الدخول، والتقارير.", "Okay, let's start. We have three points today: the home screen, login, and the reports."],
+  ["بالنسبة للشاشة الرئيسية، العميل طلب إن الـ dashboard يطلع أول شي بعد الدخول.", "About the home screen, the client asked for the dashboard to come up first after login."],
+  ["تمام، وأنا جهزت نسخة أولى من الـ design، أرسلها اليوم؟", "Fine, and I have a first version of the design ready. Shall I send it today?"],
+  ["وكمان أضفت زر export للـ Excel في صفحة التقارير.", "I also added a button to export to Excel on the reports page."],
+  ["ممتاز. تسجيل الدخول لازم يدعم الـ OTP على الجوال قبل نهاية الشهر.", "Great. Login has to support OTP on the phone before the end of the month."],
+  ["مين ممكن ياخذ هالمهمة؟ سامي، تقدر تخلصها هالأسبوع؟", "Who can take this task? Sami, can you finish it this week?"],
+  ["أقدر، بس أحتاج الـ API من فريق الـ backend يوم الأحد.", "I can, but I need the API from the backend team on Sunday."],
+];
+if (wanted("listen") || wanted("translate") || wanted("export") || wanted("readme")) {
+  const video = join(OUT, "pictures-meeting.mp4");
+  if (!existsSync(video)) ffmpeg(["-f", "lavfi", "-i", "testsrc2=size=854x480:rate=25:duration=36", "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono", "-t", "36", "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", video]);
+  const who = [1, 1, 2, 2, 1, 2, 1];
+  let at = 0.4;
+  const segments = TALK.map(([text], i) => {
+    const words = [];
+    const len = text.split(/\s+/).length;
+    let t = at;
+    for (const m of text.matchAll(/\S+/g)) { words.push([m.index, Number(t.toFixed(2))]); t += 4.6 / len; }
+    const seg = { start: at, end: at + 4.8, text, edited: false, speaker: who[i], words };
+    at += 5.1;
+    return seg;
+  });
+  writeFileSync(join(home, "history", "made-talk.json"), JSON.stringify({
+    id: "made-talk", title: "اجتماع تطبيق الجوال", source_path: slash(video), created_ms: Date.now() - 1800000, duration_s: 36, language: "ar",
+    elapsed_s: 6, device: "GPU · NVIDIA GeForce RTX 4060 Laptop GPU", model: "Cohere Transcribe Arabic (07-2026) · Q8", partial: false, timed: true,
+    segments, speakers: [{ id: 1, name: "سامي" }, { id: 2, name: "" }],
+    translations: [{ language: "en", model: "MiLMMT-46 12B · Q4", lines: TALK.map(([from, text]) => ({ text, from, edited: false })) }],
+  }));
+}
+// talks spoken by the voices of Windows, to be transcribed while the picture is taken
+const voices = join(OUT, "voices");
+if ((wanted("live") || wanted("readme")) && !existsSync(join(voices, "meeting-ar.wav"))) {
+  execFileSync("pwsh", ["-NoProfile", "-File", join(REPO, "tools", "timing", "speak.ps1"), "-Out", voices], { stdio: "inherit" });
+}
+const talks = join(OUT, "pictures-talks");
+mkdirSync(talks, { recursive: true });
+const talk = (from, name) => { const to = join(talks, name); copyFileSync(join(voices, from), to); return slash(to); };
 if (wanted("settings") && TOOLS) {
   const video = join(OUT, "pictures-look.mp4");
   ffmpeg(["-f", "lavfi", "-i", "testsrc2=size=854x480:rate=25:duration=8", "-f", "lavfi", "-i", "sine=duration=8", "-c:v", "libx264", "-preset", "veryfast", "-c:a", "aac", video]);
@@ -113,11 +155,92 @@ async function picture(file, area, format = "webp") {
   console.log("made", file);
 }
 const steps = (s) => a.ev(`(()=>{S.steps={...DEFAULT_STEPS,...${JSON.stringify(s)}};paintSteps();showView('home');})()`);
+/** The line being played and its word, as Follow words draws them (no sound needed). */
+const playing = (i, word) => a.ev(`(()=>{$('follow').checked=true;S.follow=true;document.querySelectorAll('.seg.playing').forEach(r=>r.classList.remove('playing'));const row=rowOf(${i});row.classList.add('playing');const el=row.querySelector('.text');const at=S.current.segments[${i}].text.indexOf(${JSON.stringify(word)});CSS.highlights.set('now-word',new Highlight(textRange(el,at,at+${word.length})));})()`);
+/** A word selected and right-clicked: the menu with Play from here. */
+const rightClick = (i, word) => a.ev(`(()=>{const el=rowOf(${i}).querySelector('.text');const at=S.current.segments[${i}].text.indexOf(${JSON.stringify(word)});const r=textRange(el,at,at+${word.length});const sel=getSelection();sel.removeAllRanges();sel.addRange(r);const b=r.getBoundingClientRect();el.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:b.left+b.width/2,clientY:b.bottom+6}));})()`);
+const unclick = () => a.ev(`(()=>{hideCtx();getSelection().removeAllRanges();CSS.highlights.delete('now-word');document.querySelectorAll('.seg.playing').forEach(r=>r.classList.remove('playing'));})()`);
+const openTalk = async (lang) => { await a.ev(`(async()=>{await loadHistory();Minutes.tab='lines';await openTranscript('made-talk'${lang ? `, ${JSON.stringify(lang)}` : ""});})()`); await sleep(700); };
+const exportMenu = async (scope) => {
+  await a.ev(`(()=>{$('btn-export').click();const b=document.querySelector('#export-scope [data-scope=${scope}]');if(b&&!b.closest('[hidden]'))b.click();})()`);
+  await sleep(400);
+};
+const closeMenus = () => a.ev(`document.querySelectorAll('.menu').forEach(m=>m.hidden=true)`);
+const windowSize = async (width, height) => { await a.call("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false }); await sleep(600); };
+/** Talks put in the queue to be transcribed, the first one open; back as soon as it is well under way
+ *  (on a GPU a talk of two minutes takes a few seconds), the others still waiting. */
+async function transcribing(files) {
+  const ids = [];
+  await a.ev(`(()=>{$('follow').checked=false;S.follow=false;})()`);
+  // on the processor, as Settings allows: there it takes long enough to be seen
+  await a.ev(`window.__TAURI__.core.invoke('set_run_on', { value: 'cpu' }).then(onState)`);
+  for (const [path, language] of files) ids.push(...(await a.invoke("enqueue", { paths: [path], language, steps: await a.ev(`(S.steps={...DEFAULT_STEPS,transcribe:true},stepsForJob())`) })));
+  const first = JSON.stringify(ids[0]);
+  for (let i = 0; i < 100 && !(await a.ev(`!!jobById(${first})`)); i++) await sleep(100);
+  await a.ev(`openTranscript(${first})`);
+  for (let i = 0; i < 2400; i++) {
+    const p = await a.ev(`S.current?.id === ${first} && S.current.segments.length >= 3 ? (jobById(${first}) || {}).progress || 0 : 0`);
+    if (p >= 0.4) break;
+    await sleep(100);
+  }
+  return ids;
+}
+/** Stop them, and leave nothing of them in History for the pictures after. */
+const cancelAll = async (ids) => {
+  for (const id of ids) await a.invoke("cancel_job", { id });
+  await a.idle(60);
+  await a.ev(`window.__TAURI__.core.invoke('set_run_on', { value: 'auto' }).then(onState)`);
+  for (const id of ids) {
+    await a.invoke("dismiss_job", { id }).catch(() => {});
+    await a.invoke("delete_transcript", { id }).catch(() => {});
+  }
+  await a.ev(`loadHistory()`);
+};
 
 for (const lang of ["en", "ar"]) {
   await a.ev(`setUiLang(${JSON.stringify(lang)})`);
   const dir = join(REPO, "ui", "guide", lang);
   mkdirSync(dir, { recursive: true });
+  if (wanted("drop")) {
+    // the start page: drop files or a folder, or record
+    await steps({ transcribe: true });
+    await sleep(400);
+    await picture(join(dir, "drop.webp"), await box(["#dropzone", "#record-bar"]));
+  }
+  if (wanted("live")) {
+    // a meeting of two of Windows' voices, its lines appearing while it is transcribed
+    const ids = await transcribing([[talk("meeting-ar.wav", lang === "ar" ? "اجتماع الفريق.wav" : "Team meeting.wav"), "ar"]]);
+    await picture(join(dir, "live.webp"), { ...(await box(["#main"], 0)), height: 470 });
+    await cancelAll(ids);
+  }
+  if (wanted("listen")) {
+    // Follow words on a line being played, and a word selected and right-clicked
+    await openTalk();
+    await playing(0, "الشاشة");
+    await rightClick(1, "العميل");
+    await sleep(300);
+    const main = await box(["#main"], 0);
+    const menuEnd = await a.ev(`$('ctx-menu').getBoundingClientRect().bottom`);
+    await picture(join(dir, "listen.webp"), { ...main, height: Math.max(470, Math.ceil(menuEnd + 14 - main.y)) });
+    await unclick();
+  }
+  if (wanted("translate")) {
+    // the English translation under each line
+    await openTalk("en");
+    await picture(join(dir, "translate.webp"), { ...(await box(["#main"], 0)), height: 470 });
+  }
+  if (wanted("export")) {
+    // the export menu with both languages chosen, the video's own entries at its end
+    await openTalk("en");
+    await exportMenu("both");
+    // the menu and, on the side the page reads from, the lines it exports
+    const m = await a.ev(`(()=>{const r=$('export-menu').getBoundingClientRect(),t=$('btn-export').getBoundingClientRect(),w=$('main').getBoundingClientRect();return {x:r.left,y:t.top,right:r.right,bottom:r.bottom,left0:w.left,right0:w.right}})()`);
+    const x = Math.max(m.left0, lang === "ar" ? m.x - 320 : m.x - 14);
+    const right = Math.min(m.right0, lang === "ar" ? m.right + 14 : m.right + 320);
+    const y = Math.max(0, m.y - 14);
+    await picture(join(dir, "export.webp"), { x, y, width: right - x, height: Math.min(820, m.bottom + 14) - y });
+    await closeMenus();
+  }
   if (wanted("steps")) {
     // the common jobs, and the four steps ticked by hand, the speakers and the language found too
     await a.ev(`setSpoken('auto')`);
@@ -230,6 +353,58 @@ In a survey of 1,200 employees, 64% said they would like at least two days a wee
     await sleep(400);
   }
 }
+if (wanted("readme")) {
+  // the README's pictures of a transcript, at the size of the README's others
+  await a.ev(`setUiLang('en')`);
+  await windowSize(1500, 1000);
+  const shot = (name) => picture(join(REPO, "docs", "screenshots", name), { x: 0, y: 0, width: 1500, height: 1000 }, "png");
+  await openTalk();
+  await playing(1, "dashboard");
+  await shot("transcript.png");
+  await unclick();
+  await openTalk();
+  await rightClick(4, "OTP");
+  await sleep(300);
+  await shot("play-from-here.png");
+  await unclick();
+  await openTalk("en");
+  await shot("translation.png");
+  await exportMenu("both");
+  await shot("export-video.png");
+  await closeMenus();
+  await openTalk();
+  await a.ev(`(()=>{const s=$('search');s.value='الـ';s.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await sleep(500);
+  await exportMenu("original");
+  await shot("search-export.png");
+  await closeMenus();
+  await a.ev(`(()=>{const s=$('search');s.value='';s.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await a.ev(`setUiLang('ar')`);
+  await openTalk("en");
+  await shot("arabic.png");
+  await a.ev(`setUiLang('en')`);
+  // three talks in the queue, the first being written
+  const ids = await transcribing([
+    [talk("meeting-ar.wav", "اجتماع الفريق.wav"), "ar"],
+    [talk("meeting-en.wav", "Weekly meeting.wav"), "en"],
+    [talk("lecture-en.wav", "Lecture on the history of science.wav"), "en"],
+  ]);
+  await shot("transcribing.png");
+  await cancelAll(ids);
+  await windowSize(1200, 820);
+}
 await a.ev(`setUiLang('en')`);
 a.close();
+if (wanted("setup")) {
+  // the first-run page: no model yet, the language chosen, the models for it offered
+  const b = await open(makeHome("pictures-setup", { model_file: null }), PORT + 13);
+  await b.call("Emulation.setDeviceMetricsOverride", { width: 1500, height: 1000, deviceScaleFactor: 1, mobile: false });
+  // the folder as a user's own default reads, not this test's (or this PC's account)
+  await b.ev(`(()=>{showView('setup');const m=$('setup-spoken');m.value='da';m.onchange();$('download-dir').textContent=${JSON.stringify(String.raw`C:\Users\Sam\AppData\Local\Dawwin\models`)};})()`);
+  await sleep(800);
+  const r = await b.call("Page.captureScreenshot", { format: "png", clip: { x: 0, y: 0, width: 1500, height: 1000, scale: 1 } });
+  writeFileSync(join(REPO, "docs", "screenshots", "setup.png"), Buffer.from(r.result.data, "base64"));
+  console.log("made", join(REPO, "docs", "screenshots", "setup.png"));
+  b.close();
+}
 finish();

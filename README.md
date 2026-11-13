@@ -89,7 +89,7 @@ computer: no account, no upload, no subscription, no limit on hours.
   **Video to sound file**, **Sound without silences** or **Video with subtitles** (new in 1.3.2).
 - Save the sound and the videos next to the recording, or in a folder of your own (new in 1.3.2).
 
-![The start page: a drop area, the five common jobs by name, and under them four steps: Sound, Text (with Tell speakers apart and Write the minutes), Translation and Video.](docs/screenshots/home.png)
+![The start page: a drop area, the five common jobs by name, Record with its microphone, and four steps: Sound, Text (with Detect the language, Tell speakers apart and Write the minutes), Translation and Video.](docs/screenshots/home.png)
 
 **Record a meeting** (new in 1.5)
 
@@ -371,7 +371,7 @@ same kind of CPU, the minutes of a meeting of eight minutes took about 4½ minut
 under a minute with Jais-3 0.9B.
 
 **Requirements:** Windows 10 or 11 (64-bit), 8 GB of RAM (16 GB for the best translation or minutes model
-without a GPU), and room for the models. The installer is small (about 10 MB): the translator, ffmpeg,
+without a GPU), and room for the models. The installer is small (about 11 MB): the translator, ffmpeg,
 the voice program and PDFium download only for those who use them.
 
 ## How the translation models were chosen

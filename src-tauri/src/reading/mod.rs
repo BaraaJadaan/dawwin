@@ -553,8 +553,14 @@ impl Reader {
             return true;
         }
         const IDLE: [&str; 4] = ["queued", "done", "failed", "cancelled"];
-        // saving a reading as sound is the voice's own work, not a job that holds the GPU
-        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| j.kind != "reading_sound" && !IDLE.contains(&j.status.as_str())))
+        // saving a reading as sound is the voice's own work, not a job that holds the GPU; nor is
+        // recording, or keeping what was recorded
+        let holds = |j: &crate::queue::JobView| match j.kind.as_str() {
+            "reading_sound" => false,
+            "record" => !matches!(j.status.as_str(), "recording" | "saving_audio"),
+            _ => true,
+        };
+        self.app.try_state::<Arc<Core>>().is_some_and(|c| c.snapshot().queue.iter().any(|j| holds(j) && !IDLE.contains(&j.status.as_str())))
     }
 
     /// Whether this PC has a GPU the speech engine found.
@@ -580,7 +586,7 @@ impl Reader {
                 if procs.get(m.id).is_some_and(|p| p.on_gpu()) {
                     procs.remove(m.id);
                 }
-                return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin records, transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", m.name)));
+                return Err(anyhow!(crate::tr!("{} waits for the graphics card while Dawwin transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", m.name)));
             }
             let model_dir = voices::dir(&self.paths, &m);
             let load = voice::Load { family: m.family.into(), model: model_dir.clone(), gpu, options: m.session.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect() };

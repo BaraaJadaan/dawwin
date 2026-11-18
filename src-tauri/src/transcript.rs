@@ -84,6 +84,10 @@ pub struct Transcript {
     /// Without it, the recording holds the two tracks, as in earlier versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tracks: Option<String>,
+    /// What a recording of Dawwin's recorded (from 1.8.3 on). With no lines, or only some, it is a
+    /// recording kept without its text, which can be transcribed from its tracks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sources: Option<crate::record::Sources>,
 }
 
 /// Someone who speaks in a transcript. Numbered from 1 in the order they first speak; the name is
@@ -731,6 +735,7 @@ mod tests {
             speakers: Vec::new(),
             detected: None,
             tracks: None,
+            sources: None,
         }
     }
 

@@ -181,7 +181,7 @@ static AR: &[(&str, &str)] = &[
     ("Choose a file to read aloud", "اختر ملفًا لقراءته بصوت عالٍ"),
     ("This transcript has no minutes yet.", "لا محضر لهذا التفريغ بعد."),
     ("{} is too large to read aloud: Dawwin reads files of up to {} MB of text.", "{} أكبر من أن يُقرأ بصوت عالٍ: يقرأ دَوِّن ملفات نصها حتى {} ميغابايت."),
-    ("{} waits for the graphics card while Dawwin records, transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يسجّل أو يفرّغ أو يترجم أو يكتب محضرًا. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
+    ("{} waits for the graphics card while Dawwin transcribes, translates or writes minutes. Choose another voice to read now, or try again when it is done.", "ينتظر {} بطاقة الرسوميات ما دام دَوِّن يفرّغ أو يترجم أو يكتب محضرًا. اختر صوتًا آخر لتقرأ الآن، أو أعد المحاولة بعد انتهائه."),
 ];
 
 #[cfg(test)]

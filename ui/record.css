@@ -41,3 +41,40 @@
 .seg .line .text { flex: 1; min-width: 0; }
 .seg .who { flex: none; font: 600 12.5px/1.2 var(--ui-font); color: var(--me); min-width: 2.6em; }
 .seg .who-them { color: var(--them); }
+
+/* the question once a recording stopped: what to do with it */
+.modal-back {
+  position: fixed; inset: 0; z-index: 55; display: grid; place-items: center; padding: 20px;
+  background: color-mix(in srgb, #10140f 34%, transparent); backdrop-filter: blur(3px);
+  animation: modal-fade var(--t, .22s) var(--ease-out, ease-out) backwards;
+}
+.modal-back[hidden] { display: none; }
+.modal {
+  width: min(480px, 100%); max-height: calc(100vh - 40px); overflow-y: auto;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow-lift, var(--shadow)); padding: 16px 20px 18px; display: flex; flex-direction: column; gap: 12px;
+  animation: modal-pop var(--t-slow, .34s) var(--ease-out, ease-out) backwards;
+}
+.modal-back.leaving { animation: modal-out .16s var(--ease, ease) forwards; }
+.modal-back.leaving .modal { animation: modal-pop-out .16s var(--ease, ease) forwards; }
+@keyframes modal-fade { from { opacity: 0; } }
+@keyframes modal-out { to { opacity: 0; } }
+@keyframes modal-pop { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+@keyframes modal-pop-out { to { opacity: 0; transform: translateY(6px) scale(.98); } }
+.modal-head { display: flex; align-items: center; gap: 10px; }
+.modal-head h2 { flex: 1; margin: 0; font-size: 17px; font-weight: 650; }
+.rc-what { margin: -8px 0 0; color: var(--muted); font-size: 13.5px; }
+.rc-opts { display: flex; flex-direction: column; padding: 6px 0; border-block: 1px solid var(--line); }
+.rc-row { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+.rc-row[hidden] { display: none; }
+.rc-row .toggle { flex: 1; color: var(--text); font-size: 14.5px; }
+.rc-row .toggle input { width: 16px; height: 16px; }
+.rc-row select.input { flex: 0 1 200px; min-width: 0; }
+.rc-sub { padding-inline-start: 24px; transition: opacity var(--t-fast, .14s) var(--ease, ease); }
+.rc-sub.off { opacity: .55; }
+.modal-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.modal-actions .grow { flex: 1; }
+.rc-delete:not(.btn-danger) { color: var(--danger); }
+/* a recording stopped, its question put off: no warning, it is waiting */
+.rec-cutoff.rec-waiting { background: var(--accent-soft); }
+.rec-saved p { margin: 0 0 14px; }

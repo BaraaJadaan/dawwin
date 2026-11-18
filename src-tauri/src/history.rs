@@ -193,6 +193,7 @@ mod tests {
             speakers: vec![],
             detected: None,
             tracks: None,
+            sources: None,
         }
     }
 

@@ -949,9 +949,10 @@ impl Core {
     }
 
     pub fn cancel(&self, id: &str) {
-        // a meeting being recorded stops, and its text is still written
+        // a meeting being recorded stops, and is asked about as after Stop
         if meeting::stop_if_recording(id) {
             self.recording_stopped(id);
+            meeting::wrap_up_later(&self.app, id);
             return;
         }
         if let Some(c) = self.cancels.lock().unwrap().get(id) {
@@ -964,12 +965,12 @@ impl Core {
         });
     }
 
-    /// A recording was told to stop: the job says so at once, not once the engine has heard the
-    /// piece it is on (with a slow engine that took seconds, and Stop looked as if it did nothing).
+    /// A recording was told to stop: the job says so at once, while the recorder writes its last
+    /// second, until it leaves the queue (`meeting::wrap_up`).
     pub(crate) fn recording_stopped(&self, id: &str) {
         self.update_job(id, |j| {
             if j.status == "recording" {
-                j.status = "transcribing".into();
+                j.status = "saving_audio".into();
             }
         });
     }
@@ -1460,20 +1461,6 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                 if let Err(err) = minutes_job::run(&core, &mut translator, &id) {
                     let on_gpu = translator.as_ref().is_some_and(|t| !t.cpu_only);
                     let cancelled = core.cancels.lock().unwrap().get(&id).is_some_and(|c| c.load(Ordering::SeqCst));
-                    if !cancelled && (err.is::<minutes_job::GiveWay>() || meeting::is_recording()) {
-                        // a recording has the engine and the GPU: the minutes go after what waits,
-                        // and carry on from their notes once it is done
-                        if let Some(t) = translator.take() {
-                            t.shutdown();
-                        }
-                        core.update_job(&id, |j| {
-                            j.status = "queued".into();
-                            j.eta_s = None;
-                        });
-                        backlog.push_back(Msg::Minutes(id));
-                        std::thread::sleep(Duration::from_millis(500));
-                        continue;
-                    }
                     if err.is::<EngineFailed>() && on_gpu && !cancelled && !core.translator_gpu_failed.swap(true, Ordering::SeqCst) {
                         // the rest of it again, on the CPU: the notes done are kept
                         if let Some(t) = translator.take() {
@@ -2100,6 +2087,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         speakers: Vec::new(),
         detected: auto.then(|| spoken.clone()),
         tracks: None,
+        sources: None,
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -2426,6 +2414,7 @@ mod tests {
             speakers: Vec::new(),
             detected: None,
             tracks: None,
+            sources: None,
         };
         history::save(&dir, &t).unwrap();
         (dir, t)

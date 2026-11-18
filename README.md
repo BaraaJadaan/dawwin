@@ -4,8 +4,8 @@
 
 **Turn recordings, videos and meetings into text, translate it, subtitle them, write their minutes, and have any text read aloud, on your own Windows PC.**
 Arabic first, with its dialects and the English words people mix into it, and about 100 other
-languages. Translation into 46 languages. Record a Zoom, Meet or Teams call and read it as it is
-said. And the other way round: any text, file, transcript or minutes read aloud in a natural voice, in
+languages. Translation into 46 languages. Record a Zoom, Meet or Teams call, then choose what to do
+with it. And the other way round: any text, file, transcript or minutes read aloud in a natural voice, in
 Arabic and English, and the text you select in any program read at a shortcut. Nothing leaves your
 computer: no account, no upload, no subscription, no limit on hours.
 
@@ -15,7 +15,7 @@ computer: no account, no upload, no subscription, no limit on hours.
 
 **دَوِّن** يفرّغ التسجيلات والفيديوهات إلى نص على حاسوبك، ويترجمها، ويضيف إليها نصًّا على الشاشة،
 ويكتب محاضر الاجتماعات. العربية أولًا، بلهجاتها والكلمات الإنجليزية التي تتخللها، ونحو 100 لغة أخرى،
-والترجمة إلى 46 لغة. ويسجّل مكالمات Zoom وMeet وTeams ويكتبها أثناء الكلام. ويقرأ لك أي نص أو ملف أو
+والترجمة إلى 46 لغة. ويسجّل مكالمات Zoom وMeet وTeams ثم تختار ما يفعله بها. ويقرأ لك أي نص أو ملف أو
 تفريغ أو محضر بصوت طبيعي، بالعربية والإنجليزية، وأي نص تحدّده في أي برنامج بضغطة اختصار.
 لاجتماعات العمل، والمحاضرات والدروس والخطب، والمقابلات والأبحاث، والفيديوهات والأفلام، والرسائل
 الصوتية. لا شيء يغادر جهازك: لا حساب ولا رفع ولا اشتراك.
@@ -27,8 +27,9 @@ computer: no account, no upload, no subscription, no limit on hours.
 ## What people use it for
 
 - **Business meetings.** Press **Record** during a Zoom, Teams or Google Meet call: Dawwin records your
-  microphone and what the PC plays, with no bot joining the call, and writes the meeting while it goes,
-  each line marked Me or Them, the others told apart by voice. Or drop a recording of it. Either way you
+  microphone and what the PC plays, with no bot joining the call. Press Stop and choose: the meeting as
+  text, each line marked Me or Them, the others told apart by voice, its minutes, a translation; or just
+  keep the recording for later. Or drop a recording of it. Either way you
   get the meeting as text you can search, correct and send as a Word document, with who said what.
   Requirement meetings in Arabic full of English terms ("الـ dashboard", "الـ API") come out as they
   were said, and the names of your company and products the way you write them. Then one press
@@ -96,20 +97,20 @@ computer: no account, no upload, no subscription, no limit on hours.
 - **Record** on the start page records your microphone and everything the PC plays, as two tracks:
   a Zoom, Meet or Teams call, a call in the browser, a webinar or a video. It listens to the PC, not to
   one program, so it works with any of them, and nothing joins the call. Dawwin's own sound is left out.
-- The text appears while people speak, about half a minute behind, each line marked **Me** or **Them**.
-  With **Tell speakers apart** ticked, the others are told apart by voice once you press Stop (Speaker 2,
-  Speaker 3…, to rename like any speaker). **Detect the language** works here too: the first words
-  spoken decide. Press Stop and the transcript is ready within moments: nothing is transcribed twice.
-  The other steps ticked on the start page, such as a translation, follow, and Fix the timing, Follow
-  words and subtitles hear each side on its own.
+- It only records (new in 1.8.3). Press **Stop** and Dawwin asks what to do with the recording:
+  **Transcribe** it in the language you choose (or **Detect the language**), each line marked **Me** or
+  **Them**, and **Tell speakers apart** (Speaker 2, Speaker 3…, to rename like any speaker), **Write the
+  minutes**, **Translate into** another language, **Save the sound without silences**; or **Just save
+  it**, and transcribe it later from its page in the history. Put the question off and the recording
+  waits on the start page. Fix the timing, Follow words and subtitles hear each side on its own.
 - With laptop speakers instead of headphones, the microphone hears the others too: echo cancellation
   (WebRTC's, in Rust) takes them out of your track, so their words are not written twice.
 - Record both sides, the microphone alone (a lecture in a room) or the PC's sound alone (a webinar).
   Choose the microphone, or follow the Windows default; a headset plugged in or out mid-meeting is
   followed without a gap. A microphone that sends no sound (muted, or a virtual one with nothing behind
   it) is said at once, with the others to choose from.
-- The recording survives a crash, a power cut or a forced close up to the last second or so, and is
-  offered back at the next start. The PC does not sleep while it records, closing Dawwin asks first,
+- The recording survives a crash, a power cut or a forced close up to the last second or so, and the
+  next start asks what to do with it. The PC does not sleep while it records, closing Dawwin asks first,
   and a disk running low is said before it is full.
 - Kept as it was heard (new in 1.8.1): the PC's sound in stereo at 48 kHz, as the call or the video
   played it, with your microphone in the middle of it, an M4A of about 85 MB an hour (with ffmpeg; as a
@@ -121,7 +122,7 @@ computer: no account, no upload, no subscription, no limit on hours.
   plainly next to Record. The first time, Dawwin reminds you that recording a call may need everyone's
   consent.
 
-![Recording a meeting: the time, a level for Me and one for Them, Stop, and the text appearing with each line marked Me or Them.](docs/screenshots/record.png)
+![After Stop: what to do with the recording. Transcribe it in a language, tell the speakers apart, write the minutes, translate it, save the sound without silences, or just save it.](docs/screenshots/record.png)
 
 **Who said what** (new in 1.4)
 
@@ -216,8 +217,8 @@ computer: no account, no upload, no subscription, no limit on hours.
 - A meeting of three hours is written in parts, with the progress shown; stop it and it carries on where
   it stopped, and the minutes cover the whole meeting.
 - Export the minutes alone, or followed by the transcript, to Word, Markdown or text. A step on the start
-  page writes them after the transcript, and a folder run saves them next to each recording. While you
-  record a meeting they wait, so the recording keeps the engine and the GPU, and carry on after it.
+  page writes them after the transcript, and a folder run saves them next to each recording, and so does
+  the question after you record a meeting.
 - Written on your computer by a model you download once in Settings, chosen by measuring (see below).
   The panel offers the models with their sizes and says which fits your computer.
 
@@ -243,7 +244,7 @@ computer: no account, no upload, no subscription, no limit on hours.
 - Three voices, chosen by ear in a blind listening test (below): **VoxCPM 2**, the most natural, wants
   a graphics card; **Supertonic 3** reads Arabic and English on any processor; **Phonon 31M** reads
   English and is the smallest. Hear each one in **Settings** before you download it. A voice that needs
-  the graphics card waits while Dawwin records, transcribes, translates or writes minutes on it, and says
+  the graphics card waits while Dawwin transcribes, translates or writes minutes on it, and says
   so. The voices run on your PC like everything else: the text never leaves it.
 - **Save as sound**: the reading as a sound file to listen to away from the computer, M4A, or M4B with a
   chapter for each chapter of a book. It is made in the list of jobs, with its progress, and can be
@@ -359,7 +360,7 @@ computer: no account, no upload, no subscription, no limit on hours.
 
    | Voice | Reads | Download | |
    | --- | --- | --- | --- |
-   | **VoxCPM 2** (OpenBMB) | Arabic and English, a man and a woman in each | 3.0 GB | The most natural. Wants a graphics card; while Dawwin records, transcribes, translates or writes minutes on it, it waits. |
+   | **VoxCPM 2** (OpenBMB) | Arabic and English, a man and a woman in each | 3.0 GB | The most natural. Wants a graphics card; while Dawwin transcribes, translates or writes minutes on it, it waits. |
    | **Supertonic 3** (Supertone) | Arabic and English, five men and five women | 0.3 GB | Fast on any processor: it reads faster than it speaks without a GPU. |
    | **Phonon 31M** (Gradium) | English, two men and three women | 87 MB | The smallest, and the fastest. |
 

@@ -72,20 +72,8 @@ impl Core {
     }
 }
 
-/// A recording started, or is under way: the minutes give it the engine and the GPU, and wait.
-#[derive(Debug)]
-pub(super) struct GiveWay;
-
-impl std::fmt::Display for GiveWay {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("a recording is under way")
-    }
-}
-
-impl std::error::Error for GiveWay {}
-
-/// Set when the run is stopped or a recording starts: either ends the model's request at once (the
-/// notes saved are kept). Watched until it is dropped.
+/// Set when the run is stopped: it ends the model's request at once (the notes saved are kept).
+/// Watched until it is dropped. A recording does not stop it: recording needs no engine.
 struct Watch {
     stop: Arc<AtomicBool>,
     done: Arc<AtomicBool>,
@@ -97,7 +85,7 @@ impl Watch {
         let (s, d) = (stop.clone(), done.clone());
         std::thread::spawn(move || {
             while !d.load(Ordering::Relaxed) {
-                if cancel.load(Ordering::SeqCst) || super::meeting::is_recording() {
+                if cancel.load(Ordering::SeqCst) {
                     s.store(true, Ordering::SeqCst);
                     return;
                 }
@@ -181,10 +169,6 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     }
     let (Some(transcript), Some(language)) = (job.transcript.clone(), job.target.clone()) else { return Ok(()) };
     let cancel = core.cancels.lock().unwrap().get(id).cloned().unwrap_or_default();
-    // a recording has the engine's turn: the minutes wait for it (the queue sends them again)
-    if super::meeting::is_recording() {
-        return Err(anyhow!(GiveWay));
-    }
     let watch = Watch::new(cancel.clone());
     let stop: &AtomicBool = &watch.stop;
     let started = Instant::now();

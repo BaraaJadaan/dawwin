@@ -206,6 +206,7 @@ mod tests {
             speakers: Vec::new(),
             detected: None,
             tracks: None,
+            sources: None,
         }
     }
 

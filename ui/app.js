@@ -123,7 +123,8 @@ function showView(v) {
   $("btn-guide").classList.toggle("active", v === "guide");
   if (v === "settings") { renderSettings(); checkOldEngine(); renderReadingSettings(); }
   if (v === "guide") renderGuide();
-  if (v === "home") paintSteps();
+  // the start page as things are now: never the panel of a recording that stopped while away
+  if (v === "home") { paintSteps(); renderRecordBar(); }
   renderHistory();
   renderQueue();
   if (v !== "transcript") stopAudio();
@@ -366,7 +367,7 @@ function jobById(id) {
 
 function jobLine(j) {
   switch (j.status) {
-    case "queued": return recordWaiting() || t("job.queued");
+    case "queued": return t("job.queued");
     case "recording": return recordJobLine(j);
     case "decoding": return t("job.decoding");
     case "detecting": return t("job.detecting");
@@ -425,6 +426,9 @@ function makeJobRow(li) {
     const j = jobById(li.dataset.key);
     if (!j) return;
     const of = j.transcript || j.id;
+    // a recording: its levels and Stop on the start page; once stopped, its transcript, with
+    // text or without
+    if (j.kind === "record") { if (j.status === "recording") showView("home"); else openTranscript(of); return; }
     // a job that only saves the sound has no transcript: it shows the file
     if (j.kind === "burn" || j.kind === "timing" || j.kind === "speakers") openTranscript(of);
     else if (j.kind !== "translate" && !j.steps?.transcribe) { if (j.outputs?.length) invoke("reveal", { path: j.outputs[0] }); }
@@ -928,6 +932,9 @@ function renderTranscript() {
   title.textContent = cur.title;
   title.contentEditable = live ? "false" : "true";
   $("t-partial").hidden = !cur.partial || live;
+  // a recording kept without its text, partly transcribed: the rest from here
+  const own = jobById(cur.id);
+  $("t-transcribe").hidden = !cur.sources || !cur.partial || !cur.segments.length || live || !!(own && ACTIVE.has(own.status));
   renderMeta();
   renderLiveProgress();
   paintTranslationMenu();
@@ -1065,7 +1072,10 @@ function emptyLive() {
   const d = document.createElement("div");
   d.className = "empty-live";
   const j = jobById(S.current.id);
-  d.textContent = t(j && ACTIVE.has(j.status) ? "t.emptyLive" : "t.empty");
+  const busy = j && ACTIVE.has(j.status);
+  // a recording kept without its text: transcribed from here (record.js)
+  if (!busy && S.current.sources) return savedRecordingBox(S.current);
+  d.textContent = t(busy ? "t.emptyLive" : "t.empty");
   return d;
 }
 

@@ -51,7 +51,7 @@ for (const lang of ["en", "ar"]) {
   const folder = join(home, "recordings");
   const journal = readdirSync(folder).find((f) => f.endsWith(".dawwin-recording.json"));
   const j = journal && JSON.parse(readFileSync(join(folder, journal), "utf8"));
-  check(`${lang}: the recording is kept whole, to be transcribed at the next start`, j?.state === "stopped" && readdirSync(folder).some((f) => f.endsWith(".wav")), j?.state);
+  check(`${lang}: the recording is kept whole, to be asked about at the next start`, j?.state === "stopped" && readdirSync(folder).some((f) => f.endsWith(".wav")), j?.state);
 }
 
 // recordings that would go to OneDrive: the notice is shown again, and says so

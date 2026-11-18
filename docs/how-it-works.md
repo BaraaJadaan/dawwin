@@ -22,7 +22,7 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/transcript.rs` | The transcript data, its translations, and the exports (txt, md, srt, vtt, docx, csv, tsv, json), of the transcript, a translation or both. |
 | `src-tauri/src/translate.rs` | `TranslatorProcess`: runs `llama-server.exe` on 127.0.0.1 with a random key, on one device, and asks it for a line at a time, or for JSON held to a schema, streamed. |
 | `src-tauri/src/minutes.rs` | Minutes: what is kept in the transcript's file, the lines as the model reads them (with the speakers' names, and who is who in a recorded meeting), the parts of a long recording, the answer checked against the transcript, the exports. The prompts and the schema are in `src-tauri/prompts`. |
-| `src-tauri/src/queue/minutes_job.rs` | Writing the minutes as a job in the queue: parts, notes saved as they come, the last pass over the notes; it gives way to a recording. |
+| `src-tauri/src/queue/minutes_job.rs` | Writing the minutes as a job in the queue: parts, notes saved as they come, the last pass over the notes. |
 | `src-tauri/src/captions.rs` | Subtitles cut and timed the way professional ones are, with each language's line length. |
 | `src-tauri/src/timing.rs` | When each word is said: the timing pass (each stretch between two pauses heard again) and the match of what was heard to the line's text. `timing/bench.rs` measures it. |
 | `src-tauri/src/script.rs` | How each writing system puts its words down: words in scripts without spaces, marks that stay with their letter, widths on a line. |
@@ -30,8 +30,8 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
 | `src-tauri/src/saving.rs` | Where the files Dawwin makes go: next to the recording, or a folder of one's own. |
 | `src-tauri/src/video.rs` | Subtitles into the video itself: ffmpeg copies its streams and adds a track per language, or burns them into the picture. |
 | `src-tauri/src/tools.rs` | The tools Dawwin downloads when they are wanted (the translator, ffmpeg in two builds, the voice program and its GPU library, PDFium): pinned files on one release, downloaded, checked and unpacked. |
-| `src-tauri/src/record/` | Recording a meeting: the microphone and what the PC plays (WASAPI, at 48 kHz) as two tracks on one clock, made 16 kHz mono for the engine (`resample.rs`); a WAV of those tracks and one of the sound to listen to (48 kHz stereo, the microphone in the middle) that survive a crash; echo cancellation; and pieces for the engine as the sound arrives. |
-| `src-tauri/src/queue/meeting.rs` | The recording as a job: live text, "me" and "them", the rest after Stop, recovery; then the sound to listen to as the recording (an M4A), and the two tracks beside the transcript (`history/<id>.tracks.m4a`, the transcript's `tracks`) for Find the speakers and Fix the timing. |
+| `src-tauri/src/record/` | Recording a meeting: the microphone and what the PC plays (WASAPI, at 48 kHz) as two tracks on one clock, made 16 kHz mono for the engine (`resample.rs`); a WAV of those tracks and one of the sound to listen to (48 kHz stereo, the microphone in the middle) that survive a crash; echo cancellation; and the cutter that makes pieces of the tracks for the engine. |
+| `src-tauri/src/queue/meeting.rs` | The recording as a job: it only records; after Stop it waits beside its journal for a choice (transcribe it with steps, just keep it, delete it), and is transcribed from the file, "me" and "them" apart; then the sound to listen to as the recording (an M4A), and the two tracks beside the transcript (`history/<id>.tracks.m4a`, the transcript's `tracks`) for Find the speakers, Fix the timing, and transcribing later one that was only kept (`sources` set, no lines). |
 | `src-tauri/src/moving.rs` | The models folder moved: every model, unfinished download and voice renamed on one disk, or copied to another and the old ones removed only once every copy is whole; a move that fails is put back. |
 | `ui/settings.js` | The Settings page: its sections in the side panel in place of the history, one at a time on the page; the models folder and its move; the mark on the model in use of a family. |
 | `src-tauri/src/folder.rs` | Transcribing a folder: finds the recordings and writes the files next to them. Also the one list of the extensions Dawwin takes, which the interface asks for. |
@@ -212,15 +212,19 @@ ffmpeg are not in the installer: Dawwin downloads them when they are wanted (see
   two-channel WAV (left me, right them) whose header is rewritten every second, with a journal beside
   it. The microphone goes through WebRTC's echo cancellation (the `sonora` crate) with "them" as the
   reference: without it the model writes the others' words out again from the speakers, even 20 dB
-  down. Each track is cut as it arrives exactly where `audio::split_points` would cut it (25 s), pieces
-  without speech never reach the model (it invents a line on near-silence), and a "me" line that only
-  says what "them" said at the same time is dropped. More than two minutes behind, live text stops and
-  the rest is transcribed from the file after Stop. "Me" and "Them" are the transcript's speakers 1
-  and 2 from the first line (`Segment::track` says which track a line is from); with Tell speakers
-  apart, the speaker model hears the "them" channel alone after Stop and only those lines are told
-  apart (`meeting::split_them`); Find the speakers and the timing pass on a meeting also hear each line
-  on its own channel. With Detect the language, the first piece with speech is heard by the language
-  model before anything is transcribed. Measurements: `tools/record-trial`. Debug builds take made-up
+  down. Nothing is transcribed while it records (1.8.3): Stop makes the file whole, the journal says
+  "stopped", and the window asks what to do with it; a question put off waits on the start page, also
+  after a restart. Transcribed, each track is read from the file and cut exactly where
+  `audio::split_points` would cut it (25 s), pieces without speech never reach the model (it invents a
+  line on near-silence), and a "me" line that only says what "them" said at the same time is dropped.
+  "Just save it" keeps the sound to listen to and the tracks, with a transcript without lines whose
+  `sources` say what was recorded; transcribing it later reads the tracks through ffmpeg a stretch at
+  a time. "Me" and "Them" are the transcript's speakers 1 and 2 from the first line
+  (`Segment::track` says which track a line is from); with Tell speakers apart, the speaker model
+  hears the "them" channel alone and only those lines are told apart (`meeting::split_them`); Find
+  the speakers and the timing pass on a meeting also hear each line on its own channel. With Detect
+  the language, its first three minutes, both sides together, are heard by the language model before
+  anything is transcribed. Measurements: `tools/record-trial`. Debug builds take made-up
   tracks instead of the devices (`DAWWIN_TEST_RECORD="me=<file>|them=<file>"`, see `tools/e2e`).
 - **`DAWWIN_HOME`** keeps all the app's data in one folder.
 - **One Dawwin per data folder.** A named mutex keyed on the data folder: a second start sets an event

@@ -1,10 +1,10 @@
 //! Recording a meeting: the microphone ("me") and what the PC plays ("them") as two tracks on one
 //! clock, from capture to file to transcript. Each packet is placed by its capture timestamp, so
 //! the tracks stay together and true to the clock through silences and device changes; the WAV
-//! (left me, right them, 16 kHz) is readable at every moment, and the sound is cut into pieces for
-//! the speech engine as it arrives. Beside it the sound is kept as the devices gave it (48 kHz,
-//! the PC's in stereo, the microphone in the middle), for listening. The recording never waits for
-//! the engine. The measurements behind it are in `tools/record-trial`.
+//! (left me, right them, 16 kHz) is readable at every moment, and is what the speech engine hears
+//! once the recording has stopped (cut into pieces by `cutter`). Beside it the sound is kept as the
+//! devices gave it (48 kHz, the PC's in stereo, the microphone in the middle), for listening. The
+//! measurements behind it are in `tools/record-trial`.
 
 pub mod cutter;
 pub mod echo;
@@ -18,7 +18,7 @@ pub mod windows;
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -46,9 +46,13 @@ pub static AR: &[(&str, &str)] = &[
     ("Record", "سجّل"),
     ("Cancel", "إلغاء"),
     (
-        "A recording is running. Stop it and quit? The recording is kept, and its text is written at the next start.",
-        "هناك تسجيل جارٍ. أتوقفه وتغلق دَوِّن؟ يُحفظ التسجيل، ويُكتب نصّه عند التشغيل التالي.",
+        "A recording is running. Stop it and quit? The recording is kept, and at the next start Dawwin asks what to do with it.",
+        "هناك تسجيل جارٍ. أتوقفه وتغلق دَوِّن؟ يُحفظ التسجيل، وعند التشغيل التالي يسألك دَوِّن ماذا تفعل به.",
     ),
+    ("This recording is being worked on.", "يُعمل على هذا التسجيل الآن."),
+    ("This transcript is not a recording kept without its text.", "هذا النص ليس تسجيلًا حُفظ دون نصّه."),
+    ("ffmpeg could not read the recording.", "تعذّر على ffmpeg قراءة التسجيل."),
+    ("Reading this recording needs ffmpeg. Download it in Settings.", "قراءة هذا التسجيل تحتاج إلى ffmpeg. نزّله من الإعدادات."),
     ("Stop and quit", "أوقفه وأغلق"),
     (
         "Recording a call may need the consent of everyone on it. Tell the others before you start. The recordings folder, {}, is in OneDrive, so OneDrive will upload the recording.",
@@ -160,20 +164,11 @@ pub struct Config {
     pub on_status: Box<dyn Fn(&Status) + Send>,
 }
 
-/// Pieces waiting for the engine: about seven minutes of both tracks. Past that the recorder keeps
-/// no more of them in memory, and says from where the engine is to take the sound from the file.
-const PIECES_WAITING: usize = 16;
-
 pub struct Recorder {
     stop: Arc<AtomicBool>,
     mic: Sender<Option<String>>,
-    overflow: Overflow,
     thread: Option<std::thread::JoinHandle<Result<u64>>>,
 }
-
-/// For each track, where its pieces stopped going to the engine because none were taken: from
-/// there on it is to be heard from the file.
-pub type Overflow = Arc<Mutex<[Option<usize>; 2]>>;
 
 /// Free bytes on the drive of `dir`.
 #[cfg(windows)]
@@ -206,8 +201,8 @@ fn disk_free(dir: &Path) -> Option<u64> {
 }
 
 impl Recorder {
-    /// Start recording into `cfg.wav`; the pieces for the engine come through the receiver.
-    pub fn start(cfg: Config, factory: Box<dyn Factory>) -> Result<(Recorder, Receiver<Piece>)> {
+    /// Start recording into `cfg.wav`.
+    pub fn start(cfg: Config, factory: Box<dyn Factory>) -> Result<Recorder> {
         let writer = wav::Writer::create(&cfg.wav)?;
         let hifi = match &cfg.hifi {
             Some(p) if factory.hifi() => Some(wav::Writer::create_at(p, resample::HIFI as u32)?),
@@ -215,12 +210,10 @@ impl Recorder {
         };
         let stop = Arc::new(AtomicBool::new(false));
         let (mic_tx, mic_rx) = mpsc::channel();
-        let (pieces_tx, pieces_rx) = mpsc::sync_channel(PIECES_WAITING);
-        let overflow: Overflow = Arc::new(Mutex::new([None, None]));
         let status = Arc::new(Mutex::new(Status::default()));
-        let (s, out) = (stop.clone(), Outbox { tx: pieces_tx, overflow: overflow.clone() });
-        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, hifi, s, mic_rx, status, out))?;
-        Ok((Recorder { stop, mic: mic_tx, overflow, thread: Some(thread) }, pieces_rx))
+        let s = stop.clone();
+        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, hifi, s, mic_rx, status))?;
+        Ok(Recorder { stop, mic: mic_tx, thread: Some(thread) })
     }
 
     pub fn stop(&self) {
@@ -237,10 +230,6 @@ impl Recorder {
         let _ = self.mic.send(id);
     }
 
-    pub fn overflow(&self) -> Overflow {
-        self.overflow.clone()
-    }
-
     /// Wait until the WAV is whole: the frames in it.
     pub fn wait(mut self) -> Result<u64> {
         match self.thread.take().map(|t| t.join()) {
@@ -253,26 +242,6 @@ impl Recorder {
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-    }
-}
-
-/// Where the pieces go: to the engine while it takes them; once a track's piece finds no room,
-/// that track's pieces stop and the place is kept, so that memory never grows with the wait.
-struct Outbox {
-    tx: SyncSender<Piece>,
-    overflow: Overflow,
-}
-
-impl Outbox {
-    fn send(&self, p: Piece) {
-        let k = p.track.index();
-        if self.overflow.lock().unwrap()[k].is_some() {
-            return;
-        }
-        let start = p.start;
-        if let Err(TrySendError::Full(_)) = self.tx.try_send(p) {
-            self.overflow.lock().unwrap()[k] = Some(start);
-        }
     }
 }
 
@@ -320,17 +289,7 @@ fn level(s: &[f32]) -> Level {
     Level { db: db(rms), peak_db: db(peak) }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn run(
-    cfg: Config,
-    factory: Box<dyn Factory>,
-    mut writer: wav::Writer,
-    mut hifi: Option<wav::Writer>,
-    stop: Arc<AtomicBool>,
-    mic_rx: Receiver<Option<String>>,
-    status: Arc<Mutex<Status>>,
-    pieces: Outbox,
-) -> Result<u64> {
+fn run(cfg: Config, factory: Box<dyn Factory>, mut writer: wav::Writer, mut hifi: Option<wav::Writer>, stop: Arc<AtomicBool>, mic_rx: Receiver<Option<String>>, status: Arc<Mutex<Status>>) -> Result<u64> {
     let _awake = crate::setup::KeepAwake::new();
     let t0 = source::now();
     let (tx, rx) = mpsc::channel::<Event>();
@@ -350,7 +309,6 @@ fn run(
     let mut hi = [timeline::Track::new(htol), timeline::Track::new(htol), timeline::Track::new(htol)];
     let both = cfg.sources == Sources::Both;
     let mut canceller = both.then(echo::Canceller::new);
-    let mut cutters = [cutter::Cutter::new(PIECE_S, SEARCH_S, 0), cutter::Cutter::new(PIECE_S, SEARCH_S, 0)];
     let mut written = 0usize;
     let mut last_flush = Instant::now();
     let mut last_checkpoint = Instant::now();
@@ -362,25 +320,11 @@ fn run(
     let mut failure: Option<anyhow::Error> = None;
     let dir = cfg.wav.parent().map(Path::to_path_buf).unwrap_or_default();
 
-    let mut write = |me: &mut Vec<f32>, them: &mut Vec<f32>, writer: &mut wav::Writer, cutters: &mut [cutter::Cutter; 2], last: bool| -> Result<()> {
+    let mut write = |me: &mut Vec<f32>, them: &mut Vec<f32>, writer: &mut wav::Writer| -> Result<()> {
         if let Some(c) = canceller.as_mut() {
             c.process(me, them);
         }
         writer.append(me, them)?;
-        for t in cfg.sources.tracks() {
-            let samples = if t == Track::Me { &*me } else { &*them };
-            for (start, s) in cutters[t.index()].push(samples) {
-                pieces.send(Piece { track: t, start, samples: s });
-            }
-        }
-        if last {
-            for t in cfg.sources.tracks() {
-                let c = std::mem::replace(&mut cutters[t.index()], cutter::Cutter::new(PIECE_S, SEARCH_S, 0));
-                for (start, s) in c.finish() {
-                    pieces.send(Piece { track: t, start, samples: s });
-                }
-            }
-        }
         Ok(())
     };
 
@@ -476,7 +420,7 @@ fn run(
                         st.mic_silent = false;
                     }
                 }
-                if let Err(e) = write(&mut me, &mut them, &mut writer, &mut cutters, false) {
+                if let Err(e) = write(&mut me, &mut them, &mut writer) {
                     failure = Some(e);
                     break;
                 }
@@ -542,7 +486,7 @@ fn run(
         let end = end.div_ceil(echo::BLOCK) * echo::BLOCK;
         let mut me = tracks[0].take(end as u64);
         let mut them = tracks[1].take(end as u64);
-        let last = write(&mut me, &mut them, &mut writer, &mut cutters, true).and_then(|_| Ok(writer.checkpoint()?)).and_then(|_| {
+        let last = write(&mut me, &mut them, &mut writer).and_then(|_| Ok(writer.checkpoint()?)).and_then(|_| {
             if let Some(h) = hifi.as_mut() {
                 write_hifi(h, &mut hi, (end * UP) as u64, cfg.sources)?;
                 h.checkpoint()?;
@@ -590,7 +534,7 @@ mod tests {
     }
 
     /// Two made-up tracks through the whole recorder at clock speed: the file holds both, where
-    /// they were, across a long silence in which no packet came; the pieces cover each track.
+    /// they were, across a long silence in which no packet came.
     #[test]
     fn two_tracks_stay_on_one_clock_through_a_silence() {
         let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
@@ -603,7 +547,7 @@ mod tests {
         let files = source::Files::new(Some(me), Some(them), false);
         let cfg = Config { sources: Sources::Mic, mic: None, wav: wav.clone(), hifi: None, on_status: Box::new(|_| {}) };
         // the microphone alone: no echo cancellation, so the samples come back as they went in
-        let (rec, pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
+        let rec = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
         rec.stop();
         let frames = rec.wait().unwrap();
@@ -613,9 +557,6 @@ mod tests {
         let first = left.iter().position(|x| *x > 0.2).unwrap();
         assert!((first as i64 - (SR / 2) as i64).abs() < 400, "me starts at {first}");
         assert!(right.iter().all(|x| *x == 0.0), "them was not recorded");
-        let got: Vec<Piece> = pieces.try_iter().collect();
-        assert!(got.iter().all(|p| p.track == Track::Me));
-        assert_eq!(got.iter().map(|p| p.samples.len()).sum::<usize>() as u64, frames);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -642,7 +583,7 @@ mod tests {
                 }
             }),
         };
-        let (rec, _pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
+        let rec = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
         rec.stop();
         let frames = rec.wait().unwrap();
@@ -698,7 +639,7 @@ mod tests {
         let d = dir("hifi");
         let (wav, hifi) = (d.join("r.wav"), d.join("r.listen.wav"));
         let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), hifi: Some(hifi.clone()), on_status: Box::new(|_| {}) };
-        let (rec, _pieces) = Recorder::start(cfg, Box::new(Stereo)).unwrap();
+        let rec = Recorder::start(cfg, Box::new(Stereo)).unwrap();
         std::thread::sleep(Duration::from_millis(2600));
         rec.stop();
         let frames = rec.wait().unwrap();
@@ -717,24 +658,6 @@ mod tests {
     }
 
     #[test]
-    fn pieces_nobody_takes_stop_at_a_place_to_take_up_from_the_file() {
-        let (tx, rx) = mpsc::sync_channel(2);
-        let overflow: Overflow = Arc::new(Mutex::new([None, None]));
-        let out = Outbox { tx, overflow: overflow.clone() };
-        let piece = |track, start| Piece { track, start, samples: vec![0.0; 10] };
-        out.send(piece(Track::Them, 0));
-        out.send(piece(Track::Me, 0));
-        out.send(piece(Track::Them, 400));
-        out.send(piece(Track::Them, 800));
-        assert_eq!(*overflow.lock().unwrap(), [None, Some(400)], "them: from 400 on, the file");
-        let _ = rx.recv();
-        out.send(piece(Track::Them, 800));
-        out.send(piece(Track::Me, 400));
-        let got: Vec<(Track, usize)> = rx.try_iter().map(|p| (p.track, p.start)).collect();
-        assert_eq!(got, [(Track::Me, 0), (Track::Me, 400)], "no more of them, even with room again");
-    }
-
-    #[test]
     fn the_pc_track_keeps_its_time_after_nothing_came_for_a_while() {
         let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         let d = dir("gap");
@@ -746,7 +669,7 @@ mod tests {
         // 56 ms): the made-up tracks start with the recorder all the same
         std::thread::sleep(Duration::from_millis(300));
         let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), hifi: None, on_status: Box::new(|_| {}) };
-        let (rec, _pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
+        let rec = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
         rec.stop();
         let frames = rec.wait().unwrap();

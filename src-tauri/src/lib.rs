@@ -541,7 +541,7 @@ fn write_export(t: &Transcript, ext: &str, stamps: bool, view: &View, dest: &std
 
 /// Save the sound of a transcript's recording to `dest`, with or without its long silences. The
 /// file written, whose extension may differ (a WAV when there is no ffmpeg).
-fn save_sound_of(t: &Transcript, without_silences: bool, dest: &std::path::Path, ffmpeg: Option<PathBuf>) -> R<PathBuf> {
+pub(crate) fn save_sound_of(t: &Transcript, without_silences: bool, dest: &std::path::Path, ffmpeg: Option<PathBuf>) -> R<PathBuf> {
     let source = PathBuf::from(&t.source_path);
     if !source.is_file() {
         return Err(crate::tr!("The recording is not at {} any more.", source.display()));
@@ -888,6 +888,8 @@ pub fn run() {
             queue::meeting::recording_notice,
             queue::meeting::interrupted_recordings,
             queue::meeting::recover_recording,
+            queue::meeting::finish_recording,
+            queue::meeting::transcribe_saved,
             queue::meeting::open_microphone_privacy,
             reading::reading_open,
             reading::reading_sentence,

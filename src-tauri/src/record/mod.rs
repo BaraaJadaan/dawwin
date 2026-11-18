@@ -35,6 +35,7 @@ pub static AR: &[(&str, &str)] = &[
     ("Them", "هم"),
     ("Recording {}", "تسجيل {}"),
     ("A recording is already running.", "هناك تسجيل جارٍ بالفعل."),
+    ("This recording had already stopped.", "كان هذا التسجيل قد توقف بالفعل."),
     ("Cannot make the folder for recordings, {}: {}", "تعذّر إنشاء مجلد التسجيلات، {}: {}"),
     ("The disk of {} is nearly full. Free some space to record.", "القرص الذي فيه {} شبه ممتلئ. أفرغ بعض المساحة لتسجّل."),
     ("Before you record", "قبل أن تسجّل"),

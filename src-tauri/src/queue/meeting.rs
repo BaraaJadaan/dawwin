@@ -156,9 +156,10 @@ fn session(id: &str) -> Option<Arc<Session>> {
     SESSIONS.lock().unwrap().iter().find(|s| s.id == id).cloned()
 }
 
-/// The recording being made now, if there is one.
+/// The recording being made now, if there is one: one that records, not one that was stopped and
+/// is still writing its last second or its text (a new one may start meanwhile).
 fn recording_now() -> Option<Arc<Session>> {
-    SESSIONS.lock().unwrap().iter().find(|s| s.recorder.lock().unwrap().is_some()).cloned()
+    SESSIONS.lock().unwrap().iter().find(|s| s.recorder.lock().unwrap().as_ref().is_some_and(|r| !r.stopping())).cloned()
 }
 
 pub fn is_recording() -> bool {
@@ -347,17 +348,28 @@ impl Core {
         Ok(id)
     }
 
-    pub fn stop_recording(&self) {
-        if let Some(s) = recording_now() {
-            if stop_if_recording(&s.id) {
-                self.recording_stopped(&s.id);
-            }
+    /// Stop the recording `id` (the one on screen), else the one recording now. A job still shown
+    /// as recording with nothing recording under it says so, rather than leave a Stop that does
+    /// nothing.
+    pub fn stop_recording(&self, id: Option<&str>) {
+        let Some(id) = id.map(str::to_string).or_else(|| recording_now().map(|s| s.id.clone())) else { return };
+        if stop_if_recording(&id) || session(&id).is_some() {
+            self.recording_stopped(&id);
+        } else {
+            self.update_job(&id, |j| {
+                if j.status == "recording" {
+                    j.status = "failed".into();
+                    j.error = Some(crate::tr!("This recording had already stopped."));
+                }
+            });
         }
     }
 
     /// Stop the recording and wait until its file is whole (for quitting).
     pub fn stop_recording_and_wait(&self) {
-        if let Some(s) = recording_now() {
+        // one still writing its last second after Stop is waited for too
+        let holding = SESSIONS.lock().unwrap().iter().find(|s| s.recorder.lock().unwrap().is_some()).cloned();
+        if let Some(s) = holding {
             let r = s.recorder.lock().unwrap().take();
             if let Some(r) = r {
                 r.stop();
@@ -785,7 +797,9 @@ pub(super) fn run(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str
     if result.is_err() {
         // the recording does not depend on the engine: one still running goes on until Stop, and
         // its journal stays, so that it is offered again
-        if let Some(r) = sess.recorder.lock().unwrap().take() {
+        // taken first, then waited for: never with the lock held, which Stop and the levels need
+        let r = sess.recorder.lock().unwrap().take();
+        if let Some(r) = r {
             let _ = r.wait();
         }
         core.live.lock().unwrap().remove(id);
@@ -996,8 +1010,9 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 last_saved = Instant::now();
             }
         }
-        // the recorder is done: its file is whole
-        if let Some(r) = sess.recorder.lock().unwrap().take() {
+        // the recorder is done: its file is whole (taken first, then waited for, without the lock)
+        let r = sess.recorder.lock().unwrap().take();
+        if let Some(r) = r {
             let _ = r.wait();
         }
         take_overflow(&overflow, &mut resume);
@@ -1294,8 +1309,8 @@ pub fn start_recording(app: AppHandle, language: String, steps: Option<Steps>) -
 }
 
 #[tauri::command]
-pub fn stop_recording(app: AppHandle) {
-    core_of(&app).stop_recording();
+pub fn stop_recording(app: AppHandle, id: Option<String>) {
+    core_of(&app).stop_recording(id.as_deref());
 }
 
 #[tauri::command]

@@ -276,4 +276,31 @@ mod tests {
         assert!(high > 60_000 && low > 20_000, "about two seconds of each");
         assert!((high as f64 / low as f64 - 3.0).abs() < 0.1, "three 48 kHz frames for each 16 kHz sample");
     }
+
+    /// Real capture twice in one run, as two recordings one after the other: the second opens and
+    /// sends sound like the first. `cargo test real_capture_twice -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_capture_twice() {
+        for k in 0..2 {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let stop = Arc::new(AtomicBool::new(false));
+            let started = Instant::now();
+            let t = Wasapi.spawn(Track::Them, None, tx, stop.clone());
+            std::thread::sleep(Duration::from_secs(2));
+            stop.store(true, Ordering::SeqCst);
+            let _ = t.join();
+            let (mut low, mut opened, mut problem) = (0usize, None, None);
+            for ev in rx.try_iter() {
+                match ev {
+                    Event::Packet { data, .. } => low += data.len(),
+                    Event::Opened { mode, .. } => opened = mode,
+                    Event::Problem { code, detail, .. } => problem = Some(format!("{code}: {detail}")),
+                    _ => {}
+                }
+            }
+            println!("capture {k}: opened {opened:?}, problem {problem:?}, 16 kHz samples {low}, took {:?}", started.elapsed());
+            assert!(opened.is_some() && low > 20_000, "capture {k}");
+        }
+    }
 }

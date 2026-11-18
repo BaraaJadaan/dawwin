@@ -158,8 +158,13 @@ function recordProblems(st) {
 /** The panel of a recording that runs, in `box`: its time, the two levels, Stop, and what is
  *  wrong. It is drawn once and then brought up to date in place, ten times a second: Stop and
  *  Show the text stay the same buttons, so that a click on them is never lost to a redraw. */
-function paintRecordPanel(box, withText) {
-  const live = REC.live, st = live?.status || {};
+function paintRecordPanel(box, withText, job) {
+  // the levels of this recording only: never those of the one before it
+  const live = REC.live && (!job || REC.live.id === job.id) ? REC.live : null, st = live?.status || {};
+  if (job && !live && !REC.asking) {
+    REC.asking = true;
+    invoke("recording_state").then((v) => { if (v?.id === job.id) { REC.live = v; paintRecording(); } }).catch(() => {}).finally(() => { REC.asking = false; });
+  }
   const sources = live?.sources || REC.setup?.settings.sources || "both";
   const key = `${sources}|${withText}|${UI_LANG}`;
   let panel = box.querySelector(":scope > .rec-live");
@@ -201,7 +206,7 @@ function renderRecordBar() {
   if (!bar || choosing(bar)) return;
   const job = recordJob();
   if (job) {
-    paintRecordPanel(bar, true);
+    paintRecordPanel(bar, true, job);
     const cards = bar.querySelector(":scope > .rec-cutoffs");
     const html = cutOffCards();
     if (cards.dataset.html !== html) {
@@ -254,7 +259,7 @@ function recordProgress(j) {
   if (!box || choosing(box)) return;
   const on = j?.kind === "record" && j.status === "recording";
   box.hidden = !on;
-  if (on) paintRecordPanel(box, false);
+  if (on) paintRecordPanel(box, false, j);
   $("t-progress").classList.toggle("recording", on);
 }
 
@@ -305,7 +310,8 @@ async function onRecordClick(ev) {
   if (!el || el.tagName === "SELECT") return;
   const what = el.dataset.rec;
   if (what === "start") return startRecording();
-  if (what === "stop") return invoke("stop_recording");
+  // the recording on screen, by its id: never another one that is still finishing
+  if (what === "stop") return invoke("stop_recording", { id: recordJob()?.id || REC.live?.id || null });
   if (what === "open") { const j = recordJob(); if (j) openTranscript(j.id); return; }
   if (what === "privacy") return invoke("open_microphone_privacy");
   const card = el.closest(".rec-cutoff");

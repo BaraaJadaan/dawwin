@@ -121,6 +121,12 @@ button.chip:hover { border-color: var(--line-strong); }
 }
 .side-set { transform: translateX(calc(100% * var(--fwd))); opacity: 0; pointer-events: none; gap: 4px; }
 .sidebar.in-settings .side-main { transform: translateX(calc(-24% * var(--fwd))); opacity: 0; pointer-events: none; }
+/* the history scrolls by itself: New at the top, Read aloud, How to use and Settings stay at the bottom */
+.side-main { overflow: hidden; }
+#queue-section { flex: none; max-height: 34%; min-height: 0; display: flex; flex-direction: column; }
+#queue-section .queue { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }
+.history-section { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.history-section .history { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; margin-inline: -4px; padding: 0 4px 6px; }
 .sidebar.in-settings .side-set { transform: none; opacity: 1; pointer-events: auto; }
 .sidebar .side-back { justify-content: flex-start; gap: 10px; color: var(--muted); margin-bottom: 10px; border-color: transparent; }
 .sidebar .side-back:hover { color: var(--text); background: var(--panel); border-color: var(--line); }

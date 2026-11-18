@@ -52,9 +52,8 @@
     color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t-fast);
 }
 .btn:active:not(:disabled), .icon-btn:active:not(:disabled), .chip:active, .speed:active, .t-tabs button:active { transform: scale(.97); }
-.btn-primary { box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent); }
-.btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 34%, transparent); transform: translateY(-1px); }
-.btn-primary:active:not(:disabled) { transform: scale(.97); box-shadow: none; }
+/* the main buttons stay flat and still: a lift or a glow blurs their text */
+.btn-primary:active:not(:disabled) { transform: scale(.98); }
 .btn:not(.btn-ghost):not(.btn-primary):not(.btn-danger):hover:not(:disabled) { background: var(--bg); }
 .input, .search, select.input { transition: border-color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), background-color var(--t-fast); }
 .input:hover:not(:focus):not(:disabled) { border-color: var(--line-strong); }

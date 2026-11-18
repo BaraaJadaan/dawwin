@@ -1,0 +1,132 @@
+/* The feel of the whole app, loaded after every other stylesheet: views that come in rather than
+   appear, surfaces that answer the pointer, menus and messages that grow from where they belong, and
+   one easing for all of it. It only refines the theme of style.css: the same colours, the same
+   shapes. With animations turned off in Windows, the rule in style.css switches all of it off. */
+
+:root {
+  --ease: cubic-bezier(.4, 0, .2, 1);
+  --ease-out: cubic-bezier(.22, .8, .24, 1);
+  --t-fast: .14s;
+  --t: .22s;
+  --t-slow: .34s;
+  --shadow-lift: 0 2px 6px rgba(20, 20, 10, .07), 0 12px 30px rgba(20, 20, 10, .10);
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --shadow-lift: 0 2px 6px rgba(0, 0, 0, .35), 0 12px 30px rgba(0, 0, 0, .4); }
+}
+:root[data-theme="dark"] { --shadow-lift: 0 2px 6px rgba(0, 0, 0, .35), 0 12px 30px rgba(0, 0, 0, .4); }
+
+/* ------------------------------------------------------------ views come in */
+.view:not([hidden]) { animation: view-in var(--t-slow) var(--ease-out) backwards; }
+@keyframes view-in { from { opacity: 0; transform: translateY(8px); } }
+/* the start page's parts come in one after the other */
+#view-home:not([hidden]) > * { animation: rise var(--t-slow) var(--ease-out) backwards; }
+#view-home:not([hidden]) > :nth-child(2) { animation-delay: .04s; }
+#view-home:not([hidden]) > :nth-child(3) { animation-delay: .08s; }
+#view-home:not([hidden]) > :nth-child(4) { animation-delay: .12s; }
+#view-home:not([hidden]) > :nth-child(n + 5) { animation-delay: .16s; }
+@keyframes rise { from { opacity: 0; transform: translateY(10px); } }
+
+/* ------------------------------------------------------------ the side panel */
+.sidebar { transition: width var(--t) var(--ease-out); }
+.item {
+  transition: background-color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    box-shadow var(--t) var(--ease), transform var(--t) var(--ease-out);
+}
+/* the first rows only: a folder of a thousand recordings arrives at once, and must not cost the window */
+.queue .item:nth-child(-n + 12), .history .item:nth-child(-n + 12) { animation: row-in var(--t) var(--ease-out) backwards; }
+@keyframes row-in { from { opacity: 0; transform: translateY(-4px); } }
+.item:hover { transform: translateX(calc(2px * var(--fwd))); }
+.item.active { box-shadow: var(--shadow), inset calc(3px * var(--fwd)) 0 0 var(--accent); transform: none; }
+.side-settings, .side-back, .set-nav .btn { transition: background-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease); }
+.side-settings svg, .set-nav .btn svg { transition: transform var(--t) var(--ease-out), color var(--t-fast); }
+.side-settings:hover svg, .set-nav .btn:hover svg { transform: scale(1.08); }
+#btn-settings:hover svg { transform: rotate(40deg); }
+.side-back:hover svg { transform: translateX(calc(-2px * var(--fwd))); }
+:root[dir="rtl"] .side-back:hover svg { transform: scaleX(-1) translateX(-2px); }
+
+/* ------------------------------------------------------------ buttons and fields */
+.btn, .icon-btn, .chip, .speed, .menu button, .stepper button, .t-tabs button, .seg .time, .minutes-time, .play {
+  transition: background-color var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease),
+    color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), transform var(--t-fast) var(--ease), opacity var(--t-fast);
+}
+.btn:active:not(:disabled), .icon-btn:active:not(:disabled), .chip:active, .speed:active, .t-tabs button:active { transform: scale(.97); }
+.btn-primary { box-shadow: 0 1px 2px color-mix(in srgb, var(--accent) 30%, transparent); }
+.btn-primary:hover:not(:disabled) { box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 34%, transparent); transform: translateY(-1px); }
+.btn-primary:active:not(:disabled) { transform: scale(.97); box-shadow: none; }
+.btn:not(.btn-ghost):not(.btn-primary):not(.btn-danger):hover:not(:disabled) { background: var(--bg); }
+.input, .search, select.input { transition: border-color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), background-color var(--t-fast); }
+.input:hover:not(:focus):not(:disabled) { border-color: var(--line-strong); }
+.input:focus, .search:focus-within { outline: none; border-color: var(--accent); box-shadow: var(--ring); }
+:focus-visible { outline-offset: 2px; }
+.toggle input, .pick { transition: transform var(--t-fast) var(--ease-out); }
+.toggle input:active, .pick:active { transform: scale(.9); }
+
+/* ------------------------------------------------------------ the top bar */
+.chip .dot { transition: background-color var(--t-slow) var(--ease); }
+.chip.ok .dot { box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
+.brand img { transition: transform var(--t-slow) var(--ease-out); }
+.brand:hover img { transform: rotate(-6deg) scale(1.05); }
+
+/* ------------------------------------------------------------ the start page */
+.dropzone { transition: border-color var(--t) var(--ease), background-color var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t) var(--ease-out); }
+.dropzone:hover { box-shadow: var(--shadow-lift); }
+.dropzone.over { transform: scale(1.01); box-shadow: var(--shadow-lift), var(--ring); }
+.dz-icon { transition: transform var(--t-slow) var(--ease-out); }
+.dropzone:hover .dz-icon { transform: translateY(-3px) scale(1.06); }
+.dropzone.over .dz-icon { animation: bob 1s var(--ease) infinite; }
+@keyframes bob { 50% { transform: translateY(-6px) scale(1.08); } }
+.step { transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease), transform var(--t) var(--ease-out); }
+.step:hover { box-shadow: var(--shadow); }
+.step.on { box-shadow: 0 0 0 1px var(--accent), 0 6px 18px color-mix(in srgb, var(--accent) 14%, transparent); }
+.step-no { transition: background-color var(--t) var(--ease), color var(--t) var(--ease), transform var(--t) var(--ease-out); }
+.step.on .step-no { transform: scale(1.08); }
+.jobs .btn[aria-pressed="true"] { box-shadow: 0 0 0 1px var(--accent); }
+.model-card { transition: border-color var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), transform var(--t) var(--ease-out); }
+.model-card:hover { box-shadow: var(--shadow); transform: translateY(-1px); }
+
+/* ------------------------------------------------------------ cards and settings */
+.card { transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease); }
+.guide-item:hover, .read-anywhere:hover { box-shadow: var(--shadow); }
+.guide-item img { transition: transform var(--t-slow) var(--ease-out); }
+.guide-item:hover img { transform: scale(1.01); }
+.setting { transition: background-color var(--t) var(--ease); }
+.view-settings .card.group { box-shadow: 0 1px 2px rgba(20, 20, 10, .04); }
+.set-page-title { animation: rise var(--t) var(--ease-out) backwards; }
+
+/* ------------------------------------------------------------ the transcript */
+.seg { transition: background-color var(--t) var(--ease), border-color var(--t) var(--ease), box-shadow var(--t) var(--ease); }
+.seg.playing { box-shadow: inset calc(3px * var(--fwd)) 0 0 var(--accent); }
+.minutes:not([hidden]), .read-doc:not([hidden]), .read-empty:not([hidden]) { animation: rise var(--t) var(--ease-out) backwards; }
+.rs { transition: background-color var(--t) var(--ease), box-shadow var(--t) var(--ease); }
+mark { transition: background-color var(--t) var(--ease); }
+
+/* ------------------------------------------------------------ progress and recording */
+.progress .bar { background: linear-gradient(90deg, var(--accent), var(--accent-hover)); transition: width .45s var(--ease-out); }
+.rec-meter-bar span { transition: width .09s linear; }
+.rec-live, .rec-idle, .rec-cutoff { animation: rise var(--t) var(--ease-out) backwards; }
+.rec-warn, .rec-note { animation: rise var(--t) var(--ease-out) backwards; }
+
+/* ------------------------------------------------------------ menus, messages, overlays */
+.menu:not([hidden]) { animation: menu-in .16s var(--ease-out) backwards; transform-origin: top right; }
+:root[dir="rtl"] .menu:not([hidden]), .menu.menu-start:not([hidden]) { transform-origin: top left; }
+@keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
+.menu button:hover, .menu button:focus-visible { transform: translateX(calc(2px * var(--fwd))); }
+.toast:not([hidden]) { animation: toast-in .28s var(--ease-out) backwards; }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 14px) scale(.98); } to { opacity: 1; transform: translate(-50%, 0); } }
+.drop-overlay:not([hidden]) { animation: fade-in var(--t) var(--ease) backwards; }
+.drop-overlay:not([hidden]) .drop-card { animation: pop-in var(--t-slow) var(--ease-out) backwards; }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes pop-in { from { opacity: 0; transform: scale(.94); } }
+.volume-pop { transition: opacity var(--t-fast) var(--ease), transform var(--t) var(--ease-out), visibility var(--t-fast); }
+
+/* ------------------------------------------------------------ scrollbars, in the theme */
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background-color: color-mix(in srgb, var(--muted) 32%, transparent); border-radius: 99px;
+  border: 3px solid transparent; background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--muted) 55%, transparent); }
+::-webkit-scrollbar-corner { background: transparent; }

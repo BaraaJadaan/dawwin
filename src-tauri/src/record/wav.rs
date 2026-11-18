@@ -1,5 +1,6 @@
-//! A two-channel 16 kHz 16-bit WAV that stays readable if the program is killed: the sizes in
-//! its header are written again every second, and the bytes are flushed to the disk then.
+//! A two-channel 16-bit WAV that stays readable if the program is killed: the sizes in its header
+//! are written again every second, and the bytes are flushed to the disk then. The tracks the
+//! engine hears are at 16 kHz; the sound kept for listening at the devices' 48 kHz.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
@@ -9,7 +10,7 @@ pub const RATE: u32 = 16_000;
 pub const CHANNELS: u16 = 2;
 const HEADER: u64 = 44;
 
-pub fn header(data_bytes: u64) -> [u8; 44] {
+pub fn header_at(data_bytes: u64, rate: u32) -> [u8; 44] {
     let data = data_bytes.min(u32::MAX as u64 - 36) as u32;
     let mut h = [0u8; 44];
     h[0..4].copy_from_slice(b"RIFF");
@@ -19,8 +20,8 @@ pub fn header(data_bytes: u64) -> [u8; 44] {
     h[16..20].copy_from_slice(&16u32.to_le_bytes());
     h[20..22].copy_from_slice(&1u16.to_le_bytes());
     h[22..24].copy_from_slice(&CHANNELS.to_le_bytes());
-    h[24..28].copy_from_slice(&RATE.to_le_bytes());
-    h[28..32].copy_from_slice(&(RATE * CHANNELS as u32 * 2).to_le_bytes());
+    h[24..28].copy_from_slice(&rate.to_le_bytes());
+    h[28..32].copy_from_slice(&(rate * CHANNELS as u32 * 2).to_le_bytes());
     h[32..34].copy_from_slice(&(CHANNELS * 2).to_le_bytes());
     h[34..36].copy_from_slice(&16u16.to_le_bytes());
     h[36..40].copy_from_slice(b"data");
@@ -30,6 +31,7 @@ pub fn header(data_bytes: u64) -> [u8; 44] {
 
 pub struct Writer {
     file: File,
+    rate: u32,
     pub frames: u64,
 }
 
@@ -39,10 +41,14 @@ fn to_i16(s: f32) -> i16 {
 
 impl Writer {
     pub fn create(path: &Path) -> io::Result<Self> {
+        Self::create_at(path, RATE)
+    }
+
+    pub fn create_at(path: &Path, rate: u32) -> io::Result<Self> {
         let mut file = File::create(path)?;
-        file.write_all(&header(0))?;
+        file.write_all(&header_at(0, rate))?;
         file.sync_data()?;
-        Ok(Writer { file, frames: 0 })
+        Ok(Writer { file, rate, frames: 0 })
     }
 
     /// Left and right have the same length.
@@ -61,7 +67,7 @@ impl Writer {
     pub fn checkpoint(&mut self) -> io::Result<()> {
         let data = self.frames * CHANNELS as u64 * 2;
         self.file.seek(SeekFrom::Start(0))?;
-        self.file.write_all(&header(data))?;
+        self.file.write_all(&header_at(data, self.rate))?;
         self.file.seek(SeekFrom::End(0))?;
         self.file.sync_data()
     }
@@ -87,12 +93,17 @@ pub fn check(path: &Path) -> io::Result<Check> {
 
 /// Make the header say what the file holds (after a crash), cutting a half frame off the end.
 pub fn repair(path: &Path) -> io::Result<u64> {
+    repair_at(path, RATE)
+}
+
+/// The same, for a file at `rate`.
+pub fn repair_at(path: &Path, rate: u32) -> io::Result<u64> {
     let mut f = OpenOptions::new().read(true).write(true).open(path)?;
     let len = f.metadata()?.len();
     let frames = len.saturating_sub(HEADER) / 4;
     f.set_len(HEADER + frames * 4)?;
     f.seek(SeekFrom::Start(0))?;
-    f.write_all(&header(frames * 4))?;
+    f.write_all(&header_at(frames * 4, rate))?;
     f.sync_all()?;
     Ok(frames)
 }

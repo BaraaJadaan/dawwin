@@ -57,7 +57,7 @@ Object.assign(I18N.en.s, {
   "toast.getMinutes": "Choose one",
   "set.minutes": "Minutes",
   "guide.minutesTitle": "Write the minutes",
-  "guide.minutesText": "On a transcript's Minutes tab, Write the minutes gives a short summary, the decisions, who does what by when, the topics with their times and the questions left open, in the language of the meeting or in another. Press a time to see the lines it came from, and click any line to correct it. A long meeting is written in parts, and a run you stop carries on where it stopped. The first time, download a minutes model: it runs on this computer like everything else.",
+  "guide.minutesText": "On a transcript's Minutes tab, Write the minutes gives a short summary, the decisions, who does what by when, the topics with their times and the questions left open, in the language of the meeting or in another. Press a time to see the lines it came from, and click any line to correct it. A long meeting is written in parts, and a run you stop carries on where it stopped. The first time, download a minutes model: it runs on this computer like everything else. With more than one, choose which writes them next to the language. The minutes come in the language you choose: one written in another is asked for again.",
   "model.min-jais3-7b.name": "Jais-3 7B",
   "model.min-jais3-7b.long": "Jais-3 7B",
   "model.min-jais3-7b.detail": "Made for Arabic and English. The best minutes in our test, and it fits a graphics card with 8 GB.",
@@ -123,7 +123,7 @@ Object.assign(I18N.ar.s, {
   "toast.getMinutes": "اختر واحدًا",
   "set.minutes": "المحاضر",
   "guide.minutesTitle": "اكتب المحضر",
-  "guide.minutesText": "في تبويب «المحضر» من أي تفريغ، يكتب زر «اكتب المحضر» ملخّصًا قصيرًا، والقرارات، ومن يفعل ماذا ومتى، والمواضيع بأوقاتها، والأسئلة التي بقيت بلا جواب، بلغة الاجتماع أو بلغة أخرى. اضغط على الوقت لترى الأسطر التي جاء منها، وانقر على أي سطر لتصحيحه. الاجتماع الطويل يُكتب على أجزاء، وإذا أوقفته أكمل من حيث توقّف. في المرة الأولى نزّل نموذج محاضر، وهو يعمل على هذا الحاسوب كغيره.",
+  "guide.minutesText": "في تبويب «المحضر» من أي تفريغ، يكتب زر «اكتب المحضر» ملخّصًا قصيرًا، والقرارات، ومن يفعل ماذا ومتى، والمواضيع بأوقاتها، والأسئلة التي بقيت بلا جواب، بلغة الاجتماع أو بلغة أخرى. اضغط على الوقت لترى الأسطر التي جاء منها، وانقر على أي سطر لتصحيحه. الاجتماع الطويل يُكتب على أجزاء، وإذا أوقفته أكمل من حيث توقّف. في المرة الأولى نزّل نموذج محاضر، وهو يعمل على هذا الحاسوب كغيره. وإن كان لديك أكثر من نموذج فاختر الذي يكتبه بجانب اللغة. ويأتي المحضر باللغة التي تختارها، وإن كُتب بغيرها طُلب مرة أخرى.",
   "model.min-jais3-7b.name": "Jais-3 7B",
   "model.min-jais3-7b.long": "Jais-3 7B",
   "model.min-jais3-7b.detail": "مصمَّم للعربية والإنجليزية. أفضل المحاضر في اختبارنا، ويناسب بطاقة رسوم بذاكرة 8 غيغابايت.",
@@ -277,6 +277,21 @@ function minutesBar(m, running) {
   lang.onchange = () => { Minutes.language = lang.value; };
   lang.disabled = !!running;
   bar.append(write, lang);
+  // more than one minutes model here: which one writes them, chosen here as in Settings
+  const mine = (S.snap?.setup.models || []).filter((x) => x.family === "minutes" && x.on_disk);
+  if (mine.length > 1) {
+    const pick = document.createElement("select");
+    pick.className = "input select select-sm";
+    pick.setAttribute("aria-label", t("min.model"));
+    describe(pick, t("min.modelTip"));
+    pick.innerHTML = mine.map((x) => `<option value="${x.id}">${esc(t(`model.${x.id}.name`))}</option>`).join("");
+    pick.value = (mine.find((x) => x.active) || mine[0]).id;
+    pick.disabled = !!running;
+    pick.onchange = async () => {
+      try { onState(await invoke("use_model", { id: pick.value })); } catch (err) { toast(String(err)); }
+    };
+    bar.append(pick);
+  }
   // the minutes read aloud (reader.js)
   if (m && !running && typeof readListenButton === "function") bar.append(readListenButton({ transcript: cur.id, minutes: true }, t("read.listenMinutesTip")));
 
@@ -663,7 +678,7 @@ async function exportMinutes(fmt) {
   stepsReady = function (steps) {
     if (!baseReady(steps)) return false;
     if (steps.minutes && !S.snap.setup.families.minutes?.found) {
-      toast(t("toast.needMinutes"), { label: t("toast.getMinutes"), run: () => showView("settings") });
+      toast(t("toast.needMinutes"), { label: t("toast.getMinutes"), run: () => openSettings("minutes") });
       return false;
     }
     if (steps.minutes && !S.snap.setup.translator_found) return offerTool("translator", "toast.needTranslatorTool");
@@ -677,6 +692,7 @@ async function exportMinutes(fmt) {
   const translation = $("set-translators").closest("section");
   const card = document.createElement("section");
   card.className = "card group";
+  card.dataset.page = "minutes";
   card.innerHTML = `<h2 data-i18n="set.minutes"></h2><div id="set-minutes"></div>`;
   translation.after(card);
   const base = renderModelRows;

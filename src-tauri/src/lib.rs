@@ -14,6 +14,7 @@ mod minutes_commands;
 mod language;
 mod look;
 mod models;
+mod moving;
 mod net;
 mod queue;
 mod reading;
@@ -107,11 +108,19 @@ async fn remove_old_engine(app: AppHandle) -> R<()> {
 #[tauri::command]
 async fn choose_download_dir(app: AppHandle) -> R<Snapshot> {
     let core = app.state::<Arc<Core>>().inner().clone();
-    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should the model be saved?")).blocking_pick_folder() else {
+    let Some(dir) = app.dialog().file().set_title(crate::tr!("Where should the models be? The ones you have move there.")).blocking_pick_folder() else {
         return Ok(core.snapshot());
     };
     let dir = dir.into_path().map_err(|x| x.to_string())?;
     core.set_download_dir(&dir).map_err(e)?;
+    Ok(core.snapshot())
+}
+
+/// The same without the dialog, for the tests that drive the app (debug builds only).
+#[cfg(debug_assertions)]
+#[tauri::command]
+fn set_models_dir_to_path(core: C, path: String) -> R<Snapshot> {
+    core.set_download_dir(Path::new(&path)).map_err(e)?;
     Ok(core.snapshot())
 }
 
@@ -807,6 +816,8 @@ pub fn run() {
             set_check_updates,
             #[cfg(debug_assertions)]
             export_to_path,
+            #[cfg(debug_assertions)]
+            set_models_dir_to_path,
             pick_folder,
             enqueue_folder,
             spoken_languages,

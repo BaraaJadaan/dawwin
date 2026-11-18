@@ -3,7 +3,8 @@
 //! own process tree (everything the PC plays but Dawwin, whatever the device); where that cannot
 //! be opened, loopback of the default output device with a silent stream played to it so that
 //! packets keep coming, opened again when the device goes or the default changes. Every stream
-//! asks Windows for 16 kHz mono float. Measured in `tools/record-trial`.
+//! asks Windows for 48 kHz float, the PC's sound in stereo: that is kept for listening, and the
+//! speech engine's 16 kHz mono is made from it here (`resample`). Measured in `tools/record-trial`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -13,12 +14,23 @@ use std::time::{Duration, Instant};
 
 use wasapi::{AudioCaptureClient, AudioClient, BufferFlags, DeviceEnumerator, Direction, Handle, SampleType, StreamMode, WasapiError, WaveFormat};
 
+use super::resample::{self, Decimator, HIFI};
 use super::source::{Event, Factory};
 use super::{Track, SR};
 
 const E_ACCESSDENIED: u32 = 0x8007_0005;
 
-fn format() -> WaveFormat {
+/// What a capture stream asks for: 48 kHz float, two channels for the PC's sound, one for the microphone.
+fn format(track: Track) -> WaveFormat {
+    WaveFormat::new(32, 32, SampleType::Float, HIFI, channels(track), None)
+}
+
+fn channels(track: Track) -> usize {
+    if track == Track::Them { 2 } else { 1 }
+}
+
+/// What the silent stream plays: anything will do, Windows converts it.
+fn silence_format() -> WaveFormat {
     WaveFormat::new(32, 32, SampleType::Float, SR, 1, None)
 }
 
@@ -73,7 +85,7 @@ struct Open {
 fn open(track: Track, device: &Option<String>) -> Result<Open, WasapiError> {
     let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 2_000_000 };
     let start = |mut client: AudioClient, name: String, mode_name: Option<String>, follows| -> Result<Open, WasapiError> {
-        client.initialize_client(&format(), Direction::Capture, mode, None)?;
+        client.initialize_client(&format(track), Direction::Capture, mode, None)?;
         let event = client.set_get_eventhandle()?;
         let capture = client.get_audiocaptureclient()?;
         client.start_stream()?;
@@ -118,7 +130,7 @@ fn play_silence(stop: Arc<AtomicBool>) -> Result<(), WasapiError> {
     let _ = wasapi::initialize_mta();
     let dev = DeviceEnumerator::new()?.get_default_device(Direction::Render)?;
     let mut client = dev.get_iaudioclient()?;
-    client.initialize_client(&format(), Direction::Render, StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 1_000_000 }, None)?;
+    client.initialize_client(&silence_format(), Direction::Render, StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 1_000_000 }, None)?;
     let event = client.set_get_eventhandle()?;
     let render = client.get_audiorenderclient()?;
     let mut started = false;
@@ -141,13 +153,18 @@ impl Factory for Wasapi {
     fn spawn(&self, track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<AtomicBool>) -> JoinHandle<()> {
         std::thread::spawn(move || capture(track, device, tx, stop))
     }
+    fn hifi(&self) -> bool {
+        true
+    }
 }
 
 /// One stream: open, read every packet with its timestamp, open again when the device goes away
 /// or the default it follows changes. The recorder never waits for it: a gap is filled there.
 fn capture(track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<AtomicBool>) {
     let _ = wasapi::initialize_mta();
-    let mut buf = vec![0u8; 4 * SR];
+    let ch = channels(track);
+    // a second of sound, more than any packet holds
+    let mut buf = vec![0u8; 4 * ch * HIFI];
     let mut told: Option<String> = None;
     while !stop.load(Ordering::Relaxed) {
         let o = match open(track, &device) {
@@ -164,6 +181,7 @@ fn capture(track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<At
         };
         told = None;
         let _ = tx.send(Event::Opened { track, name: o.name.clone(), mode: o.mode.clone() });
+        let mut down = Decimator::new();
         let mut checked = Instant::now();
         let again = 'run: loop {
             if stop.load(Ordering::Relaxed) {
@@ -179,8 +197,17 @@ fn capture(track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<At
                 match o.capture.read_from_device(&mut buf) {
                     Ok((0, _)) => break,
                     Ok((frames, info)) => {
-                        let data = buf[..frames as usize * 4].chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
-                        if tx.send(Event::Packet { track, ts: info.timestamp, data }).is_err() {
+                        let n = frames as usize * ch;
+                        // a packet Windows marks silent holds nothing to keep
+                        let data: Vec<f32> = if info.flags.silent {
+                            vec![0.0; n]
+                        } else {
+                            buf[..n * 4].chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect()
+                        };
+                        let (ts, low) = down.push(info.timestamp, &resample::mono(&data, ch));
+                        let sent = tx.send(Event::Packet { track, ts, data: low }).is_ok()
+                            && tx.send(Event::Hifi { track, ts: info.timestamp, channels: ch as u16, data }).is_ok();
+                        if !sent {
                             break 'run false;
                         }
                     }
@@ -212,5 +239,41 @@ fn capture(track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<At
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Real capture of what the PC plays, for two seconds: the streams open at 48 kHz, the PC's in
+    /// stereo, and the engine's 16 kHz mono comes from them. Only how much sound came is counted;
+    /// none is kept. `cargo test real_capture -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn real_capture_gives_48k_stereo_and_16k_mono() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let t = Wasapi.spawn(Track::Them, None, tx, stop.clone());
+        std::thread::sleep(Duration::from_secs(2));
+        stop.store(true, Ordering::SeqCst);
+        let _ = t.join();
+        let (mut low, mut high, mut ch, mut opened, mut problem) = (0usize, 0usize, 0u16, None, None);
+        for ev in rx.try_iter() {
+            match ev {
+                Event::Packet { data, .. } => low += data.len(),
+                Event::Hifi { data, channels, .. } => {
+                    ch = channels;
+                    high += data.len() / channels.max(1) as usize;
+                }
+                Event::Opened { mode, .. } => opened = mode,
+                Event::Problem { code, .. } => problem = Some(code),
+            }
+        }
+        println!("opened {opened:?}, problem {problem:?}, 16 kHz samples {low}, 48 kHz frames {high}, channels {ch}");
+        assert!(problem.is_none() && opened.is_some(), "the PC's sound opens");
+        assert_eq!(ch, 2, "in stereo");
+        assert!(high > 60_000 && low > 20_000, "about two seconds of each");
+        assert!((high as f64 / low as f64 - 3.0).abs() < 0.1, "three 48 kHz frames for each 16 kHz sample");
     }
 }

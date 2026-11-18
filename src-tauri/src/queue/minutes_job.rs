@@ -134,7 +134,25 @@ fn ensure_server<'a>(core: &Arc<Core>, slot: &'a mut Option<TranslatorProcess>, 
 
 /// One request to the model `spec`; `step` of `steps` tells the job how far the whole run is.
 #[allow(clippy::too_many_arguments)]
-fn ask(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, spec: &minutes::Spec, a: &minutes::Ask, cancel: &AtomicBool, step: usize, steps: usize, started: Instant) -> Result<Option<Value>> {
+/// One request, answered in `target`: an answer in another language is asked for once more, and
+/// the second is kept when it is in `target` and holds about as much (`minutes::keep_again`).
+#[allow(clippy::too_many_arguments)]
+fn ask(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, spec: &minutes::Spec, a: &minutes::Ask, target: &str, cancel: &AtomicBool, step: usize, steps: usize, started: Instant) -> Result<Option<Value>> {
+    let first = ask_once(core, id, w, spec, a, cancel, step, steps, started)?;
+    let Some(answer) = first else { return Ok(None) };
+    let share = minutes::share_in(&answer, target);
+    if share.is_none_or(|s| s >= 0.5) {
+        return Ok(Some(answer));
+    }
+    let again = ask_once(core, id, w, spec, &minutes::insist(a, &answer, target), cancel, step, steps, started)?;
+    Ok(Some(match again {
+        Some(b) if minutes::keep_again(&answer, &b, target) => b,
+        _ => answer,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ask_once(core: &Arc<Core>, id: &str, w: &mut TranslatorProcess, spec: &minutes::Spec, a: &minutes::Ask, cancel: &AtomicBool, step: usize, steps: usize, started: Instant) -> Result<Option<Value>> {
     let mut last = Instant::now();
     let mut on = |p: Progress| {
         if last.elapsed() < Duration::from_millis(500) {
@@ -206,10 +224,10 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
     let source = t.language.clone();
     let steps = if parts.len() == 1 { 1 } else { parts.len() + 1 };
     let answer = if parts.len() == 1 {
-        ask(core, id, w, &spec, &minutes::with_note(minutes::ask_whole(&lines, &source, &language), note.as_deref()), stop, 0, 1, started)?
+        ask(core, id, w, &spec, &minutes::with_note(minutes::ask_whole(&lines, &source, &language), note.as_deref()), &language, stop, 0, 1, started)?
     } else {
         for (n, &(a, b)) in parts.iter().enumerate().skip(draft.notes.len()) {
-            let note = ask(core, id, w, &spec, &minutes::with_note(minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), note.as_deref()), stop, n, steps, started)?;
+            let note = ask(core, id, w, &spec, &minutes::with_note(minutes::ask_part(&lines[a..b], n + 1, parts.len(), &source, &language), note.as_deref()), &language, stop, n, steps, started)?;
             // a part the model could not answer still counts, empty, so the rest goes on
             draft.notes.push(note.unwrap_or_else(|| serde_json::json!({ "kind": "other", "summary": "" })));
             let kept = draft.clone();
@@ -219,7 +237,7 @@ pub(super) fn run(core: &Arc<Core>, server: &mut Option<TranslatorProcess>, id: 
         let highest = lines.last().map_or(1, |l| l.index + 1);
         let last = steps - 1;
         Some(minutes::combine(draft.notes.clone(), times, |notes, times| {
-            ask(core, id, w, &spec, &minutes::with_note(minutes::ask_combine(notes, times, highest, &source, &language), note.as_deref()), stop, last, steps, started)
+            ask(core, id, w, &spec, &minutes::with_note(minutes::ask_combine(notes, times, highest, &source, &language), note.as_deref()), &language, stop, last, steps, started)
         })?)
     };
     let Some(answer) = answer else {

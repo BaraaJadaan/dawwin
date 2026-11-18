@@ -51,21 +51,29 @@ impl Default for Canceller {
     }
 }
 
-/// Whether a piece holds speech for the model: its loud part (the 90th percentile of 20 ms
-/// frames) at least 15 dB over the quietest the track has been, and over -60 dBFS. The track's
-/// floor is learnt as it goes; digital silence does not count, or a muted moment would make the
-/// hum of a room look like speech.
+/// Whether a piece holds speech for the model. The microphone's: its loud part (the 90th
+/// percentile of 20 ms frames) at least 15 dB over the quietest the track has been, and over
+/// -60 dBFS. The track's floor is learnt as it goes; digital silence does not count, or a muted
+/// moment would make the hum of a room look like speech. The PC's sound has no hum: when nothing
+/// plays it is digitally silent, so whatever can be heard goes to the model. A floor there would
+/// leave out speech over music, which a video holds throughout.
 pub struct Gate {
     floor: f32,
+    pc: bool,
 }
 
 impl Default for Gate {
     fn default() -> Self {
-        Gate { floor: f32::INFINITY }
+        Gate { floor: f32::INFINITY, pc: false }
     }
 }
 
 impl Gate {
+    /// The gate of the PC's sound.
+    pub fn pc() -> Self {
+        Gate { pc: true, ..Self::default() }
+    }
+
     pub fn admit(&mut self, samples: &[f32]) -> bool {
         let frame = SR / 50;
         let mut db: Vec<f32> = samples
@@ -82,7 +90,7 @@ impl Gate {
             self.floor = self.floor.min(*q);
         }
         let floor = if self.floor.is_finite() { self.floor } else { -120.0 };
-        loud > -60.0 && loud > floor + 15.0
+        loud > -60.0 && (self.pc || loud > floor + 15.0)
     }
 }
 
@@ -136,6 +144,16 @@ mod tests {
         assert!(doubled("The meeting starts at TEN.", &["the meeting starts at ten"]));
         assert!(!doubled("", &them));
         assert!(!doubled("نعم", &["لا"]));
+    }
+
+    /// A video: speech at -20 dBFS over music at -30 that never stops. On the PC's track it goes
+    /// to the model; a floor learnt from the music (the microphone's rule) would leave it out.
+    #[test]
+    fn speech_over_music_on_the_pcs_sound_is_heard() {
+        let video: Vec<f32> = (0..SR * 25).map(|i| ((i as f32) * 0.03).sin() * 0.045 + if (i / 4000) % 2 == 0 { ((i as f32) * 0.21).sin() * 0.14 } else { 0.0 }).collect();
+        assert!(Gate::pc().admit(&video));
+        assert!(!Gate::default().admit(&video), "the microphone's rule");
+        assert!(!Gate::pc().admit(&vec![0.0; SR * 25]), "the PC playing nothing is not");
     }
 
     #[test]

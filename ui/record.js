@@ -36,11 +36,14 @@ Object.assign(I18N.en.s, {
   "rec.needFfmpeg": "The recording is kept as a WAV, five times larger than an M4A. Download ffmpeg ({size}) to keep recordings small.",
   "job.recording": "Recording · {dur}",
   "job.waitRecording": "Waiting for the recording to end",
+  "rec.stopWriting": "Stop writing",
+  "rec.stopWritingSure": "Stop writing the text?",
+  "rec.stopWritingTip": "The recording is kept, and its whole text can be written later from the start page",
   // recordings go to the folder of one's own too
   "set.saveWhere": "Where the sound, the videos and the recordings are saved",
   "tip.saveWhere": "Where the steps save the sound and the videos, where meetings are recorded, and where save dialogs open. A folder's recordings keep their files next to them.",
   "guide.recordTitle": "Record a meeting",
-  "guide.recordText": "Press Record on the start page to record your microphone and everything the PC plays, such as a Zoom, Meet or Teams call or a video, with nothing joining the call. Choose the microphone alone for a lecture in a room, or the PC's sound alone for a webinar. The text appears while people speak, each line marked Me or Them; with Tell speakers apart ticked, the others are told apart by voice after Stop. The recording is kept in the folder chosen in Settings, or in Documents\\Dawwin (in Dawwin in your user folder when Documents is in OneDrive, so that it is not uploaded). Tell the others before you record a call.",
+  "guide.recordText": "Press Record on the start page to record your microphone and everything the PC plays, such as a Zoom, Meet or Teams call or a video, with nothing joining the call. Choose the microphone alone for a lecture in a room, or the PC's sound alone for a webinar. The text appears while people speak, each line marked Me or Them; with Tell speakers apart ticked, the others are told apart by voice after Stop. The recording is kept in the folder chosen in Settings, or in Documents\\Dawwin (in Dawwin in your user folder when Documents is in OneDrive, so that it is not uploaded). The recording keeps the sound as the PC played it, in stereo, with your microphone in the middle of it. Tell the others before you record a call.",
 });
 
 Object.assign(I18N.ar.s, {
@@ -76,10 +79,13 @@ Object.assign(I18N.ar.s, {
   "rec.needFfmpeg": "حُفظ التسجيل بصيغة WAV، وهي أكبر بخمس مرات من M4A. نزّل ffmpeg ‏({size}) لتبقى التسجيلات صغيرة.",
   "job.recording": "جارٍ التسجيل · {dur}",
   "job.waitRecording": "في انتظار انتهاء التسجيل",
+  "rec.stopWriting": "أوقف الكتابة",
+  "rec.stopWritingSure": "أتوقف كتابة النص؟",
+  "rec.stopWritingTip": "يبقى التسجيل محفوظًا، ويمكن كتابة نصه كاملًا لاحقًا من صفحة البدء",
   "set.saveWhere": "مكان حفظ الصوت والفيديوهات والتسجيلات",
   "tip.saveWhere": "أين تحفظ الخطوات الصوت والفيديوهات، وأين تُسجَّل الاجتماعات، وأين تُفتح نوافذ الحفظ. تسجيلات المجلد تبقى ملفاتها بجانبها.",
   "guide.recordTitle": "سجّل اجتماعًا",
-  "guide.recordText": "اضغط «سجّل» في صفحة البدء لتسجيل ميكروفونك وكل ما يشغّله الحاسوب، مثل مكالمة Zoom أو Meet أو Teams أو فيديو، دون أن ينضم أي شيء إلى المكالمة. اختر الميكروفون وحده لمحاضرة في قاعة، أو صوت الحاسوب وحده لندوة عبر الإنترنت. يظهر النص أثناء الكلام وكل سطر موسوم بـ«أنا» أو «هم»، ومع «تمييز المتحدثين» يُميَّز الآخرون بأصواتهم بعد الإيقاف. يُحفظ التسجيل في المجلد المختار في الإعدادات، أو في المستندات داخل مجلد Dawwin (أو في مجلد Dawwin داخل مجلد المستخدم إن كانت المستندات داخل OneDrive، كي لا يُرفع). أخبر الآخرين قبل أن تسجّل مكالمة.",
+  "guide.recordText": "اضغط «سجّل» في صفحة البدء لتسجيل ميكروفونك وكل ما يشغّله الحاسوب، مثل مكالمة Zoom أو Meet أو Teams أو فيديو، دون أن ينضم أي شيء إلى المكالمة. اختر الميكروفون وحده لمحاضرة في قاعة، أو صوت الحاسوب وحده لندوة عبر الإنترنت. يظهر النص أثناء الكلام وكل سطر موسوم بـ«أنا» أو «هم»، ومع «تمييز المتحدثين» يُميَّز الآخرون بأصواتهم بعد الإيقاف. يُحفظ التسجيل في المجلد المختار في الإعدادات، أو في المستندات داخل مجلد Dawwin (أو في مجلد Dawwin داخل مجلد المستخدم إن كانت المستندات داخل OneDrive، كي لا يُرفع). ويحفظ التسجيل الصوت كما شغّله الحاسوب، بصوت مجسَّم، وميكروفونك في وسطه. أخبر الآخرين قبل أن تسجّل مكالمة.",
 });
 
 const REC = {
@@ -121,12 +127,15 @@ function micOptions(selected) {
   return first + mics.map((m) => `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.name)}</option>`).join("");
 }
 
-function meter(track, level) {
-  // -60 dBFS to 0 across the bar
-  const w = level ? Math.max(0, Math.min(100, ((level.db + 60) / 60) * 100)) : 0;
-  return `<div class="rec-meter" title="${esc(t(track === "me" ? "rec.meTip" : "rec.themTip"))}">
+/** How full a level bar is: -60 dBFS to 0 across it. */
+function meterWidth(level) {
+  return (level ? Math.max(0, Math.min(100, ((level.db + 60) / 60) * 100)) : 0).toFixed(0) + "%";
+}
+
+function meter(track) {
+  return `<div class="rec-meter" data-track="${track}" title="${esc(t(track === "me" ? "rec.meTip" : "rec.themTip"))}">
     <span class="rec-meter-name">${esc(t(track === "me" ? "rec.me" : "rec.them"))}</span>
-    <span class="rec-meter-bar"><span style="width:${w.toFixed(0)}%"></span></span></div>`;
+    <span class="rec-meter-bar"><span style="width:0%"></span></span></div>`;
 }
 
 /** What is wrong while it records, said plainly, with the way out. */
@@ -146,18 +155,38 @@ function recordProblems(st) {
   return out.join("");
 }
 
-/** The panel of a recording that runs: its time, the two levels, Stop, and what is wrong. */
-function recordPanel(withText) {
+/** The panel of a recording that runs, in `box`: its time, the two levels, Stop, and what is
+ *  wrong. It is drawn once and then brought up to date in place, ten times a second: Stop and
+ *  Show the text stay the same buttons, so that a click on them is never lost to a redraw. */
+function paintRecordPanel(box, withText) {
   const live = REC.live, st = live?.status || {};
   const sources = live?.sources || REC.setup?.settings.sources || "both";
-  const meters = (sources !== "pc" ? meter("me", st.me) : "") + (sources !== "mic" ? meter("them", st.them) : "");
-  return `<div class="rec-live">
-      <span class="rec-dot on" aria-hidden="true"></span>
-      <span class="rec-time" dir="ltr">${esc(ts(st.seconds || 0))}</span>
-      <div class="rec-meters">${meters}</div>
-      ${withText ? `<button class="btn btn-sm btn-ghost" data-rec="open">${esc(t("rec.showText"))}</button>` : ""}
-      <button class="btn btn-sm btn-primary" data-rec="stop">${esc(t("rec.stop"))}</button>
-    </div>${recordProblems(st)}`;
+  const key = `${sources}|${withText}|${UI_LANG}`;
+  let panel = box.querySelector(":scope > .rec-live");
+  if (!panel || box.dataset.panel !== key) {
+    box.dataset.panel = key;
+    const meters = (sources !== "pc" ? meter("me") : "") + (sources !== "mic" ? meter("them") : "");
+    box.innerHTML = `<div class="rec-live">
+        <span class="rec-dot on" aria-hidden="true"></span>
+        <span class="rec-time" dir="ltr"></span>
+        <div class="rec-meters">${meters}</div>
+        ${withText ? `<button class="btn btn-sm btn-ghost" data-rec="open">${esc(t("rec.showText"))}</button>` : ""}
+        <button class="btn btn-sm btn-primary" data-rec="stop">${esc(t("rec.stop"))}</button>
+      </div><div class="rec-problems"></div><div class="rec-cutoffs"></div>`;
+    panel = box.querySelector(":scope > .rec-live");
+  }
+  setText(panel.querySelector(".rec-time"), ts(st.seconds || 0));
+  for (const m of panel.querySelectorAll(".rec-meter")) {
+    const bar = m.querySelector(".rec-meter-bar > span");
+    const w = meterWidth(st[m.dataset.track]);
+    if (bar.style.width !== w) bar.style.width = w;
+  }
+  const problems = box.querySelector(":scope > .rec-problems");
+  const html = recordProblems(st);
+  if (problems.dataset.html !== html && !choosing(problems)) {
+    problems.dataset.html = html;
+    problems.innerHTML = html;
+  }
 }
 
 /** The start page's Record bar: Record and what to record, or the recording that runs. */
@@ -171,9 +200,18 @@ function renderRecordBar() {
   const bar = $("record-bar");
   if (!bar || choosing(bar)) return;
   const job = recordJob();
+  if (job) {
+    paintRecordPanel(bar, true);
+    const cards = bar.querySelector(":scope > .rec-cutoffs");
+    const html = cutOffCards();
+    if (cards.dataset.html !== html) {
+      cards.dataset.html = html;
+      cards.innerHTML = html;
+    }
+    return;
+  }
   let html = "";
-  if (job) html = recordPanel(true);
-  else {
+  {
     const s = REC.setup?.settings || { sources: "both", mic: null };
     html = `<div class="rec-idle">
       <button class="btn btn-record" data-rec="start" title="${esc(t("rec.recordTip"))}"><span class="rec-dot" aria-hidden="true"></span>${esc(t("rec.record"))}</button>
@@ -188,6 +226,17 @@ function renderRecordBar() {
     // a folder OneDrive uploads: said where Record is
     if (REC.setup?.synced) html += `<p class="rec-warn" dir="auto">${tHtml("rec.synced", { folder: ltr(REC.setup.folder) })}</p>`;
   }
+  html += cutOffCards();
+  // drawn again only when something in it changed: a button pressed while it is drawn keeps its click
+  if (bar.dataset.html === html && !bar.dataset.panel) return;
+  delete bar.dataset.panel;
+  bar.dataset.html = html;
+  bar.innerHTML = html;
+}
+
+/** The recordings found after a crash, each with Transcribe it and Delete it. */
+function cutOffCards() {
+  let html = "";
   for (const c of REC.cutOff) {
     const sure = REC.armed === c.journal;
     html += `<div class="rec-cutoff" data-journal="${esc(c.journal)}">
@@ -196,7 +245,7 @@ function renderRecordBar() {
       <button class="btn btn-sm ${sure ? "btn-danger" : "btn-ghost"}" data-rec="discard">${esc(t(sure ? "rec.discardSure" : "rec.discard"))}</button>
     </div>`;
   }
-  bar.innerHTML = html;
+  return html;
 }
 
 /** The levels and Stop above the text of the recording on screen. */
@@ -205,8 +254,34 @@ function recordProgress(j) {
   if (!box || choosing(box)) return;
   const on = j?.kind === "record" && j.status === "recording";
   box.hidden = !on;
-  if (on) box.innerHTML = recordPanel(false);
+  if (on) paintRecordPanel(box, false);
   $("t-progress").classList.toggle("recording", on);
+}
+
+/** Cancelling a job. Once a recording has stopped, cancelling stops the writing of the rest of its
+ *  text: that takes a second click, the first one asking on the button itself, and no click in
+ *  the moment after Stop counts, since it was meant for Stop. */
+const CANCEL = { armed: null, timer: 0, recording: new Set(), ended: new Map() };
+function cancelJob(j, repaint) {
+  if (j.kind === "record" && j.status !== "recording") {
+    if (Date.now() - (CANCEL.ended.get(j.id) || 0) < 1500) return;
+    if (CANCEL.armed !== j.id) {
+      CANCEL.armed = j.id;
+      clearTimeout(CANCEL.timer);
+      CANCEL.timer = setTimeout(() => { CANCEL.armed = null; repaint?.(); }, 4000);
+      repaint?.();
+      return;
+    }
+    CANCEL.armed = null;
+  }
+  invoke("cancel_job", { id: j.id });
+}
+
+/** What cancelling a job is called on its button. */
+function cancelLabel(j) {
+  if (j.status === "recording") return t("rec.stop");
+  if (j.kind === "record" && ACTIVE.has(j.status)) return t(CANCEL.armed === j.id ? "rec.stopWritingSure" : "rec.stopWriting");
+  return "";
 }
 
 async function startRecording() {
@@ -305,6 +380,12 @@ function paintRecording() {
 
 /** Called by app.js with each new state of the app. */
 function recordOnState(snap) {
+  // when each recording stopped: a click right after it was meant for Stop
+  for (const x of snap.queue) {
+    if (x.kind !== "record") continue;
+    if (x.status === "recording") CANCEL.recording.add(x.id);
+    else if (CANCEL.recording.delete(x.id)) CANCEL.ended.set(x.id, Date.now());
+  }
   const j = snap.queue.find((x) => x.kind === "record" && ACTIVE.has(x.status));
   if (j && REC.live?.id === j.id) {
     // behind or not comes with the state of the job's recording

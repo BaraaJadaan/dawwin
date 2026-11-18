@@ -81,8 +81,13 @@ impl Track {
 
 /// Timeline index of a timestamp in 100 ns units, `t0` being the start of the recording.
 pub fn index_of(ts: u64, t0: u64) -> i64 {
+    index_at(ts, t0, RATE)
+}
+
+/// The same on a timeline of `rate` samples a second.
+pub fn index_at(ts: u64, t0: u64, rate: u64) -> i64 {
     let d = ts as i128 - t0 as i128;
-    ((d * RATE as i128 + 5_000_000) / 10_000_000) as i64
+    ((d * rate as i128 + 5_000_000) / 10_000_000) as i64
 }
 
 #[cfg(test)]

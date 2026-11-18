@@ -1,13 +1,15 @@
 //! Recording a meeting: the microphone ("me") and what the PC plays ("them") as two tracks on one
 //! clock, from capture to file to transcript. Each packet is placed by its capture timestamp, so
 //! the tracks stay together and true to the clock through silences and device changes; the WAV
-//! (left me, right them) is readable at every moment, and the sound is cut into pieces for the
-//! speech engine as it arrives. The recording never waits for the engine. The measurements behind
-//! it are in `tools/record-trial`.
+//! (left me, right them, 16 kHz) is readable at every moment, and the sound is cut into pieces for
+//! the speech engine as it arrives. Beside it the sound is kept as the devices gave it (48 kHz,
+//! the PC's in stereo, the microphone in the middle), for listening. The recording never waits for
+//! the engine. The measurements behind it are in `tools/record-trial`.
 
 pub mod cutter;
 pub mod echo;
 pub mod journal;
+pub mod resample;
 pub mod source;
 pub mod timeline;
 pub mod wav;
@@ -151,6 +153,8 @@ pub struct Config {
     /// The microphone chosen; none follows the Windows default
     pub mic: Option<String>,
     pub wav: PathBuf,
+    /// Where the sound is kept for listening, at the devices' quality (when the source gives it)
+    pub hifi: Option<PathBuf>,
     /// Called about ten times a second, and at the end
     pub on_status: Box<dyn Fn(&Status) + Send>,
 }
@@ -204,18 +208,27 @@ impl Recorder {
     /// Start recording into `cfg.wav`; the pieces for the engine come through the receiver.
     pub fn start(cfg: Config, factory: Box<dyn Factory>) -> Result<(Recorder, Receiver<Piece>)> {
         let writer = wav::Writer::create(&cfg.wav)?;
+        let hifi = match &cfg.hifi {
+            Some(p) if factory.hifi() => Some(wav::Writer::create_at(p, resample::HIFI as u32)?),
+            _ => None,
+        };
         let stop = Arc::new(AtomicBool::new(false));
         let (mic_tx, mic_rx) = mpsc::channel();
         let (pieces_tx, pieces_rx) = mpsc::sync_channel(PIECES_WAITING);
         let overflow: Overflow = Arc::new(Mutex::new([None, None]));
         let status = Arc::new(Mutex::new(Status::default()));
         let (s, out) = (stop.clone(), Outbox { tx: pieces_tx, overflow: overflow.clone() });
-        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, s, mic_rx, status, out))?;
+        let thread = std::thread::Builder::new().name("recorder".into()).spawn(move || run(cfg, factory, writer, hifi, s, mic_rx, status, out))?;
         Ok((Recorder { stop, mic: mic_tx, overflow, thread: Some(thread) }, pieces_rx))
     }
 
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+    }
+
+    /// Stop was asked for (it may still be writing its last second).
+    pub fn stopping(&self) -> bool {
+        self.stop.load(Ordering::SeqCst)
     }
 
     /// Record from another microphone from now on (none: the Windows default).
@@ -262,6 +275,43 @@ impl Outbox {
     }
 }
 
+/// The sound kept for listening, up to 48 kHz index `upto`: the PC's in stereo, the microphone in
+/// the middle of it, or alone in both channels.
+fn write_hifi(w: &mut wav::Writer, hi: &mut [timeline::Track; 3], upto: u64, sources: Sources) -> std::io::Result<()> {
+    let me = hi[0].take(upto);
+    let mut left = hi[1].take(upto);
+    let mut right = hi[2].take(upto);
+    if !sources.has(Track::Them) {
+        left.clone_from(&me);
+        right = me;
+    } else if sources.has(Track::Me) {
+        for (x, m) in left.iter_mut().zip(&me) {
+            *x += m;
+        }
+        for (x, m) in right.iter_mut().zip(&me) {
+            *x += m;
+        }
+    }
+    w.append(&left, &right)
+}
+
+/// A 48 kHz packet on its tracks: the microphone in one, the PC's left and right in two.
+fn place_hifi(hi: &mut [timeline::Track; 3], track: Track, at: i64, channels: u16, data: &[f32]) {
+    let ch = channels.max(1) as usize;
+    match track {
+        Track::Me => hi[0].place(at, &resample::mono(data, ch)),
+        Track::Them if ch >= 2 => {
+            let (l, r): (Vec<f32>, Vec<f32>) = data.chunks_exact(ch).map(|f| (f[0], f[1])).unzip();
+            hi[1].place(at, &l);
+            hi[2].place(at, &r);
+        }
+        Track::Them => {
+            hi[1].place(at, data);
+            hi[2].place(at, data);
+        }
+    }
+}
+
 fn level(s: &[f32]) -> Level {
     let rms = (s.iter().map(|x| x * x).sum::<f32>() / s.len().max(1) as f32).sqrt();
     let peak = s.iter().fold(0f32, |m, x| m.max(x.abs()));
@@ -274,6 +324,7 @@ fn run(
     cfg: Config,
     factory: Box<dyn Factory>,
     mut writer: wav::Writer,
+    mut hifi: Option<wav::Writer>,
     stop: Arc<AtomicBool>,
     mic_rx: Receiver<Option<String>>,
     status: Arc<Mutex<Status>>,
@@ -292,6 +343,10 @@ fn run(
     }
     let tol = (SR / 100) as i64;
     let mut tracks = [timeline::Track::new(tol), timeline::Track::new(tol)];
+    // the same sound at 48 kHz: the microphone, the PC's left and right
+    const UP: usize = resample::HIFI / SR;
+    let htol = (resample::HIFI / 100) as i64;
+    let mut hi = [timeline::Track::new(htol), timeline::Track::new(htol), timeline::Track::new(htol)];
     let both = cfg.sources == Sources::Both;
     let mut canceller = both.then(echo::Canceller::new);
     let mut cutters = [cutter::Cutter::new(PIECE_S, SEARCH_S, 0), cutter::Cutter::new(PIECE_S, SEARCH_S, 0)];
@@ -337,6 +392,11 @@ fn run(
             match ev {
                 Event::Packet { track, ts, data } => {
                     tracks[track.index()].place(timeline::index_of(ts, t0), &data);
+                }
+                Event::Hifi { track, ts, channels, data } => {
+                    if hifi.is_some() {
+                        place_hifi(&mut hi, track, timeline::index_at(ts, t0, resample::HIFI as u64), channels, &data);
+                    }
                 }
                 Event::Opened { track, name, mode } => {
                     open[track.index()] = true;
@@ -420,12 +480,27 @@ fn run(
                     break;
                 }
                 written = horizon;
+                if let Some(h) = hifi.as_mut() {
+                    // as far as the 48 kHz streams have come, waiting for them as for the others
+                    let mut upto = horizon * UP;
+                    for t in cfg.sources.tracks() {
+                        if open[t.index()] {
+                            let k = if t == Track::Me { 0 } else { 1 };
+                            upto = upto.min(hi[k].end() as usize);
+                        }
+                    }
+                    let upto = upto.max((now * UP).saturating_sub(LATE * UP)).min(horizon * UP);
+                    if let Err(e) = write_hifi(h, &mut hi, upto as u64, cfg.sources) {
+                        failure = Some(e.into());
+                        break;
+                    }
+                }
                 (cfg.on_status)(&status.lock().unwrap());
             }
         }
         if last_checkpoint.elapsed() >= Duration::from_secs(1) {
             last_checkpoint = Instant::now();
-            if let Err(e) = writer.checkpoint() {
+            if let Err(e) = writer.checkpoint().and_then(|_| hifi.as_mut().map_or(Ok(()), |h| h.checkpoint())) {
                 failure = Some(e.into());
                 break;
             }
@@ -454,15 +529,25 @@ fn run(
     }
     if failure.is_none() {
         while let Ok(ev) = rx.try_recv() {
-            if let Event::Packet { track, ts, data } = ev {
-                tracks[track.index()].place(timeline::index_of(ts, t0), &data);
+            match ev {
+                Event::Packet { track, ts, data } => tracks[track.index()].place(timeline::index_of(ts, t0), &data),
+                Event::Hifi { track, ts, channels, data } if hifi.is_some() => {
+                    place_hifi(&mut hi, track, timeline::index_at(ts, t0, resample::HIFI as u64), channels, &data);
+                }
+                _ => {}
             }
         }
         let end = tracks[0].end().max(tracks[1].end()).max(written as u64).max(stopped_at) as usize;
         let end = end.div_ceil(echo::BLOCK) * echo::BLOCK;
         let mut me = tracks[0].take(end as u64);
         let mut them = tracks[1].take(end as u64);
-        let last = write(&mut me, &mut them, &mut writer, &mut cutters, true).and_then(|_| Ok(writer.checkpoint()?));
+        let last = write(&mut me, &mut them, &mut writer, &mut cutters, true).and_then(|_| Ok(writer.checkpoint()?)).and_then(|_| {
+            if let Some(h) = hifi.as_mut() {
+                write_hifi(h, &mut hi, (end * UP) as u64, cfg.sources)?;
+                h.checkpoint()?;
+            }
+            Ok(())
+        });
         match last {
             Ok(()) => written = end,
             Err(e) => failure = Some(e),
@@ -470,6 +555,9 @@ fn run(
     } else {
         // what is on the disk is kept readable
         let _ = writer.checkpoint();
+        if let Some(h) = hifi.as_mut() {
+            let _ = h.checkpoint();
+        }
     }
     {
         let mut st = status.lock().unwrap();
@@ -512,7 +600,7 @@ mod tests {
         let me: Vec<f32> = (0..n).map(|i| if (SR / 2..SR).contains(&i) { 0.3 } else { 0.0 }).collect();
         let them: Vec<f32> = (0..n).map(|i| if i >= 2 * SR { ((i as f32) * 0.05).sin() * 0.3 } else { 0.0 }).collect();
         let files = source::Files::new(Some(me), Some(them), false);
-        let cfg = Config { sources: Sources::Mic, mic: None, wav: wav.clone(), on_status: Box::new(|_| {}) };
+        let cfg = Config { sources: Sources::Mic, mic: None, wav: wav.clone(), hifi: None, on_status: Box::new(|_| {}) };
         // the microphone alone: no echo cancellation, so the samples come back as they went in
         let (rec, pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
@@ -546,6 +634,7 @@ mod tests {
             sources: Sources::Pc,
             mic: None,
             wav: wav.clone(),
+            hifi: None,
             on_status: Box::new(move |_| {
                 if c.fetch_add(1, Ordering::SeqCst) == 5 {
                     std::thread::sleep(Duration::from_millis(900));
@@ -566,6 +655,63 @@ mod tests {
             longest = longest.max(run);
         }
         assert!(longest < SR / 50, "a hole of {} ms", longest * 1000 / SR);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A source that gives its sound at 48 kHz stereo as Windows does: the PC's left and right.
+    struct Stereo;
+    impl Factory for Stereo {
+        fn spawn(&self, track: Track, _device: Option<String>, tx: Sender<Event>, stop: Arc<AtomicBool>) -> std::thread::JoinHandle<()> {
+            std::thread::spawn(move || {
+                let t0 = source::now();
+                let mut down = resample::Decimator::new();
+                let hz = resample::HIFI;
+                for k in 0..250u64 {
+                    if stop.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    let ts = t0 + k * 100_000;
+                    let data: Vec<f32> = (0..hz / 100)
+                        .flat_map(|i| {
+                            let n = (k as usize * hz / 100 + i) as f32 / hz as f32;
+                            [(n * 440.0 * std::f32::consts::TAU).sin() * 0.3, (n * 660.0 * std::f32::consts::TAU).sin() * 0.1]
+                        })
+                        .collect();
+                    let (t16, low) = down.push(ts, &resample::mono(&data, 2));
+                    let _ = tx.send(Event::Packet { track, ts: t16, data: low });
+                    let _ = tx.send(Event::Hifi { track, ts, channels: 2, data });
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        }
+        fn hifi(&self) -> bool {
+            true
+        }
+    }
+
+    /// The PC's sound alone: kept for listening at 48 kHz, its left and right apart, as long as
+    /// the tracks the engine hears.
+    #[test]
+    fn the_pcs_sound_is_kept_in_stereo_at_its_own_quality() {
+        let _alone = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
+        let d = dir("hifi");
+        let (wav, hifi) = (d.join("r.wav"), d.join("r.listen.wav"));
+        let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), hifi: Some(hifi.clone()), on_status: Box::new(|_| {}) };
+        let (rec, _pieces) = Recorder::start(cfg, Box::new(Stereo)).unwrap();
+        std::thread::sleep(Duration::from_millis(2600));
+        rec.stop();
+        let frames = rec.wait().unwrap();
+        let bytes = std::fs::read(&hifi).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[24..28].try_into().unwrap()), 48_000, "the devices' rate");
+        let samples: Vec<i16> = bytes[44..].chunks_exact(2).map(|b| i16::from_le_bytes([b[0], b[1]])).collect();
+        let hi_frames = samples.len() as u64 / 2;
+        assert_eq!(hi_frames, frames * 3, "as long as the tracks");
+        let rms = |c: usize| (samples.iter().skip(c).step_by(2).skip(4_800).take(48_000).map(|x| (*x as f64 / 32768.0).powi(2)).sum::<f64>() / 48_000.0).sqrt();
+        assert!((rms(0) - 0.212).abs() < 0.02, "left as it was played: {}", rms(0));
+        assert!((rms(1) - 0.0707).abs() < 0.01, "right as it was played: {}", rms(1));
+        // the tracks the engine hears: the PC on the right, at 16 kHz
+        let (_, right) = wav::Reader::open(&wav, 0).unwrap().next(frames as usize).unwrap();
+        assert!(right[1_600..17_600].iter().map(|x| x * x).sum::<f32>() > 100.0);
         let _ = std::fs::remove_dir_all(&d);
     }
 
@@ -598,7 +744,7 @@ mod tests {
         // a slow machine between making the source and starting the recorder (a CI runner took
         // 56 ms): the made-up tracks start with the recorder all the same
         std::thread::sleep(Duration::from_millis(300));
-        let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), on_status: Box::new(|_| {}) };
+        let cfg = Config { sources: Sources::Pc, mic: None, wav: wav.clone(), hifi: None, on_status: Box::new(|_| {}) };
         let (rec, _pieces) = Recorder::start(cfg, Box::new(files)).unwrap();
         std::thread::sleep(Duration::from_millis(3300));
         rec.stop();

@@ -202,6 +202,20 @@ pub struct SetupView {
     pub save_dir: Option<String>,
     pub download: DownloadView,
     pub data_dir: String,
+    /// Dawwin's models in the models folder (the voices too): how many files, how many bytes
+    pub models_files: usize,
+    pub models_bytes: u64,
+    /// The models moving to another folder, when they are
+    pub moving: Option<MoveView>,
+}
+
+/// The models moving to the folder chosen: how far, and why it stopped if it did.
+#[derive(Clone, Debug, Serialize, Default)]
+pub struct MoveView {
+    pub to: String,
+    pub done: u64,
+    pub total: u64,
+    pub error: Option<String>,
 }
 
 /// A folder being looked through for recordings: it can take a while on a whole drive.
@@ -241,6 +255,8 @@ enum Msg {
     Restart,
     /// Stop the engine, which may be using this file, and delete it
     DeleteFile(PathBuf),
+    /// Stop everything that may hold a model, and move the models to this folder
+    MoveModels(PathBuf),
     /// Stop the translator, and delete it
     RemoveTool(tools::Tool),
     /// A meeting being recorded, or one found after a crash (see `meeting`)
@@ -405,6 +421,7 @@ impl Core {
                 Family::ALL.into_iter().map(|f| (f.key().to_string(), setup::model_status(&self.paths, &st, f))).collect();
             (families, st.run_on().to_string(), st.ui_lang.clone(), st.check_updates, st.folder_formats(), st.download_dir(&self.paths), st.zoom.unwrap_or(1.0))
         };
+        let held = crate::moving::items(&dir);
         let models = models::VARIANTS
             .iter()
             .map(|v| {
@@ -436,6 +453,8 @@ impl Core {
             st.families = families;
             st.models = models;
             st.download_dir = dir.display().to_string();
+            st.models_files = held.len();
+            st.models_bytes = held.iter().map(|i| i.bytes).sum();
             st.run_on = run_on;
             st.ui_lang = ui_lang;
             st.check_updates = check_updates;
@@ -540,14 +559,71 @@ impl Core {
         [download_dir.join(file), self.paths.default_model_dir().join(file)].iter().any(|p| folder::same_file_key(&p.display().to_string()) == key)
     }
 
-    /// Change where downloads are saved. What is there of a paused download comes along, if it can.
+    /// Change where the models are: the ones there are, voices and unfinished downloads too, move
+    /// to the new folder (on the engine thread, which first lets go of them); with none, the folder
+    /// just changes.
     pub fn set_download_dir(&self, dir: &Path) -> Result<()> {
         let old = self.settings.lock().unwrap().download_dir(&self.paths);
         std::fs::create_dir_all(dir)?;
-        for v in models::VARIANTS {
-            models::move_unfinished(&old.join(v.file), &dir.join(v.file));
+        if crate::moving::same(&old, dir) {
+            return Ok(());
         }
-        self.change_settings(|s| s.download_dir = Some(dir.display().to_string()))
+        if crate::moving::items(&old).is_empty() {
+            return self.change_settings(|s| s.download_dir = Some(dir.display().to_string()));
+        }
+        let snap = self.snapshot();
+        if snap.setup.moving.as_ref().is_some_and(|m| m.error.is_none()) {
+            return Err(anyhow!(crate::tr!("The models are already moving.")));
+        }
+        if snap.setup.download.active || snap.queue.iter().any(|j| ACTIVE_JOB.contains(&j.status.as_str())) || crate::reading::is_downloading(&self.app) {
+            return Err(anyhow!(crate::tr!("Wait until what Dawwin is doing is done, then move the models.")));
+        }
+        self.update(|s| s.setup.moving = Some(MoveView { to: dir.display().to_string(), ..Default::default() }));
+        self.send(Msg::MoveModels(dir.to_path_buf()));
+        Ok(())
+    }
+
+    /// On the engine thread, with nothing holding a model: move them, then point the settings there.
+    fn move_models(&self, dir: &Path) {
+        let from = self.settings.lock().unwrap().download_dir(&self.paths);
+        let list = crate::moving::items(&from);
+        let mut last = Instant::now();
+        let r = crate::moving::move_all(&from, dir, &list, &mut |done, total| {
+            if last.elapsed() >= Duration::from_millis(250) || done == total {
+                last = Instant::now();
+                self.update(|s| {
+                    if let Some(m) = s.setup.moving.as_mut() {
+                        m.done = done;
+                        m.total = total;
+                    }
+                });
+            }
+        });
+        match r {
+            Ok(()) => {
+                let moved = |p: &mut String| *p = crate::moving::moved_path(Path::new(p.as_str()), &from, dir).display().to_string();
+                let saved = self.change_settings(|s| {
+                    s.download_dir = Some(dir.display().to_string());
+                    if let Some(f) = s.model_file.as_mut() {
+                        moved(f);
+                    }
+                    s.model_files.values_mut().for_each(moved);
+                });
+                self.update(|s| {
+                    s.setup.moving = match saved {
+                        Ok(()) => None,
+                        Err(e) => Some(MoveView { to: dir.display().to_string(), error: Some(format!("{e:#}")), ..Default::default() }),
+                    }
+                });
+                let _ = self.app.emit("models-moved", dir.display().to_string());
+            }
+            Err(e) => self.update(|s| {
+                if let Some(m) = s.setup.moving.as_mut() {
+                    m.error = Some(format!("{e:#}"));
+                }
+            }),
+        }
+        self.refresh_setup();
     }
 
     /// The interface language, for the messages Rust and the worker show.
@@ -875,6 +951,7 @@ impl Core {
     pub fn cancel(&self, id: &str) {
         // a meeting being recorded stops, and its text is still written
         if meeting::stop_if_recording(id) {
+            self.recording_stopped(id);
             return;
         }
         if let Some(c) = self.cancels.lock().unwrap().get(id) {
@@ -883,6 +960,16 @@ impl Core {
         self.update_job(id, |j| {
             if j.status == "queued" {
                 j.status = "cancelled".into();
+            }
+        });
+    }
+
+    /// A recording was told to stop: the job says so at once, not once the engine has heard the
+    /// piece it is on (with a slow engine that took seconds, and Stop looked as if it did nothing).
+    pub(crate) fn recording_stopped(&self, id: &str) {
+        self.update_job(id, |j| {
+            if j.status == "recording" {
+                j.status = "transcribing".into();
             }
         });
     }
@@ -1303,7 +1390,7 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                     });
                 }
             },
-            Msg::Restart | Msg::DeleteFile(_) | Msg::RemoveTool(_) => {
+            Msg::Restart | Msg::DeleteFile(_) | Msg::RemoveTool(_) | Msg::MoveModels(_) => {
                 if let Some(e) = engine.take() {
                     e.shutdown();
                 }
@@ -1320,6 +1407,11 @@ fn engine_loop(core: Arc<Core>, rx: Receiver<Msg>) {
                         core.update(|s| s.setup.download.error = Some(format!("{}: {err}", file.display())));
                     }
                     core.refresh_setup();
+                }
+                if let Msg::MoveModels(dir) = &msg {
+                    // the voices of Read aloud let go of their files too
+                    crate::reading::end_all_voices(&core.app);
+                    core.move_models(dir);
                 }
                 if let Msg::RemoveTool(tool) = &msg {
                     if let Err(err) = tools::remove(&core.paths, tool) {
@@ -1735,7 +1827,7 @@ fn run_timing(core: &Arc<Core>, engine: &mut Option<EngineProcess>, job: &JobVie
         });
     };
     let result = if meeting {
-        meeting::time_tracks(core, w, &source, &mut segments, &t.language, &cancel, progress)
+        meeting::time_tracks(core, w, &meeting::tracks_of(&t), &mut segments, &t.language, &cancel, progress)
     } else {
         timing::pass(w, &audio, &mut segments, &t.language, &cancel, progress)
     };
@@ -1818,7 +1910,7 @@ fn detect_language(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &st
     }
     let ranges = language::first_speech(samples);
     if ranges.is_empty() {
-        return Err(anyhow!(crate::tr!("There is no speech in this recording.")));
+        return Err(anyhow::Error::new(language::LittleSpeech(crate::tr!("There is no speech in this recording."))));
     }
     let clip = Audio { id: format!("{id}-language"), samples: language::joined(samples, &ranges) };
     let w = ensure_engine(core, engine, None)?;
@@ -1827,7 +1919,7 @@ fn detect_language(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &st
     w.forget(&clip.id);
     let heard = language::average(&heard?);
     let with_model = languages_with_a_model(core);
-    language::decide(&heard, &with_model).ok_or_else(|| anyhow!(crate::tr!("There is too little speech in this recording to tell its language.")))
+    language::decide(&heard, &with_model).ok_or_else(|| anyhow::Error::new(language::LittleSpeech(crate::tr!("There is too little speech in this recording to tell its language."))))
 }
 
 /// Find the speakers of a finished transcript (a job from `Core::find_speakers`).
@@ -1849,7 +1941,7 @@ fn run_speakers(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) 
     // a recorded meeting: the others are told apart on the PC's track alone, and "Me" stays
     let meeting = meeting::is_meeting(&t);
     let samples = if meeting {
-        meeting::channel(core, &source, crate::record::Track::Them)?
+        meeting::channel(core, &meeting::tracks_of(&t), crate::record::Track::Them)?
     } else {
         audio::decode(&source, setup::ffmpeg(&core.paths).as_ref(), &cancel)?
     };
@@ -2007,6 +2099,7 @@ fn run_job(core: &Arc<Core>, engine: &mut Option<EngineProcess>, id: &str) -> Re
         minutes: None,
         speakers: Vec::new(),
         detected: auto.then(|| spoken.clone()),
+        tracks: None,
     };
     core.live.lock().unwrap().insert(id.to_string(), t.clone());
     core.update_job(id, |j| j.status = "transcribing".into());
@@ -2332,6 +2425,7 @@ mod tests {
             minutes: None,
             speakers: Vec::new(),
             detected: None,
+            tracks: None,
         };
         history::save(&dir, &t).unwrap();
         (dir, t)

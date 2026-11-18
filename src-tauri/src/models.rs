@@ -384,7 +384,7 @@ pub fn part_path(dest: &Path) -> PathBuf {
     with_suffix(dest, ".part")
 }
 
-fn marker_path(dest: &Path) -> PathBuf {
+pub fn marker_path(dest: &Path) -> PathBuf {
     with_suffix(dest, ".part.ok")
 }
 
@@ -407,13 +407,6 @@ pub fn discard(dest: &Path) {
     let _ = std::fs::remove_file(marker_path(dest));
 }
 
-/// Take an unfinished download along to another folder. On another drive it stays behind: moving
-/// gigabytes is not worth making the user wait for.
-pub fn move_unfinished(from: &Path, to: &Path) {
-    if from != to && std::fs::rename(part_path(from), part_path(to)).is_ok() {
-        let _ = std::fs::rename(marker_path(from), marker_path(to));
-    }
-}
 
 /// The architecture a GGUF file says it holds: after the key come the value's type (4 bytes), its
 /// length (8 bytes) and the text.

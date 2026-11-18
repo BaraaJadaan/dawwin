@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="record.css">
   <link rel="stylesheet" href="who.css">
   <link rel="stylesheet" href="minutes.css">
+  <link rel="stylesheet" href="motion.css">
 </head>
 <body>
   <header class="topbar">
@@ -27,6 +28,7 @@
 
   <div class="layout">
     <aside class="sidebar">
+     <div class="side-pane side-main" id="side-main">
       <button class="btn btn-primary btn-block" id="btn-new">
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z"/></svg>
         <span data-i18n="side.new"></span>
@@ -59,6 +61,16 @@
         <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M19.14 12.94a7.07 7.07 0 0 0 0-1.88l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.6-.22l-2.39.96a7 7 0 0 0-1.63-.94l-.36-2.54A.5.5 0 0 0 13.9 2h-3.8a.5.5 0 0 0-.49.42l-.36 2.54a7 7 0 0 0-1.63.94l-2.39-.96a.5.5 0 0 0-.6.22L2.71 8.48a.5.5 0 0 0 .12.64l2.03 1.58a7.07 7.07 0 0 0 0 1.88l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32a.5.5 0 0 0 .6.22l2.39-.96c.5.39 1.05.71 1.63.94l.36 2.54a.5.5 0 0 0 .49.42h3.8a.5.5 0 0 0 .49-.42l.36-2.54a7 7 0 0 0 1.63-.94l2.39.96a.5.5 0 0 0 .6-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Z"/></svg>
         <span data-i18n="set.title"></span>
       </button>
+     </div>
+     <!-- Settings: its own sections take the place of the history -->
+     <nav class="side-pane side-set" id="side-set" data-i18n-aria="set.title" inert>
+      <button class="btn btn-ghost side-back" id="set-back">
+        <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M20 11H7.83l5.58-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2Z"/></svg>
+        <span data-i18n="set.back"></span>
+      </button>
+      <h3 class="side-set-title" data-i18n="set.title"></h3>
+      <div class="set-nav" id="set-nav" role="tablist" aria-orientation="vertical"></div>
+     </nav>
     </aside>
 
     <main id="main" class="main">
@@ -186,22 +198,28 @@
       </section>
 
       <!-- settings -->
-      <section id="view-settings" class="view" hidden>
-        <div class="setup">
-          <div class="setup-head"><h1 data-i18n="set.title"></h1></div>
+      <section id="view-settings" class="view view-settings" hidden>
+        <div class="set-page">
+          <h1 class="set-page-title" id="set-page-title" tabindex="-1"></h1>
 
-          <section class="card group">
-            <h2 data-i18n="set.general"></h2>
+          <!-- general -->
+          <section class="card group" data-page="general">
             <div class="setting">
               <div class="setting-text"><h3 data-i18n="app.uiLang"></h3></div>
               <select id="set-lang" class="input select" data-i18n-aria="app.uiLang"></select>
             </div>
+            <div class="setting">
+              <div class="setting-text"><h3 data-i18n="set.zoom"></h3></div>
+              <div class="zoom-ctl">
+                <button class="btn btn-sm btn-ghost" id="set-zoom-out" data-i18n-aria="set.zoomOut">−</button>
+                <span class="zoom-value" id="set-zoom-value" dir="ltr"></span>
+                <button class="btn btn-sm btn-ghost" id="set-zoom-in" data-i18n-aria="set.zoomIn">+</button>
+              </div>
+            </div>
           </section>
 
-          <!-- read anything on the screen (1.8.0): filled by screen.js -->
-          <section class="card group" id="set-screen"></section>
-
-          <section class="card group">
+          <!-- transcription -->
+          <section class="card group" data-page="transcribe">
             <h2 data-i18n="set.engine"></h2>
             <div class="setting">
               <div class="setting-text">
@@ -213,34 +231,17 @@
                 <option value="cpu" data-i18n="runon.cpu"></option>
               </select>
             </div>
-            <div class="setting">
-              <div class="setting-text">
-                <h3 data-i18n="setup.decoder"></h3>
-                <p class="muted small" id="ffmpeg-detail"></p>
-              </div>
-            </div>
-            <div id="set-tools"></div>
           </section>
-
-          <section class="card group">
+          <section class="card group" data-page="transcribe">
             <h2 data-i18n="step.model"></h2>
             <div id="set-models"></div>
             <div class="setting" id="set-custom" hidden><div class="setting-text"><p class="muted small" id="set-custom-text"></p></div></div>
             <div class="setting actions">
               <button class="btn btn-sm" id="set-import" data-i18n="set.importModel"></button>
-              <button class="btn btn-sm btn-ghost" id="set-download-dir" data-i18n="set.downloadDir"></button>
-              <button class="btn btn-sm btn-ghost" id="set-model-folder" data-i18n="set.showFolder"></button>
             </div>
             <p id="set-import-error" class="error setting-error" dir="auto" hidden></p>
           </section>
-
-          <section class="card group">
-            <h2 data-i18n="set.translation"></h2>
-            <div id="set-translators"></div>
-            <div id="set-translator-tool"></div>
-          </section>
-
-          <section class="card group">
+          <section class="card group" data-page="transcribe">
             <h2 data-i18n="set.words"></h2>
             <div class="word-list" id="set-words-list"></div>
             <div class="setting actions">
@@ -249,8 +250,33 @@
               <button class="btn btn-sm btn-ghost" id="words-load" data-i18n="words.load"></button>
             </div>
           </section>
+          <section class="card group" data-page="transcribe">
+            <h2 data-i18n="set.folderJobs"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 data-i18n="set.folderFiles"></h3>
+                <div class="format-list" id="set-folder-formats"></div>
+              </div>
+            </div>
+          </section>
 
-          <section class="card group">
+          <!-- translation -->
+          <section class="card group" data-page="translate">
+            <h2 data-i18n="set.translateModels"></h2>
+            <div id="set-translators"></div>
+            <div id="set-translator-tool"></div>
+          </section>
+
+          <!-- minutes: its card is added by minutes.js -->
+
+          <!-- read aloud: filled by reader.js -->
+          <section class="card group" id="set-reading" data-page="read"></section>
+
+          <!-- read anything on the screen: filled by screen.js -->
+          <section class="card group" id="set-screen" data-page="screen"></section>
+
+          <!-- subtitles -->
+          <section class="card group" data-page="subtitles">
             <h2 data-i18n="set.look"></h2>
             <div class="look-grid">
               <label><span data-i18n="look.size"></span><select id="look-size" class="input select"></select></label>
@@ -262,39 +288,23 @@
             <div class="setting">
               <label class="toggle"><input type="checkbox" id="look-sharp"> <span data-i18n="look.sharp"></span></label>
             </div>
+            <div class="look-preview">
+              <button class="btn btn-sm" id="look-preview" data-i18n="look.preview"></button>
+              <video id="look-video" muted playsinline preload="auto" hidden></video>
+            </div>
+          </section>
+          <section class="card group" data-page="subtitles">
+            <h2 data-i18n="set.names"></h2>
             <div class="setting">
               <label class="toggle"><input type="checkbox" id="set-names-srt"> <span data-i18n="set.namesSrt"></span></label>
             </div>
             <div class="setting">
               <label class="toggle"><input type="checkbox" id="set-names-vtt"> <span data-i18n="set.namesVtt"></span></label>
             </div>
-            <div class="look-preview">
-              <button class="btn btn-sm" id="look-preview" data-i18n="look.preview"></button>
-              <video id="look-video" muted playsinline preload="auto" hidden></video>
-            </div>
           </section>
 
-          <section class="card group" id="set-reading"></section>
-
-          <section class="card group" id="set-old-box" hidden>
-            <h2 data-i18n="set.oldEngine"></h2>
-            <div class="setting">
-              <div class="setting-text"><p class="muted small" id="set-old-text"></p></div>
-              <button class="btn btn-sm" id="set-old-remove" data-i18n="set.oldRemove"></button>
-            </div>
-          </section>
-
-          <section class="card group">
-            <h2 data-i18n="set.folderJobs"></h2>
-            <div class="setting">
-              <div class="setting-text">
-                <h3 data-i18n="set.folderFiles"></h3>
-                <div class="format-list" id="set-folder-formats"></div>
-              </div>
-            </div>
-          </section>
-
-          <section class="card group" id="set-saving">
+          <!-- files and storage -->
+          <section class="card group" id="set-saving" data-page="files">
             <h2 data-i18n="set.saving"></h2>
             <div class="setting">
               <div class="setting-text">
@@ -308,8 +318,39 @@
               <button class="btn btn-sm btn-ghost" id="set-save-change" data-i18n="setup.change" hidden></button>
             </div>
           </section>
+          <section class="card group" data-page="files">
+            <h2 data-i18n="set.modelsFolder"></h2>
+            <div class="setting">
+              <div class="setting-text">
+                <h3 class="path" id="set-models-dir" dir="ltr"></h3>
+                <p class="muted small" id="set-models-held"></p>
+                <div class="progress" id="set-move-bar" hidden><div class="bar"></div></div>
+                <p class="small" id="set-move-status" dir="auto" hidden></p>
+              </div>
+              <button class="btn btn-sm" id="set-download-dir" data-i18n="setup.change"></button>
+              <button class="btn btn-sm btn-ghost" id="set-model-folder" data-i18n="set.showFolder"></button>
+            </div>
+          </section>
+          <section class="card group" data-page="files">
+            <h2 data-i18n="set.tools"></h2>
+            <div class="setting" id="ffmpeg-row">
+              <div class="setting-text">
+                <h3 data-i18n="setup.decoder"></h3>
+                <p class="muted small" id="ffmpeg-detail"></p>
+              </div>
+            </div>
+            <div id="set-tools"></div>
+          </section>
+          <section class="card group" id="set-old-box" data-page="files" hidden>
+            <h2 data-i18n="set.oldEngine"></h2>
+            <div class="setting">
+              <div class="setting-text"><p class="muted small" id="set-old-text"></p></div>
+              <button class="btn btn-sm" id="set-old-remove" data-i18n="set.oldRemove"></button>
+            </div>
+          </section>
 
-          <section class="card group">
+          <!-- about -->
+          <section class="card group" data-page="about">
             <h2 data-i18n="set.updates"></h2>
             <div class="setting">
               <div class="setting-text">
@@ -322,17 +363,7 @@
               <label class="toggle"><input type="checkbox" id="set-auto-check"> <span data-i18n="set.autoCheck"></span></label>
             </div>
           </section>
-
-          <section class="card group">
-            <h2 data-i18n="set.folders"></h2>
-            <div class="setting actions">
-              <button class="btn btn-sm" id="btn-data" data-i18n="setup.data"></button>
-              <button class="btn btn-sm" id="btn-log" data-i18n="setup.log"></button>
-              <button class="btn btn-sm btn-ghost" id="btn-recheck" data-i18n="setup.recheck"></button>
-            </div>
-          </section>
-
-          <section class="card group">
+          <section class="card group" data-page="about">
             <h2 data-i18n="set.about"></h2>
             <div class="setting"><div class="setting-text"><p class="muted small" id="set-about"></p></div></div>
             <div class="setting">
@@ -342,6 +373,14 @@
             <div class="setting actions">
               <button class="btn btn-sm btn-ghost" id="set-github" data-i18n="set.github"></button>
               <button class="btn btn-sm btn-ghost" id="set-issue" data-i18n="set.report"></button>
+            </div>
+          </section>
+          <section class="card group" data-page="about">
+            <h2 data-i18n="set.folders"></h2>
+            <div class="setting actions">
+              <button class="btn btn-sm" id="btn-data" data-i18n="setup.data"></button>
+              <button class="btn btn-sm" id="btn-log" data-i18n="setup.log"></button>
+              <button class="btn btn-sm btn-ghost" id="btn-recheck" data-i18n="setup.recheck"></button>
             </div>
           </section>
         </div>
@@ -378,6 +417,7 @@
             <label class="toggle small"><input type="checkbox" id="follow"> <span data-i18n="t.follow"></span></label>
             <label class="toggle small"><input type="checkbox" id="stamps" checked> <span data-i18n="t.stamps"></span></label>
             <select id="t-lang" class="input select select-sm" data-i18n-aria="t.translation"></select>
+            <select id="t-tmodel" class="input select select-sm" data-i18n-aria="t.tmodel" hidden></select>
             <button class="btn btn-sm" id="btn-retranslate" data-i18n="t.updateTranslation" hidden></button>
             <button class="btn btn-sm" id="btn-fix-timing" data-i18n="t.fixTiming" hidden></button>
             <button class="btn btn-sm" id="btn-listen" data-i18n="read.listen"></button>
@@ -458,6 +498,7 @@
   <script src="record.js"></script>
   <script src="screen.js"></script>
   <script src="app.js"></script>
+  <script src="settings.js"></script>
   <script src="jobs.js"></script>
   <script src="tips.js"></script>
   <!-- after tips.js: it adds its own to the tooltips -->

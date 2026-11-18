@@ -827,6 +827,22 @@ impl Reader {
     }
 }
 
+/// Every voice program ends, so that the voices' files can move (the models folder changed).
+pub fn end_all_voices(app: &AppHandle) {
+    let Some(r) = app.try_state::<Arc<Reader>>() else { return };
+    r.end_all.store(true, Ordering::SeqCst);
+    r.wake.notify_all();
+    let until = std::time::Instant::now() + Duration::from_secs(20);
+    while r.end_all.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// A voice is downloading: the models folder cannot move under it.
+pub fn is_downloading(app: &AppHandle) -> bool {
+    app.try_state::<Arc<Reader>>().is_some_and(|r| !r.downloads.lock().unwrap().is_empty())
+}
+
 /// The speech engine or the translator is about to use the GPU: a voice holding it lets go first,
 /// after the sentence it is making (they take turns, as the two of them do).
 pub fn let_go_of_gpu(app: &AppHandle) {

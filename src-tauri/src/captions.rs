@@ -621,6 +621,7 @@ mod tests {
             minutes: None,
             speakers: Vec::new(),
             detected: None,
+            tracks: None,
         }
     }
 

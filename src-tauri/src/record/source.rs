@@ -14,6 +14,8 @@ use super::Track;
 pub enum Event {
     /// Sound captured at `ts` (the performance counter, in 100 ns units): 16 kHz mono.
     Packet { track: Track, ts: u64, data: Vec<f32> },
+    /// The same sound as the device gave it, for listening: 48 kHz, `channels` interleaved.
+    Hifi { track: Track, ts: u64, channels: u16, data: Vec<f32> },
     /// The source is open: the device's name, and for "them" how ("process" or "device").
     Opened { track: Track, name: String, mode: Option<String> },
     /// It cannot record: "mic-blocked" (Windows' privacy settings), "no-mic", "failed".
@@ -24,6 +26,10 @@ pub trait Factory: Send + Sync {
     /// Start recording `track` on a thread of its own until `stop`; `device` is the microphone
     /// chosen (none: follow the Windows default).
     fn spawn(&self, track: Track, device: Option<String>, tx: Sender<Event>, stop: Arc<AtomicBool>) -> JoinHandle<()>;
+    /// It also sends the sound at the device's own quality (`Event::Hifi`), to keep for listening.
+    fn hifi(&self) -> bool {
+        false
+    }
 }
 
 /// The performance counter in 100 ns units: the clock of the capture timestamps.

@@ -79,6 +79,11 @@ pub struct Transcript {
     /// The language Dawwin heard, when it was asked to find it rather than told
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detected: Option<String>,
+    /// A recorded meeting's two tracks as the engine hears them (16 kHz, me left, them right), kept
+    /// in Dawwin's own folder when the recording itself is the sound to listen to (from 1.8.1 on).
+    /// Without it, the recording holds the two tracks, as in earlier versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tracks: Option<String>,
 }
 
 /// Someone who speaks in a transcript. Numbered from 1 in the order they first speak; the name is
@@ -725,6 +730,7 @@ mod tests {
             minutes: None,
             speakers: Vec::new(),
             detected: None,
+            tracks: None,
         }
     }
 

@@ -33,6 +33,9 @@ pub struct Journal {
     pub mic: Option<String>,
     /// "recording", then "stopped" once the WAV is whole
     pub state: String,
+    /// The sound kept for listening (48 kHz stereo), in the same folder, from 1.8.1 on
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hifi: Option<String>,
 }
 
 impl Journal {
@@ -48,6 +51,13 @@ impl Journal {
         let bare = name.components().count() == 1 && name.file_name().is_some_and(|n| n == name.as_os_str());
         let wav = self.wav.to_ascii_lowercase().ends_with(".wav") && !self.wav.contains([':', '/', '\\']);
         (bare && wav).then(|| journal.with_file_name(&self.wav))
+    }
+
+    /// The sound kept for listening, beside the journal, on the same terms as the WAV.
+    pub fn hifi_path(&self, journal: &Path) -> Option<PathBuf> {
+        let name = self.hifi.as_deref()?;
+        let bare = Path::new(name).components().count() == 1 && !name.contains([':', '/', '\\']);
+        (bare && name.to_ascii_lowercase().ends_with(".wav")).then(|| journal.with_file_name(name))
     }
 
     /// Written in one step, so a crash cannot leave half a journal.
@@ -98,6 +108,7 @@ mod tests {
             steps: Default::default(),
             mic: None,
             state: "recording".into(),
+            hifi: None,
         }
     }
 

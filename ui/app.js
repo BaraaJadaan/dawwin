@@ -433,8 +433,10 @@ function makeJobRow(li) {
   li.querySelector(".x").onclick = (ev) => {
     ev.stopPropagation();
     const j = jobById(li.dataset.key);
-    if (j && ACTIVE.has(j.status)) invoke("cancel_job", { id: j.id });
-    else invoke("dismiss_job", { id: li.dataset.key });
+    if (j && ACTIVE.has(j.status)) {
+      cancelJob(j, () => { const now = jobById(j.id); if (now) paintJobRow(li, now); });
+      if (CANCEL.armed === j.id) toast(t("rec.stopWritingSure"));
+    } else invoke("dismiss_job", { id: li.dataset.key });
   };
 }
 
@@ -456,8 +458,10 @@ function paintJobRow(li, j) {
   const width = indet ? "" : (j.progress * 100).toFixed(1) + "%";
   if (bar.firstElementChild.style.width !== width) bar.firstElementChild.style.width = width;
   const x = li.querySelector(".x");
-  const label = t(j.status === "recording" ? "rec.stop" : ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss");
+  const label = cancelLabel(j) || t(ACTIVE.has(j.status) ? "job.cancel" : "job.dismiss");
   if (x.getAttribute("aria-label") !== label) x.setAttribute("aria-label", label);
+  if (x.title !== label) x.title = label;
+  x.classList.toggle("armed", CANCEL.armed === j.id);
 }
 
 /** Looking through a folder for recordings: its row, with how many it found so far. */
@@ -976,6 +980,23 @@ function paintTranslationMenu() {
   menu.disabled = isLive(cur.id);
   $("btn-retranslate").hidden = !S.shown || !!translateJob(cur.id, S.shown) || !untranslated(cur, S.shown);
   $("btn-fix-timing").hidden = isLive(cur.id) || !!cur.timed || !cur.segments.length || !!timingJob(cur.id);
+  paintTranslationModel();
+}
+
+/** More than one translation model here: which one translates, chosen next to the menu. */
+function paintTranslationModel() {
+  const pick = $("t-tmodel");
+  const mine = (S.snap?.setup.models || []).filter((x) => x.family === "translator" && x.on_disk);
+  pick.hidden = mine.length < 2;
+  if (pick.hidden) return;
+  const key = UI_LANG + ":" + mine.map((x) => x.id).join(",");
+  if (pick.dataset.key !== key) {
+    pick.dataset.key = key;
+    pick.innerHTML = mine.map((x) => `<option value="${x.id}">${esc(t(`model.${x.id}.name`))}</option>`).join("");
+    pick.title = t("t.tmodelTip");
+  }
+  if (document.activeElement !== pick) pick.value = (mine.find((x) => x.active) || mine[0]).id;
+  pick.disabled = isLive(S.current.id);
 }
 
 /** The job placing the words of transcript `id` in time, while it runs. */
@@ -1023,10 +1044,7 @@ async function startTranslation(lang) {
   }
 }
 
-function openTranslationSettings() {
-  showView("settings");
-  $("set-translators").scrollIntoView({ block: "center" });
-}
+let openTranslationSettings = () => showView("settings");
 
 function renderMeta() {
   const c = S.current;
@@ -1187,8 +1205,12 @@ function renderLiveProgress() {
   const box = $("t-progress");
   if (!j) { box.hidden = true; recordProgress(null); return; }
   box.hidden = false;
-  $("t-cancel").dataset.job = j.id;
-  $("t-cancel").textContent = t(j.status === "recording" ? "rec.stop" : "t.cancel");
+  const cancel = $("t-cancel");
+  cancel.dataset.job = j.id;
+  setText(cancel, cancelLabel(j) || t("t.cancel"));
+  cancel.classList.toggle("btn-danger", CANCEL.armed === j.id);
+  const tip = j.kind === "record" && j.status !== "recording" ? t("rec.stopWritingTip") : "";
+  if (cancel.title !== tip) cancel.title = tip;
   recordProgress(j);
   const indet = ["decoding", "loading", "queued", "detecting", "speakers"].includes(j.status);
   box.querySelector(".progress").classList.toggle("indeterminate", indet);
@@ -2151,8 +2173,17 @@ function wire() {
   }
   document.addEventListener("click", () => ($("export-menu").hidden = true));
   $("btn-delete").onclick = deleteCurrent;
-  $("t-cancel").onclick = () => S.current && invoke("cancel_job", { id: $("t-cancel").dataset.job || S.current.id });
+  $("t-cancel").onclick = () => {
+    if (!S.current) return;
+    const id = $("t-cancel").dataset.job || S.current.id;
+    const j = jobById(id);
+    if (j) cancelJob(j, renderLiveProgress);
+    else invoke("cancel_job", { id });
+  };
   $("t-lang").onchange = () => showTranslation($("t-lang").value);
+  $("t-tmodel").onchange = async () => {
+    try { onState(await invoke("use_model", { id: $("t-tmodel").value })); } catch (err) { toast(String(err)); }
+  };
   $("btn-retranslate").onclick = async () => {
     if (S.current && S.shown && (await startTranslation(S.shown))) paintTranslationMenu();
   };

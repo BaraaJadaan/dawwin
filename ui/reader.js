@@ -56,10 +56,13 @@ function buildReadView() {
       readEl("p", {}, readEl("span", { class: "link", text: t("read.open") }), " · ", t("read.formats"))),
     readEl("div", { class: "card read-paste" },
       readEl("textarea", { id: "read-text", class: "input", dir: "auto", placeholder: t("read.paste"), "aria-label": t("read.paste") }),
-      readEl("div", { class: "read-paste-row" }, readEl("button", { class: "btn btn-primary", id: "read-text-go", text: t("read.readIt"), on: { click: () => {
-        const text = $("read-text").value;
-        if (text.trim()) openReading({ text });
-      } } }))));
+      readEl("div", { class: "read-paste-row" },
+        readEl("div", { class: "toolbar read-voices", id: "read-voices-empty" }),
+        readEl("button", { class: "btn btn-primary", id: "read-text-go", text: t("read.readIt"), on: { click: () => {
+          const text = $("read-text").value;
+          if (text.trim()) openReading({ text });
+        } } }))),
+    readEl("div", { class: "card read-anywhere", id: "read-anywhere" }));
   empty.querySelector(".dz-icon").innerHTML = ICON.speaker.replace('width="16" height="16"', 'width="44" height="44"');
   const doc = readEl("div", { class: "read-doc", id: "read-doc", hidden: true },
     readEl("div", { class: "t-head read-head" },
@@ -123,8 +126,42 @@ async function loadVoices() {
   return READ.voices;
 }
 
+/** How to read from any app, with its shortcut, and the keys of the player: on the empty page. */
+async function renderReadAnywhere() {
+  const box = $("read-anywhere");
+  if (!box) return;
+  let st = null;
+  try { st = await invoke("screen_state"); } catch { /* an app without it */ }
+  if (!st) { box.hidden = true; return; }
+  const keys = (st.settings.shortcut || "").split("+").map((k) => `<kbd>${esc(k)}</kbd>`).join("+");
+  const row = (k, what) => `<div class="read-key"><span class="read-key-k">${k}</span><span>${esc(what)}</span></div>`;
+  box.innerHTML = `
+    <h2>${esc(t("read.anyTitle"))}</h2>
+    <p dir="auto">${tHtml("read.anyText", { keys: raw(`<span dir="ltr" class="keys">${keys}</span>`) })}</p>
+    <div class="read-any-actions">
+      ${st.settings.on ? "" : `<button class="btn btn-sm btn-primary" data-any="on">${esc(t("read.anyOff"))}</button>`}
+      <button class="btn btn-sm btn-ghost" data-any="change">${esc(t("read.anyChange"))}</button>
+    </div>
+    <h3>${esc(t("read.keysTitle"))}</h3>
+    <div class="read-keys">
+      ${row("<kbd>Space</kbd>", t("read.keySpace"))}
+      ${row('<span dir="ltr"><kbd>←</kbd> <kbd>→</kbd></span>', t("read.keyArrows"))}
+      ${row(esc(t("read.keyClickName")), t("read.keyClick"))}
+    </div>`;
+  box.querySelector('[data-any="change"]').onclick = () => openSettings("screen");
+  const on = box.querySelector('[data-any="on"]');
+  if (on) on.onclick = async () => {
+    try { await invoke("screen_set_on", { on: true }); } catch (err) { toast(String(err)); }
+    renderReadAnywhere();
+  };
+}
+
 function renderVoicePickers() {
-  const box = $("read-voices");
+  for (const id of ["read-voices", "read-voices-empty"]) paintVoicePickers($(id));
+}
+
+/** The voice of each language, to choose from those downloaded (as in Settings). */
+function paintVoicePickers(box) {
   if (!box) return;
   box.innerHTML = "";
   const vs = READ.voices;
@@ -133,7 +170,7 @@ function renderVoicePickers() {
     const mine = vs.voices.filter((v) => v.lang === lang);
     const label = readEl("label", { class: "read-voice small", title: t("read.voiceTip", { lang: t("read.lang." + lang) }) }, readEl("span", { class: "muted", text: t("read.voice." + lang) }));
     if (!mine.length) {
-      label.append(readEl("button", { class: "linkbtn", text: t("read.getVoice"), on: { click: () => showView("settings") } }));
+      label.append(readEl("button", { class: "linkbtn", text: t("read.getVoice"), on: { click: () => openSettings("read") } }));
     } else {
       const sel = readEl("select", { class: "input select select-sm", "aria-label": t("read.voice." + lang) });
       for (const v of mine) sel.append(readEl("option", { value: v.key, text: voiceLabel(v) }));
@@ -393,6 +430,13 @@ async function renderReadingSettings() {
   const vs = await loadVoices();
   if (!vs) return;
   box.innerHTML = "";
+  // the voice of each language, once there are voices to choose from
+  if (vs.voices.length) {
+    box.append(readEl("h2", { text: t("read.voices") }));
+    const chosen = readEl("div", { class: "setting read-defaults" });
+    paintVoicePickers(chosen);
+    box.append(chosen);
+  }
   box.append(readEl("h2", { text: t("read.title") }));
   for (const m of vs.models) {
     const row = readEl("div", { class: "setting", "data-id": m.id });
@@ -477,12 +521,17 @@ function wireReader() {
     READ.dl[e.payload.id] = e.payload;
     if (e.payload.error) toast(e.payload.error);
     if (S.view === "settings") renderReadingSettings();
-    if (e.payload.state === "done") loadVoices().then(renderVoicePickers);
+    if (e.payload.state === "done") loadVoices().then(() => { renderVoicePickers(); if (S.view === "settings") renderReadingSettings(); });
   });
 }
 
 /** Called by showView: the page is built when first shown, and reading stops when it is left. */
 function onReadView(shown) {
-  if (shown) { buildReadView(); renderReadDoc(); }
+  if (shown) {
+    buildReadView();
+    renderReadDoc();
+    loadVoices().then(renderVoicePickers);
+    renderReadAnywhere();
+  }
   else if (READ.playing || READ.waiting) stopReading();
 }

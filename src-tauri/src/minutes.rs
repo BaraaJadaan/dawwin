@@ -274,6 +274,64 @@ pub fn who_is_who(t: &Transcript) -> Option<String> {
     Some(said.join(" "))
 }
 
+/// How much of an answer's text is in `language`, from its letters: Arabic ones for Arabic, Latin
+/// ones for English. `None` when it cannot be told (another language, or no text at all).
+pub fn share_in(answer: &Value, language: &str) -> Option<f64> {
+    fn texts<'a>(v: &'a Value, key: &str, out: &mut Vec<&'a str>) {
+        match v {
+            // "kind" is one of the schema's English words, whatever the language
+            Value::String(s) if key != "kind" => out.push(s),
+            Value::Array(a) => a.iter().for_each(|x| texts(x, key, out)),
+            Value::Object(o) => o.iter().for_each(|(k, x)| texts(x, k, out)),
+            _ => {}
+        }
+    }
+    let arabic = |c: char| matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}');
+    let mut all = Vec::new();
+    texts(answer, "", &mut all);
+    let (mut ar, mut latin) = (0usize, 0usize);
+    for c in all.iter().flat_map(|s| s.chars()) {
+        if arabic(c) && c.is_alphabetic() {
+            ar += 1;
+        } else if c.is_ascii_alphabetic() {
+            latin += 1;
+        }
+    }
+    let total = (ar + latin) as f64;
+    if total < 20.0 {
+        return None;
+    }
+    match language {
+        "ar" => Some(ar as f64 / total),
+        "en" => Some(latin as f64 / total),
+        _ => None,
+    }
+}
+
+/// Whether `again`, asked for after `first` came in the wrong language, is the one to keep: in
+/// `target` for the most part, and holding about as much (a rewrite may merge an item or two, but
+/// an answer emptied of its decisions is no better for being in the right language).
+pub fn keep_again(first: &Value, again: &Value, target: &str) -> bool {
+    let items = |v: &Value| ["topics", "decisions", "actions", "open_questions"].iter().map(|k| v[k].as_array().map_or(0, Vec::len)).sum::<usize>();
+    share_in(again, target).is_some_and(|s| s >= 0.5) && items(again) * 4 >= items(first) * 3
+}
+
+/// The same request again after an answer in the wrong language: the answer, and what was wrong
+/// with it, said in the language wanted too (a small model follows the language it is asked in).
+pub fn insist(a: &Ask, answer: &Value, target: &str) -> Ask {
+    let name = name_of(target);
+    let mut said = format!("This answer is not in {name}. Write the same JSON again with every text in {name}: the summary, the topics, the decisions, the tasks and the questions.");
+    match target {
+        "ar" => said.push_str(" اكتب كل النصوص باللغة العربية: الملخص والمواضيع والقرارات والمهام والأسئلة."),
+        "en" => {}
+        _ => {}
+    }
+    let mut messages = a.messages.as_array().cloned().unwrap_or_default();
+    messages.push(serde_json::json!({ "role": "assistant", "content": answer.to_string() }));
+    messages.push(serde_json::json!({ "role": "user", "content": said }));
+    Ask { messages: Value::Array(messages), schema: a.schema.clone() }
+}
+
 /// The request with `note` first in what the model is asked (who is who in a recorded meeting).
 pub fn with_note(mut a: Ask, note: Option<&str>) -> Ask {
     if let Some(note) = note {
@@ -906,6 +964,7 @@ mod tests {
             minutes: None,
             speakers: vec![],
             detected: None,
+            tracks: None,
         }
     }
 
@@ -938,6 +997,30 @@ mod tests {
         assert!(user.contains("Write the minutes of this recording in English. Keep names as the transcript writes them"));
         let a = ask_whole(&ls, "ar", "en");
         assert!(a.messages[1]["content"].as_str().unwrap().contains("Write names in English letters"));
+    }
+
+    #[test]
+    fn minutes_in_the_wrong_language_are_seen_and_asked_for_again() {
+        let english = serde_json::json!({ "kind": "meeting", "summary": "The team agreed to move the launch to March.", "decisions": [{ "text": "Launch in March", "lines": [3] }] });
+        let arabic = serde_json::json!({ "kind": "meeting", "summary": "اتفق الفريق على تأجيل الإطلاق إلى مارس، وستتولى Sara الخطة.", "decisions": [] });
+        assert!(share_in(&english, "ar").unwrap() < 0.1);
+        assert!(share_in(&arabic, "ar").unwrap() > 0.8, "a name in English letters does not count against it");
+        assert!(share_in(&english, "en").unwrap() > 0.9);
+        assert_eq!(share_in(&serde_json::json!({ "kind": "other", "summary": "" }), "ar"), None, "nothing to tell from");
+        let ls = lines(&transcript(&[(0.0, "نبدأ الاجتماع")]), &[None]);
+        let a = ask_whole(&ls, "ar", "ar");
+        let again = insist(&a, &english, "ar");
+        let m = again.messages.as_array().unwrap();
+        assert_eq!(m.len(), 4);
+        assert_eq!(m[2]["role"], "assistant");
+        assert!(m[3]["content"].as_str().unwrap().contains("باللغة العربية"));
+        assert_eq!(again.schema, a.schema);
+        // the second answer is kept when it is in Arabic and has as much in it
+        let rewritten = serde_json::json!({ "kind": "meeting", "summary": "اتفق الفريق على تأجيل الإطلاق إلى مارس.", "decisions": [{ "text": "الإطلاق في مارس", "lines": [3] }] });
+        let emptied = serde_json::json!({ "kind": "meeting", "summary": "محضر الاجتماع كما طُلب منه أن يُكتب بالعربية.", "decisions": [] });
+        assert!(keep_again(&english, &rewritten, "ar"));
+        assert!(!keep_again(&english, &emptied, "ar"), "not at the cost of its decisions");
+        assert!(!keep_again(&english, &english, "ar"));
     }
 
     /// The benchmark (tools/bench-minutes/minutes.py) asks in the same words: it wrote this file.

@@ -114,15 +114,20 @@ if (ONLY === "all" || ONLY === "meeting") {
   const setup = await a.invoke("record_setup");
   check("recordings go to the folder chosen in Settings", setup.folder === saveDir && setup.synced === false, setup.folder);
   const id = await a.invoke("start_recording", { language: "auto", steps: { ...STEPS, speakers: true } });
+  const started = Date.now();
   check("Record starts, with Detect the language", typeof id === "string", id);
   await sleep(4000);
   const v = await a.invoke("recording_state");
   check("a level for Me and one for Them while it records", v?.status?.me && v?.status?.them, v?.status);
-  await sleep(31000);
-  const live = await a.invoke("get_transcript", { id });
-  check("text while it records, in the language heard", live.segments.length > 0 && live.language === "en", { n: live.segments.length, language: live.language });
+  // the first piece is cut at about 25 s, its language heard, the model loaded, then its text
+  let live;
+  do {
+    await sleep(1000);
+    live = await a.invoke("get_transcript", { id });
+  } while (!live.segments.length && Date.now() - started < 46000);
+  check("text while it records, in the language heard", live.segments.length > 0 && live.language === "en", { n: live.segments.length, language: live.language, s: Math.round((Date.now() - started) / 1000) });
   check("live lines are Me or Them from the first", live.segments.every((s) => s.speaker === (s.track === "me" ? 1 : 2)) && live.speakers.map((x) => x.name).join() === "Me,Them", live.speakers);
-  await sleep(LEN * 1000 - 35000 + 1500);
+  await sleep(Math.max(0, LEN * 1000 + 1500 - (Date.now() - started)));
   const t0 = Date.now();
   await a.invoke("stop_recording");
   const j = await waitDone(a, id);
@@ -416,6 +421,62 @@ if (ONLY === "pictures") {
   }
   await a.ev(`setUiLang('en')`);
   check("the pictures are made", true);
+  a.close();
+}
+
+// ---- the buttons, clicked as a person does: pressed, held a moment while the levels move, let go.
+// Stop and Show the text were drawn again ten times a second, so a click on them was lost (1.8.0);
+// and a click right after Stop, meant for it, cancelled the writing of the rest of the text.
+if (ONLY === "all" || ONLY === "clicks") {
+  const h = home("clicks", { sources: "pc" });
+  // the engine slowed, so that the text is still being written a while after Stop
+  const a = await open(h, port++, { DAWWIN_TEST_RECORD: TEST, DAWWIN_TEST_ENGINE_DELAY_MS: "6000" });
+  const press = async (sel, hold = 180) => {
+    const r = await a.ev(`(() => { const e = document.querySelector(${JSON.stringify(sel)}); if (!e || !e.offsetParent) return null; const b = e.getBoundingClientRect(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; })()`);
+    if (!r) return false;
+    await a.call("Input.dispatchMouseEvent", { type: "mouseMoved", x: r.x, y: r.y });
+    await a.call("Input.dispatchMouseEvent", { type: "mousePressed", x: r.x, y: r.y, button: "left", clickCount: 1 });
+    await sleep(hold);
+    await a.call("Input.dispatchMouseEvent", { type: "mouseReleased", x: r.x, y: r.y, button: "left", clickCount: 1 });
+    return true;
+  };
+  await a.ev(`showView('home')`);
+  await sleep(500);
+  check("Record, clicked, starts recording", await press('#record-bar [data-rec="start"]'));
+  let rec = null;
+  for (let i = 0; i < 40 && !rec; i++) { await sleep(250); rec = (await a.invoke("get_state")).queue.find((j) => j.kind === "record" && j.status === "recording"); }
+  check("a recording runs", !!rec, rec?.status);
+  await a.ev(`showView('home')`);
+  await sleep(1500);
+  const levels = await a.ev(`document.querySelector('#record-bar .rec-meter-bar > span')?.style.width`);
+  await press('#record-bar [data-rec="open"]');
+  await sleep(600);
+  check("Show the text, clicked while the levels move, opens the transcript", (await a.ev(`S.view`)) === "transcript" && (await a.ev(`S.current?.id`)) === rec?.id, { view: await a.ev(`S.view`), levels });
+  await sleep(18000);
+  await a.ev(`window.__clicks = []; document.addEventListener('click', (e) => window.__clicks.push((e.target.closest('[data-rec]')?.dataset.rec || e.target.id || e.target.tagName) + (e.target.isConnected ? '' : ' (gone)')), true)`);
+  await press('#t-rec [data-rec="stop"]');
+  let j = null;
+  for (let i = 0; i < 40; i++) { await sleep(250); j = (await a.invoke("get_state")).queue.find((x) => x.id === rec.id); if (j?.status !== "recording") break; }
+  check("Stop, clicked while the levels move, stops the recording", !j || j.status !== "recording", { status: j?.status, clicks: await a.ev(`window.__clicks`) });
+  // two more clicks at once where Stop was: they were meant for Stop, and cancel nothing
+  await press("#t-cancel", 60);
+  await press("#t-cancel", 60);
+  await sleep(300);
+  j = (await a.invoke("get_state")).queue.find((x) => x.id === rec.id);
+  check("clicks right after Stop do not cancel the writing of the text", !j || j.status !== "cancelled", j?.status || "done");
+  // later, Stop writing takes a second click: the first one asks
+  await sleep(1800);
+  j = (await a.invoke("get_state")).queue.find((x) => x.id === rec.id);
+  if (j && !["done", "failed"].includes(j.status)) {
+    await press("#t-cancel", 60);
+    await sleep(200);
+    const asked = await a.ev(`document.getElementById('t-cancel').textContent`);
+    j = (await a.invoke("get_state")).queue.find((x) => x.id === rec.id);
+    check("one click on Stop writing asks first", j && j.status !== "cancelled" && /\?|؟/.test(asked), { asked, status: j?.status });
+  }
+  const done = await waitDone(a, rec.id);
+  const tx = await a.invoke("get_transcript", { id: rec.id });
+  check("the recording ends with its text written", done.status === "done" && tx.segments.length > 0, { status: done.status, lines: tx.segments.length });
   a.close();
 }
 

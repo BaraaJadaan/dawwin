@@ -90,7 +90,17 @@ pub fn delete(dir: &Path, id: &str) -> Result<()> {
         std::fs::remove_file(&path)?;
     }
     forget(&path);
+    // a recorded meeting's tracks, kept beside it
+    for ext in ["m4a", "wav"] {
+        let _ = std::fs::remove_file(tracks_file(dir, id, ext)?);
+    }
     Ok(())
+}
+
+/// Where a recorded meeting's two tracks are kept, beside its transcript.
+pub fn tracks_file(dir: &Path, id: &str, ext: &str) -> Result<PathBuf> {
+    let t = file(dir, id)?;
+    Ok(t.with_file_name(format!("{id}.tracks.{ext}")))
 }
 
 /// What the list of past transcripts shows of each, kept in memory by file: a file is read again
@@ -182,6 +192,7 @@ mod tests {
             minutes: None,
             speakers: vec![],
             detected: None,
+            tracks: None,
         }
     }
 

@@ -279,15 +279,14 @@ for (const lang of ["en", "ar"]) {
   }
   if (wanted("settings") && TOOLS) {
     // the subtitle look, with a second of a video burned in it
-    await a.ev(`(async()=>{await openTranscript('made-video');showView('settings');})()`);
+    // Settings at its Subtitles section, the side panel showing the sections in place of the history
+    await a.ev(`(async()=>{await openTranscript('made-video');showView('settings', 'subtitles');})()`);
     await sleep(1500);
-    await a.ev(`(async()=>{document.getElementById('look-size').closest('section').scrollIntoView();await previewLook();})()`);
+    await a.ev(`previewLook()`);
     for (let i = 0; i < 40 && !(await a.ev(`document.getElementById('look-video').readyState >= 2`)); i++) await sleep(250);
-    await sleep(800);
-    await a.ev(`document.getElementById('look-size').closest('section').scrollIntoView({ block: 'start' })`);
-    await sleep(300);
-    const r = await a.ev(`(()=>{const b=document.getElementById('look-size').closest('section').getBoundingClientRect();const y=Math.max(0,b.top-14);return {x:b.left-14,y,width:b.width+28,height:Math.min(b.height+28,820-y)}})()`);
-    await picture(join(dir, "settings.webp"), r);
+    await sleep(900);
+    await picture(join(dir, "settings.webp"), { x: 0, y: 0, width: 1200, height: 820 });
+    if (lang === "en") await picture(join(REPO, "docs", "screenshots", "settings.png"), { x: 0, y: 0, width: 1200, height: 820 }, "png");
   }
   if (wanted("read")) {
     // a made-up article, read from its second paragraph
@@ -315,7 +314,7 @@ In a survey of 1,200 employees, 64% said they would like at least two days a wee
   if (wanted("screen")) {
     // Read anything on the screen in Settings, the shortcut on as a user sees it (drawn so, without
     // taking the shortcut on this PC), with a word in Say it like this
-    await a.ev(`showView('settings')`);
+    await a.ev(`showView('settings', 'screen')`);
     await sleep(500);
     const say = lang === "ar" ? { lang: "ar", written: "AI", said: "إيه آي" } : { lang: "en", written: "Dawwin", said: "Dow-win" };
     await a.ev(`(async()=>{const s=await window.__TAURI__.core.invoke('screen_state');s.settings.on=true;s.settings.say=[${JSON.stringify(say)}];s.shortcut={state:'on',keys:s.settings.shortcut};window.__screen.render(s);document.getElementById('set-screen').scrollIntoView({block:'start'});})()`);

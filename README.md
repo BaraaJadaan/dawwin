@@ -111,8 +111,11 @@ computer: no account, no upload, no subscription, no limit on hours.
 - The recording survives a crash, a power cut or a forced close up to the last second or so, and is
   offered back at the next start. The PC does not sleep while it records, closing Dawwin asks first,
   and a disk running low is said before it is full.
-- Kept as an M4A of about 45 MB an hour (with ffmpeg; as a WAV without it), with both sides to play back
-  in Dawwin: in the folder chosen in Settings (**Where the sound, the videos and the recordings are saved**), or else in `Documents\Dawwin`.
+- Kept as it was heard (new in 1.8.1): the PC's sound in stereo at 48 kHz, as the call or the video
+  played it, with your microphone in the middle of it, an M4A of about 85 MB an hour (with ffmpeg; as a
+  WAV without it). The two sides as the speech engine hears them are kept apart in Dawwin's own folder,
+  for Find the speakers and Fix the timing later. The recording goes in the folder chosen in Settings
+  (**Where the sound, the videos and the recordings are saved**), or else in `Documents\Dawwin`.
   When Documents is in OneDrive, as Windows 11 often sets it up, they go to `Dawwin` in your user folder
   instead, so that a recording never leaves the computer; a folder you choose inside OneDrive is said
   plainly next to Record. The first time, Dawwin reminds you that recording a call may need everyone's
@@ -253,7 +256,7 @@ computer: no account, no upload, no subscription, no limit on hours.
 - Select text in any program, a web page, a Word document, a PDF, an email or a chat, and press
   **Ctrl+Shift+Space**: Dawwin reads it in the voices of Read aloud, in a small player at the corner of the
   screen that leaves the keyboard where it was, with pause and back and forward a sentence. Press the
-  shortcut again to stop. Turn it on in **Settings → Read anything on the screen**, where the keys can be
+  shortcut again to stop. Turn it on in **Settings → Read the screen**, where the keys can be
   changed; if another program already uses them, Dawwin says so and offers free ones.
 - While the shortcut is on, closing Dawwin's window keeps it in the notification area, ready; **Start with
   Windows** (off until you turn it on) starts it there when you sign in. Starting Dawwin again opens its
@@ -360,8 +363,19 @@ computer: no account, no upload, no subscription, no limit on hours.
    | **Supertonic 3** (Supertone) | Arabic and English, five men and five women | 0.3 GB | Fast on any processor: it reads faster than it speaks without a GPU. |
    | **Phonon 31M** (Gradium) | English, two men and three women | 87 MB | The smallest, and the fastest. |
 
-7. To have text you select in other programs read, turn on the shortcut in **Settings → Read anything
-   on the screen**, select some text and press **Ctrl+Shift+Space**. It reads in the voices of step 6.
+7. To have text you select in other programs read, turn on the shortcut in **Settings → Read the
+   screen**, select some text and press **Ctrl+Shift+Space**. It reads in the voices of step 6. The Read
+   aloud page says the same, with the keys of the player.
+
+**Settings** (new look in 1.8.1): the side panel shows its sections in place of the history: General,
+Transcription, Translation, Minutes, Read aloud, Read the screen, Subtitles, Files and storage, and
+About. Where a kind of model has several on your PC (two translation models, two minutes models, two
+voices), the one marked is the one in use, and a click on another's mark changes it; the Minutes tab, the
+translation menu and Read aloud also let you choose. **Files and storage** says where the models are
+kept: choose another folder, on another disk if you like, and every model and voice you have moves
+there, with nothing lost if the move cannot finish.
+
+![Settings at its Subtitles section: the side panel lists General, Transcription, Translation, Minutes, Read aloud, Read the screen, Subtitles, Files and storage and About in place of the history, and the page shows the subtitle look with a second of a video burned in.](docs/screenshots/settings.png)
 
 With the Arabic model on an RTX 4060 laptop GPU, 24 minutes of audio take about 40 seconds. On an 8-core
 laptop CPU, it runs about 3 to 4 times faster than real time. On a small cloud CPU without a GPU, Canary

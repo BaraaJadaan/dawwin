@@ -117,6 +117,20 @@ pub fn average(heard: &[(Vec<Heard>, usize)]) -> Vec<Heard> {
     out
 }
 
+
+/// The language could not be told from what was heard (no speech, or too little): another piece
+/// may tell it. Any other error (the engine not ready) is no reason to give up on this one.
+#[derive(Debug)]
+pub struct LittleSpeech(pub String);
+
+impl std::fmt::Display for LittleSpeech {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LittleSpeech {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,4 +206,3 @@ mod tests {
         assert!(first_speech(&vec![0.0; 5 * SR]).is_empty());
     }
 }
-

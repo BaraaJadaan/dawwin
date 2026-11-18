@@ -138,6 +138,8 @@ struct Session {
     id: String,
     title: String,
     wav: PathBuf,
+    /// The sound kept for listening, when the source gives it
+    hifi: Option<PathBuf>,
     journal_path: PathBuf,
     journal: Mutex<Journal>,
     recorder: Mutex<Option<Recorder>>,
@@ -164,9 +166,11 @@ pub fn is_recording() -> bool {
 }
 
 /// Stop the recording `id` (the job's stop button): true when it was recording.
+/// Stop the recording `id` if it is recording: true when it was. Once stopped, cancelling it is
+/// stopping the writing of its text, even while it writes its last second.
 pub(super) fn stop_if_recording(id: &str) -> bool {
     if let Some(s) = session(id) {
-        if let Some(r) = s.recorder.lock().unwrap().as_ref() {
+        if let Some(r) = s.recorder.lock().unwrap().as_ref().filter(|r| !r.stopping()) {
             r.stop();
             return true;
         }
@@ -273,6 +277,8 @@ impl Core {
         let stamp = local_stamp();
         let title = crate::tr!("Recording {}", stamp);
         let wav = audio::unique_path(&dir.join(format!("{}.wav", title.replace(':', "-"))));
+        let stem = wav.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let hifi = wav.with_file_name(format!("{stem}.listen.wav"));
         let journal_path = Journal::path_for(&wav);
         let journal = Journal {
             version: 1,
@@ -289,6 +295,7 @@ impl Core {
             steps: steps.clone(),
             mic: rs.mic.clone(),
             state: "recording".into(),
+            hifi: hifi.file_name().map(|n| n.to_string_lossy().into_owned()),
         };
         journal.save(&journal_path)?;
         let status = Arc::new(Mutex::new(Status::default()));
@@ -297,6 +304,7 @@ impl Core {
             sources: rs.sources,
             mic: rs.mic.clone(),
             wav: wav.clone(),
+            hifi: Some(hifi.clone()),
             on_status: Box::new(move |s| {
                 *st.lock().unwrap() = s.clone();
                 let _ = app.emit("recording", serde_json::json!({ "id": rec_id, "status": s }));
@@ -309,10 +317,12 @@ impl Core {
                 return Err(e);
             }
         };
+        let hifi = hifi.is_file().then_some(hifi);
         let s = Arc::new(Session {
             id: id.clone(),
             title: title.clone(),
             wav: wav.clone(),
+            hifi,
             journal_path,
             journal: Mutex::new(journal),
             recorder: Mutex::new(Some(recorder)),
@@ -339,7 +349,9 @@ impl Core {
 
     pub fn stop_recording(&self) {
         if let Some(s) = recording_now() {
-            stop_if_recording(&s.id);
+            if stop_if_recording(&s.id) {
+                self.recording_stopped(&s.id);
+            }
         }
     }
 
@@ -415,8 +427,12 @@ impl Core {
         }
         let j = Journal::load(&path)?;
         let wav = j.wav_path(&path).ok_or_else(|| anyhow!("not a recording of Dawwin's"))?;
+        let hifi = j.hifi_path(&path).filter(|h| h.is_file());
         if !keep {
             let _ = std::fs::remove_file(&wav);
+            if let Some(h) = &hifi {
+                let _ = std::fs::remove_file(h);
+            }
             std::fs::remove_file(&path)?;
             // what was written of its text before the crash
             let _ = history::delete(&self.paths.history_dir(), &j.id);
@@ -426,6 +442,8 @@ impl Core {
         // only a file laid out the way the recorder writes it is repaired
         record::wav::check(&wav)?;
         record::wav::repair(&wav)?;
+        // the sound to listen to, as much of it as was written; without it, the tracks are kept
+        let hifi = hifi.filter(|h| record::wav::check(h).is_ok() && record::wav::repair_at(h, record::resample::HIFI as u32).is_ok());
         let mut j = j;
         j.state = "stopped".into();
         j.save(&path)?;
@@ -434,6 +452,7 @@ impl Core {
             id: id.clone(),
             title: j.title.clone(),
             wav: wav.clone(),
+            hifi,
             journal_path: path,
             journal: Mutex::new(j.clone()),
             recorder: Mutex::new(None),
@@ -698,6 +717,11 @@ pub fn split_them(t: &mut Transcript, turns: &[speakers::Turn]) {
     t.segments.sort_by(|a, b| a.start.total_cmp(&b.start));
 }
 
+/// Where a recorded meeting's two tracks are: kept apart from the recording (1.8.1 on), or in it.
+pub fn tracks_of(t: &Transcript) -> PathBuf {
+    t.tracks.as_deref().map(PathBuf::from).filter(|p| p.is_file()).unwrap_or_else(|| PathBuf::from(&t.source_path))
+}
+
 /// One track of a recorded meeting, from its file (the WAV, or the M4A through ffmpeg): what the
 /// timing pass and the speaker model hear, rather than both sides mixed.
 pub fn channel(core: &Core, source: &Path, track: Track) -> Result<Vec<f32>> {
@@ -810,6 +834,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     let mut known = language != language::AUTO;
     let mut no_model: Option<String> = None;
     let mut tried: Vec<(usize, usize)> = Vec::new();
+    let mut retry_at: Option<Instant> = None;
     let cancelled = || core.cancels.lock().unwrap().get(id).is_some_and(|c| c.load(Ordering::SeqCst));
     let live_now = sess.recorder.lock().unwrap().is_some();
     // a recording found after a crash and stopped while it waited: it is offered again
@@ -817,8 +842,10 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         core.update_job(id, |x| x.status = "cancelled".into());
         return Ok(());
     }
+    // a recording stopped before its job began is past recording already
+    let stopped = sess.recorder.lock().unwrap().as_ref().is_some_and(|r| r.stopping());
     core.update_job(id, |x| {
-        x.status = if live_now { "recording".into() } else { "loading".into() };
+        x.status = if live_now && !stopped { "recording".into() } else if live_now { "transcribing".into() } else { "loading".into() };
     });
     let overflow = sess.recorder.lock().unwrap().as_ref().map(|r| r.overflow());
     // an engine that does not start (a damaged model, the antivirus, the GPU) never stops the
@@ -850,7 +877,7 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
     }
 
     let mut lines = Lines::new(j.sources);
-    let mut gates = [echo::Gate::default(), echo::Gate::default()];
+    let mut gates = [echo::Gate::default(), echo::Gate::pc()];
     let mut pending: Vec<Piece> = Vec::new();
     // where each track is to be taken up again from the file, when live text stopped
     let mut resume: [Option<usize>; 2] = [None, None];
@@ -891,11 +918,14 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                 continue;
             }
             if !known {
-                // the earliest piece with speech not tried yet
+                // the earliest piece with speech not tried yet: one without speech does not hold up
+                // the ones after it
+                let waiting = retry_at.is_some_and(|t| Instant::now() < t);
                 let candidate = (0..pending.len())
+                    .filter(|_| !waiting)
                     .filter(|&i| !tried.contains(&(idx(pending[i].track), pending[i].start)))
-                    .min_by_key(|&i| (pending[i].start, idx(pending[i].track) == 0))
-                    .filter(|&i| echo::Gate::default().admit(&pending[i].samples));
+                    .filter(|&i| echo::Gate::default().admit(&pending[i].samples))
+                    .min_by_key(|&i| (pending[i].start, idx(pending[i].track) == 0));
                 if let Some(i) = candidate {
                     tried.push((idx(pending[i].track), pending[i].start));
                     let samples = pending[i].samples.clone();
@@ -914,7 +944,13 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
                             no_model = Some(message);
                             sess.behind.store(true, Ordering::SeqCst);
                         }
-                        Err(_) => {} // too little speech in it: the next one
+                        // too little speech in it: the next one
+                        Err(e) if e.is::<language::LittleSpeech>() => {}
+                        // the engine was not ready (starting, busy): the same piece again a moment later
+                        Err(_) => {
+                            tried.pop();
+                            retry_at = Some(Instant::now() + Duration::from_secs(2));
+                        }
                     }
                 }
                 if !known {
@@ -1105,13 +1141,11 @@ fn run_session(core: &Arc<Core>, engine: &mut Option<EngineProcess>, sess: &Arc<
         }
     }
 
-    // kept small: an M4A when there is ffmpeg, the WAV only once that is checked
+    // kept: the sound to listen to as the recording, the tracks in Dawwin's folder
     core.update_job(id, |x| x.status = "saving_audio".into());
-    let kept = keep_small(core, &sess.wav, total_s);
-    if kept != sess.wav {
-        let _ = std::fs::remove_file(&sess.wav);
-    }
+    let (kept, tracks) = keep(core, sess, total_s);
     t.source_path = kept.display().to_string();
+    t.tracks = tracks.map(|p| p.display().to_string());
     // the sound it kept is its own: a folder run never takes it for a recording
     t.outputs = vec![kept.display().to_string()];
     t.outputs_listed = true;
@@ -1149,22 +1183,86 @@ fn test_delay() -> Option<Duration> {
     std::env::var("DAWWIN_TEST_ENGINE_DELAY_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis)
 }
 
-/// The recording as an M4A next to the WAV, through ffmpeg (AAC at 96 kb/s, both tracks: about
-/// 45 MB an hour against 230 for the WAV). The M4A is used only once ffmpeg reads it back as long
-/// as the WAV; otherwise the WAV stays.
-fn keep_small(core: &Arc<Core>, wav: &Path, seconds: f64) -> PathBuf {
-    let Some(ff) = setup::ffmpeg(&core.paths) else { return wav.to_path_buf() };
-    let m4a = audio::unique_path(&wav.with_extension("m4a"));
-    let mut cmd = std::process::Command::new(&ff);
-    cmd.args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(wav).args(["-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart"]).arg(&m4a);
+/// What stays of a recording once its text is written: the recording itself, the sound to listen
+/// to (the devices' 48 kHz, the PC's in stereo) as an M4A of 192 kb/s beside where it was
+/// recorded; and the two tracks the engine hears, for "Find the speakers" and "Fix the timing",
+/// in Dawwin's own folder beside the transcript (an M4A of 64 kb/s). Each M4A is used only once
+/// ffmpeg reads it back as long as the recording; otherwise the WAV stays. Without the sound to
+/// listen to (a recording of an earlier version, or a made-up source), the tracks are the
+/// recording, as before.
+fn keep(core: &Arc<Core>, sess: &Session, seconds: f64) -> (PathBuf, Option<PathBuf>) {
+    let wav = sess.wav.as_path();
+    let ff = setup::ffmpeg(&core.paths);
+    let Some(hifi) = sess.hifi.as_deref().filter(|h| record::wav::check(h).is_ok_and(|c| c.file_frames > 0)) else {
+        let kept = ff.as_deref().and_then(|ff| encode(ff, wav, &audio::unique_path(&wav.with_extension("m4a")), "96k", seconds)).unwrap_or_else(|| wav.to_path_buf());
+        if kept != wav {
+            let _ = std::fs::remove_file(wav);
+        }
+        return (kept, None);
+    };
+    let dir = core.paths.history_dir();
+    let Some(ff) = ff else {
+        // no ffmpeg: the tracks move to Dawwin's folder, the sound to listen to takes the recording's name
+        let Ok(tracks) = history::tracks_file(&dir, &sess.id, "wav") else { return (wav.to_path_buf(), None) };
+        if move_file(wav, &tracks).is_err() {
+            let _ = std::fs::remove_file(hifi);
+            return (wav.to_path_buf(), None);
+        }
+        return match std::fs::rename(hifi, wav) {
+            Ok(()) => (wav.to_path_buf(), Some(tracks)),
+            Err(_) => (hifi.to_path_buf(), Some(tracks)),
+        };
+    };
+    let listen = encode(&ff, hifi, &audio::unique_path(&wav.with_extension("m4a")), "192k", seconds);
+    let tracks = history::tracks_file(&dir, &sess.id, "m4a").ok().and_then(|t| encode(&ff, wav, &t, "64k", seconds));
+    match (listen, tracks) {
+        (Some(listen), Some(tracks)) => {
+            let _ = std::fs::remove_file(hifi);
+            let _ = std::fs::remove_file(wav);
+            (listen, Some(tracks))
+        }
+        (Some(listen), None) => {
+            // the tracks as a WAV, then: they are what Dawwin hears again
+            let _ = std::fs::remove_file(hifi);
+            match history::tracks_file(&dir, &sess.id, "wav").map(|t| (move_file(wav, &t), t)) {
+                Ok((Ok(()), t)) => (listen, Some(t)),
+                _ => {
+                    let _ = std::fs::remove_file(&listen);
+                    (wav.to_path_buf(), None)
+                }
+            }
+        }
+        (None, tracks) => {
+            if let Some(t) = tracks {
+                let _ = std::fs::remove_file(t);
+            }
+            let _ = std::fs::remove_file(hifi);
+            (wav.to_path_buf(), None)
+        }
+    }
+}
+
+/// `from` as an AAC M4A at `to`, used only when ffmpeg reads it back as long as `seconds`.
+fn encode(ff: &Path, from: &Path, to: &Path, bitrate: &str, seconds: f64) -> Option<PathBuf> {
+    let mut cmd = std::process::Command::new(ff);
+    cmd.args(["-hide_banner", "-nostdin", "-y", "-i"]).arg(from).args(["-c:a", "aac", "-b:a", bitrate, "-movflags", "+faststart"]).arg(to);
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     setup::no_window(&mut cmd);
     let made = cmd.status().is_ok_and(|s| s.success());
-    if made && duration_of(&ff, &m4a).is_some_and(|d| (d - seconds).abs() < 1.0) {
-        return m4a;
+    if made && duration_of(ff, to).is_some_and(|d| (d - seconds).abs() < 1.0) {
+        return Some(to.to_path_buf());
     }
-    let _ = std::fs::remove_file(&m4a);
-    wav.to_path_buf()
+    let _ = std::fs::remove_file(to);
+    None
+}
+
+/// A file moved, across drives too.
+fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    if std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    std::fs::copy(from, to)?;
+    std::fs::remove_file(from)
 }
 
 /// How long ffmpeg says a file is.
